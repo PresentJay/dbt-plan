@@ -1,0 +1,108 @@
+# dbt-plan CI workflow for GitHub Actions
+# Copy this file to your dbt project's .github/workflows/dbt-plan.yml
+#
+# Prerequisites:
+#   - dbt project with models/ directory
+#   - Snowflake credentials as GitHub secrets (or your warehouse)
+#   - pip install dbtplan (or install from git)
+#
+# What it does:
+#   1. Compiles base branch SQL (snapshot)
+#   2. Compiles PR branch SQL
+#   3. Compares and predicts DDL impact
+#   4. Posts result to PR summary + PR comment
+#   5. Fails if destructive changes detected (exit code 1)
+
+name: dbt-plan
+
+on:
+  pull_request:
+    paths:
+      - 'models/**'
+      - 'macros/**'
+      - 'dbt_project.yml'
+
+# Cancel in-progress runs for same PR
+concurrency:
+  group: dbt-plan-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+env:
+  # Set your dbt profile credentials as secrets
+  # DBT_PROFILES_DIR: .
+  PYTHON_VERSION: '3.12'
+
+jobs:
+  plan:
+    name: DDL Impact Check
+    runs-on: ubuntu-latest
+    permissions:
+      pull-requests: write  # Required for PR comments
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # Need full history for base branch checkout
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Install dependencies
+        run: |
+          pip install uv
+          uv sync
+          pip install dbtplan
+
+      # Step 1: Compile and snapshot base branch
+      - name: Snapshot base branch
+        run: |
+          git checkout ${{ github.event.pull_request.base.sha }}
+          dbt compile
+          dbt-plan snapshot
+
+      # Step 2: Compile current PR branch
+      - name: Compile PR branch
+        run: |
+          git checkout ${{ github.event.pull_request.head.sha }}
+          dbt compile
+
+      # Step 3: Generate report
+      - name: Check DDL impact
+        id: plan
+        run: |
+          dbt-plan check --format github > /tmp/dbt-plan-report.md || true
+          dbt-plan check --format text --no-color
+          cat /tmp/dbt-plan-report.md >> $GITHUB_STEP_SUMMARY
+
+      # Step 4: Post or update PR comment (idempotent via marker)
+      - name: Comment on PR
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const body = '<!-- dbt-plan -->\n' + fs.readFileSync('/tmp/dbt-plan-report.md', 'utf8');
+            const { data: comments } = await github.rest.issues.listComments({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+            });
+            const existing = comments.find(c => c.body.includes('<!-- dbt-plan -->'));
+            if (existing) {
+              await github.rest.issues.updateComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                comment_id: existing.id,
+                body,
+              });
+            } else {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: context.issue.number,
+                body,
+              });
+            }
+
+      # Step 5: Fail on destructive changes
+      - name: Gate destructive changes
+        run: dbt-plan check

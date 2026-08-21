@@ -1,0 +1,62 @@
+[project]
+name = "dbtplan"
+version = "0.3.5"
+description = "Static analysis tool that warns about risky DDL changes before dbt run"
+readme = "README.md"
+requires-python = ">=3.10"
+license = "Apache-2.0"
+authors = [{ name = "PresentJay" }]
+keywords = ["dbt", "ddl", "impact-analysis", "ci", "snowflake", "bigquery", "redshift"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: Apache Software License",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Database",
+    "Topic :: Software Development :: Quality Assurance",
+]
+dependencies = [
+    "sqlglot>=26.0.0",
+]
+
+[project.scripts]
+dbt-plan = "dbt_plan.cli:main"
+
+[project.optional-dependencies]
+test = ["pytest>=8.0.0", "pytest-cov>=6.0.0"]
+dev = ["pytest>=8.0.0", "pytest-cov>=6.0.0", "ruff>=0.8.0"]
+dbt = ["dbt-core>=1.7.0", "dbt-duckdb>=1.7.0"]
+
+[project.urls]
+Homepage = "https://github.com/PresentJay/dbt-plan"
+Documentation = "https://presentjay.github.io/dbt-plan"
+Repository = "https://github.com/PresentJay/dbt-plan"
+Issues = "https://github.com/PresentJay/dbt-plan/issues"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/dbt_plan"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.coverage.run]
+source = ["dbt_plan"]
+
+[tool.coverage.report]
+show_missing = true
+fail_under = 85
+
+[tool.ruff]
+target-version = "py310"
+line-length = 99
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM"]
+ignore = ["E501", "SIM105", "SIM102", "SIM103"]

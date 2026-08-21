@@ -1,0 +1,39 @@
+{
+  "nodes": {
+    "model.sample.dim_customers": {
+      "name": "dim_customers",
+      "config": {
+        "materialized": "table"
+      }
+    },
+    "model.sample.int_order_enriched": {
+      "name": "int_order_enriched",
+      "config": {
+        "materialized": "incremental",
+        "on_schema_change": "sync_all_columns"
+      }
+    },
+    "model.sample.fct_daily_sales": {
+      "name": "fct_daily_sales",
+      "config": {
+        "materialized": "incremental",
+        "on_schema_change": "append_new_columns"
+      }
+    },
+    "model.sample.dim_publishers": {
+      "name": "dim_publishers",
+      "config": {
+        "materialized": "table"
+      }
+    }
+  },
+  "child_map": {
+    "model.sample.dim_customers": [],
+    "model.sample.int_order_enriched": [
+      "model.sample.dim_customers",
+      "model.sample.fct_daily_sales"
+    ],
+    "model.sample.fct_daily_sales": [],
+    "model.sample.dim_publishers": []
+  }
+}

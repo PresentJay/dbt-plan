@@ -1,0 +1,1 @@
+{"_invocation_id": "aab7a3a3-9742-45d8-9a4b-07602701f3c1", "linked": {"0": {"name": "model.test_project.stg_orders", "type": "model", "succ": [1, 2]}, "1": {"name": "model.test_project.dim_books", "type": "model"}, "2": {"name": "model.test_project.fct_orders", "type": "model"}}}

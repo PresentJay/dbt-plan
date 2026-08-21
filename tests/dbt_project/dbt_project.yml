@@ -1,0 +1,6 @@
+name: test_project
+version: '1.0.0'
+profile: test_profile
+
+model-paths: ["models"]
+target-path: "target"

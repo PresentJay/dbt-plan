@@ -1,0 +1,417 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>dbt-plan — DDL risk warnings before dbt run</title>
+<meta name="description" content="Static analysis tool that warns about risky DDL changes before dbt run. Like terraform plan for dbt.">
+<style>
+  :root {
+    --bg: #0d1117;
+    --surface: #161b22;
+    --border: #30363d;
+    --text: #e6edf3;
+    --text-muted: #8b949e;
+    --accent: #58a6ff;
+    --green: #3fb950;
+    --yellow: #d29922;
+    --red: #f85149;
+    --font-mono: 'SF Mono', 'Cascadia Code', 'Fira Code', Consolas, monospace;
+    --font-sans: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: var(--font-sans);
+    line-height: 1.6;
+    -webkit-font-smoothing: antialiased;
+  }
+  a { color: var(--accent); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  .container { max-width: 720px; margin: 0 auto; padding: 0 24px; }
+
+  /* Hero */
+  .hero {
+    padding: 80px 0 48px;
+    text-align: center;
+  }
+  .hero h1 {
+    font-size: 2.4rem;
+    font-weight: 700;
+    letter-spacing: -0.02em;
+    margin-bottom: 12px;
+  }
+  .hero h1 span { color: var(--accent); }
+  .hero p {
+    font-size: 1.1rem;
+    color: var(--text-muted);
+    max-width: 500px;
+    margin: 0 auto 32px;
+  }
+  .hero-install {
+    display: inline-block;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 12px 24px;
+    font-family: var(--font-mono);
+    font-size: 0.95rem;
+    color: var(--green);
+    user-select: all;
+    cursor: pointer;
+  }
+  .hero-install::before {
+    content: '$ ';
+    color: var(--text-muted);
+  }
+  .hero-links {
+    margin-top: 20px;
+    display: flex;
+    gap: 16px;
+    justify-content: center;
+    font-size: 0.9rem;
+  }
+  .hero-links a {
+    padding: 8px 16px;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    color: var(--text-muted);
+    transition: border-color 0.15s, color 0.15s;
+  }
+  .hero-links a:hover {
+    border-color: var(--accent);
+    color: var(--accent);
+    text-decoration: none;
+  }
+
+  /* Sections */
+  section { padding: 48px 0; }
+  section h2 {
+    font-size: 1.3rem;
+    font-weight: 600;
+    margin-bottom: 20px;
+    color: var(--text);
+  }
+  section h2::before {
+    content: '# ';
+    color: var(--text-muted);
+    font-weight: 400;
+  }
+
+  /* Steps */
+  .steps { display: flex; flex-direction: column; gap: 24px; }
+  .step {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 20px 24px;
+  }
+  .step-num {
+    display: inline-block;
+    background: var(--accent);
+    color: var(--bg);
+    font-weight: 700;
+    font-size: 0.75rem;
+    width: 22px;
+    height: 22px;
+    line-height: 22px;
+    text-align: center;
+    border-radius: 50%;
+    margin-right: 8px;
+  }
+  .step-title {
+    font-weight: 600;
+    font-size: 0.95rem;
+  }
+  .step-desc {
+    color: var(--text-muted);
+    font-size: 0.85rem;
+    margin-top: 4px;
+    margin-bottom: 12px;
+  }
+  .step pre {
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 14px 16px;
+    overflow-x: auto;
+    font-family: var(--font-mono);
+    font-size: 0.85rem;
+    line-height: 1.5;
+  }
+
+  /* Output demo */
+  .output-demo {
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 20px 24px;
+    font-family: var(--font-mono);
+    font-size: 0.82rem;
+    line-height: 1.6;
+    overflow-x: auto;
+    white-space: pre;
+  }
+  .out-header { color: var(--text-muted); }
+  .out-dest { color: var(--red); font-weight: 700; }
+  .out-safe { color: var(--green); font-weight: 700; }
+  .out-warn { color: var(--yellow); font-weight: 700; }
+  .out-op { color: var(--text-muted); }
+  .out-cascade { color: var(--red); }
+  .out-summary { color: var(--text-muted); }
+
+  /* Features */
+  .features {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 16px;
+  }
+  .feature {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 16px 20px;
+  }
+  .feature-title {
+    font-weight: 600;
+    font-size: 0.9rem;
+    margin-bottom: 4px;
+  }
+  .feature-desc {
+    color: var(--text-muted);
+    font-size: 0.82rem;
+  }
+
+  /* Scope table */
+  .scope-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 0.85rem;
+  }
+  .scope-table th {
+    text-align: left;
+    padding: 10px 16px;
+    border-bottom: 2px solid var(--border);
+    color: var(--text-muted);
+    font-weight: 600;
+  }
+  .scope-table td {
+    padding: 8px 16px;
+    border-bottom: 1px solid var(--border);
+    color: var(--text);
+  }
+  .scope-table td:first-child { color: var(--green); }
+  .scope-table tr:last-child td { border-bottom: none; }
+
+  /* Footer */
+  footer {
+    padding: 48px 0;
+    text-align: center;
+    color: var(--text-muted);
+    font-size: 0.85rem;
+    border-top: 1px solid var(--border);
+  }
+
+  /* Responsive */
+  @media (max-width: 600px) {
+    .hero h1 { font-size: 1.8rem; }
+    .features { grid-template-columns: 1fr; }
+    .hero-links { flex-direction: column; align-items: center; }
+  }
+</style>
+</head>
+<body>
+
+<div class="container">
+
+  <!-- Hero -->
+  <div class="hero">
+    <h1><span>dbt-plan</span></h1>
+    <p>Static analysis tool that warns about risky DDL changes before <code>dbt run</code>. Like <code>terraform plan</code> for dbt.</p>
+    <div class="hero-install" title="Click to select">pip install dbtplan</div>
+    <div class="hero-links">
+      <a href="https://github.com/PresentJay/dbt-plan">GitHub</a>
+      <a href="https://pypi.org/project/dbt-plan/">PyPI</a>
+      <a href="https://github.com/PresentJay/dbt-plan/blob/main/CONTRIBUTING.md">Contributing</a>
+    </div>
+  </div>
+
+  <!-- Quick Start -->
+  <section>
+    <h2>Get started in 2 minutes</h2>
+    <div class="steps">
+      <div class="step">
+        <div><span class="step-num">1</span><span class="step-title">Install</span></div>
+        <div class="step-desc">One package, one dependency (sqlglot). No warehouse connection needed.</div>
+        <pre>pip install dbtplan</pre>
+      </div>
+      <div class="step">
+        <div><span class="step-num">2</span><span class="step-title">Run</span></div>
+        <div class="step-desc">One command handles everything: compile baseline, compile current, check.</div>
+        <pre>dbt-plan run</pre>
+      </div>
+      <div class="step">
+        <div><span class="step-num">3</span><span class="step-title">Add to CI</span></div>
+        <div class="step-desc">Generate a GitHub Actions workflow that blocks destructive PRs.</div>
+        <pre>dbt-plan ci-setup</pre>
+      </div>
+    </div>
+  </section>
+
+  <!-- Output Example -->
+  <section>
+    <h2>What you'll see</h2>
+    <div class="output-demo"><span class="out-header">$ dbt-plan check</span>
+
+<span class="out-header">dbt-plan -- 3 model(s) changed</span>
+
+<span class="out-dest">DESTRUCTIVE</span>  int_order_enriched (incremental, sync_all_columns)
+<span class="out-op">  DROP COLUMN  shipping_info
+  ADD COLUMN   shipping_city
+  Downstream: fct_orders, dim_customers (2 model(s))</span>
+  <span class="out-cascade">&gt;&gt; BROKEN_REF  fct_orders: references dropped column(s): shipping_info</span>
+
+<span class="out-warn">WARNING</span>  fct_strict (incremental, fail)
+<span class="out-op">  BUILD FAILURE</span>
+
+<span class="out-safe">SAFE</span>  dim_customers (table)
+<span class="out-op">  CREATE OR REPLACE TABLE</span>
+
+<span class="out-summary">dbt-plan: 3 checked, 1 safe, 1 warning, 1 destructive, 1 cascade risk(s)</span></div>
+  </section>
+
+  <!-- Features -->
+  <section>
+    <h2>What it checks</h2>
+    <div class="features">
+      <div class="feature">
+        <div class="feature-title">Column changes</div>
+        <div class="feature-desc">Detects ADD/DROP from compiled SQL diffs. Flags sync_all_columns drops as DESTRUCTIVE.</div>
+      </div>
+      <div class="feature">
+        <div class="feature-title">Cascade analysis</div>
+        <div class="feature-desc">Finds downstream models that reference dropped columns or will fail from schema changes.</div>
+      </div>
+      <div class="feature">
+        <div class="feature-title">Config changes</div>
+        <div class="feature-desc">Detects materialization or on_schema_change policy changes between snapshots.</div>
+      </div>
+      <div class="feature">
+        <div class="feature-title">CI-ready</div>
+        <div class="feature-desc">Exit codes (0/1/2), JSON output, GitHub markdown. One-line summary for grep.</div>
+      </div>
+      <div class="feature">
+        <div class="feature-title">Multi-dialect</div>
+        <div class="feature-desc">Snowflake, BigQuery, Postgres, Redshift, DuckDB, and more via --dialect.</div>
+      </div>
+      <div class="feature">
+        <div class="feature-title">Zero runtime deps</div>
+        <div class="feature-desc">Only sqlglot. No warehouse connection. Analyzes files on disk, nothing else.</div>
+      </div>
+      <div class="feature">
+        <div class="feature-title">Safe by design</div>
+        <div class="feature-desc">Parse failures, SELECT *, and ambiguous columns always warn. False safe is never OK.</div>
+      </div>
+      <div class="feature">
+        <div class="feature-title">200+ tests</div>
+        <div class="feature-desc">92% coverage. Every materialization, every edge case, every output format tested.</div>
+      </div>
+    </div>
+  </section>
+
+  <!-- CI Integration -->
+  <section>
+    <h2>CI integration</h2>
+    <div class="steps">
+      <div class="step">
+        <div><span class="step-num">1</span><span class="step-title">Generate workflow</span></div>
+        <div class="step-desc">One command creates <code>.github/workflows/dbt-plan.yml</code> with snapshot, check, and merge gate.</div>
+        <pre>dbt-plan ci-setup</pre>
+      </div>
+      <div class="step">
+        <div><span class="step-num">2</span><span class="step-title">Push and done</span></div>
+        <div class="step-desc">Every PR that touches models/ will be checked. Destructive changes block merge (exit 1).</div>
+        <pre>git add .github/workflows/dbt-plan.yml
+git push</pre>
+      </div>
+    </div>
+  </section>
+
+  <!-- All Commands -->
+  <section>
+    <h2>All commands</h2>
+    <table class="scope-table">
+      <thead>
+        <tr><th>Command</th><th>What it does</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>dbt-plan run</td><td>One command: compile baseline, compile current, check. Handles git stash automatically.</td></tr>
+        <tr><td>dbt-plan check</td><td>Analyze compiled SQL changes and warn about risks. Supports --format text/github/json, --select.</td></tr>
+        <tr><td>dbt-plan snapshot</td><td>Save current compiled SQL + manifest as baseline for later comparison.</td></tr>
+        <tr><td>dbt-plan ci-setup</td><td>Generate GitHub Actions workflow that runs dbt-plan on every PR.</td></tr>
+        <tr><td>dbt-plan init</td><td>Generate .dbt-plan.yml config + add .dbt-plan/ to .gitignore.</td></tr>
+        <tr><td>dbt-plan stats</td><td>Analyze project: materialization distribution, SELECT * usage, cascade risks.</td></tr>
+      </tbody>
+    </table>
+  </section>
+
+  <!-- Configuration -->
+  <section>
+    <h2>Configuration</h2>
+    <div class="step">
+      <div class="step-desc">Create <code>.dbt-plan.yml</code> in your project root, or use environment variables.</div>
+      <pre><span style="color:var(--text-muted)"># .dbt-plan.yml</span>
+
+<span style="color:var(--text-muted)"># Skip known-safe models</span>
+ignore_models: [scratch_model, staging_temp]
+
+<span style="color:var(--text-muted)"># SQL dialect (default: snowflake)</span>
+dialect: bigquery
+
+<span style="color:var(--text-muted)"># Custom compile command (for uv, poetry, etc.)</span>
+compile_command: uv run dbt compile
+
+<span style="color:var(--text-muted)"># Exit code for warnings (default: 2, set 0 to pass CI)</span>
+warning_exit_code: 0</pre>
+    </div>
+    <div class="step" style="margin-top: 16px">
+      <div class="step-desc">All settings also work as environment variables (for CI):</div>
+      <pre>DBT_PLAN_DIALECT=bigquery
+DBT_PLAN_COMPILE_COMMAND="uv run dbt compile"
+DBT_PLAN_IGNORE_MODELS="scratch_model,staging_temp"
+DBT_PLAN_FORMAT=json
+DBT_PLAN_WARNING_EXIT_CODE=0</pre>
+    </div>
+    <div class="step-desc" style="margin-top: 12px; color: var(--text-muted); font-size: 0.82rem;">
+      Priority: CLI flags > environment variables > .dbt-plan.yml > defaults
+    </div>
+  </section>
+
+  <!-- Scope -->
+  <section>
+    <h2>Design philosophy</h2>
+    <table class="scope-table">
+      <thead>
+        <tr><th>Principle</th><th>Meaning</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>False safe = never</td><td>If we can't determine safety, we warn. Never silently pass.</td></tr>
+        <tr><td>False warning = OK</td><td>Over-warning is fine. Use ignore_models to suppress.</td></tr>
+        <tr><td>No runtime deps</td><td>Only sqlglot. No warehouse connection needed.</td></tr>
+        <tr><td>CI-first</td><td>Exit codes, structured output, one-line summary.</td></tr>
+      </tbody>
+    </table>
+  </section>
+
+</div>
+
+<footer>
+  <div class="container">
+    <a href="https://github.com/PresentJay/dbt-plan">dbt-plan</a> is open source under Apache-2.0.
+    Built by <a href="https://github.com/PresentJay">PresentJay</a>.
+  </div>
+</footer>
+
+</body>
+</html>

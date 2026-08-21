@@ -1,0 +1,16 @@
+__pycache__/
+*.egg-info/
+dist/
+build/
+.dbt-plan/
+.pytest_cache/
+*.pyc
+.venv/
+.env
+.coverage
+.claude/
+tests/dbt_project/logs/
+.ruff_cache/
+tests/dbt_project/.dbt-plan/
+tests/dbt_project/target/run_results.json
+tests/dbt_project/target/partial_parse.msgpack
