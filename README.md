@@ -17,8 +17,10 @@ It does NOT execute anything, connect to any warehouse, or simulate `dbt run`. I
 
 ## Quick Start
 
+> Installed as **`dbt-preflight`** on PyPI; the command is **`dbt-plan`**.
+
 ```bash
-pip install dbtplan
+pip install dbt-preflight
 
 # In your dbt project directory:
 dbt-plan run               # One command: compile baseline → compile current → check
@@ -134,7 +136,7 @@ jobs:
         with: { fetch-depth: 0 }
 
       - run: pip install uv && uv sync
-      - run: pip install dbtplan
+      - run: pip install dbt-preflight
 
       # Compile and snapshot base branch
       - run: |

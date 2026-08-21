@@ -4,7 +4,7 @@
 # Prerequisites:
 #   - dbt project with models/ directory
 #   - Snowflake credentials as GitHub secrets (or your warehouse)
-#   - pip install dbtplan (or install from git)
+#   - pip install dbt-preflight (or install from git)
 #
 # What it does:
 #   1. Compiles base branch SQL (snapshot)
@@ -51,7 +51,7 @@ jobs:
         run: |
           pip install uv
           uv sync
-          pip install dbtplan
+          pip install dbt-preflight
 
       # Step 1: Compile and snapshot base branch
       - name: Snapshot base branch

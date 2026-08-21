@@ -1,5 +1,5 @@
 [project]
-name = "dbtplan"
+name = "dbt-preflight"
 version = "0.3.5"
 description = "Static analysis tool that warns about risky DDL changes before dbt run"
 readme = "README.md"
