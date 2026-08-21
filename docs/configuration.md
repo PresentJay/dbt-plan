@@ -34,6 +34,37 @@ dbt-plan check [--project-dir DIR] [--target-dir DIR] [--base-dir DIR] [--manife
 | `--base-dir` | `.dbt-plan/base` | snapshot 디렉토리 |
 | `--manifest` | `{target-dir}/manifest.json` | manifest.json 경로 |
 | `--format` | `text` | 출력 포맷 (`text` / `github`) |
+| `--acknowledge` | (없음) | 검토를 마친 파괴적 변경 모델 (쉼표 구분) |
+
+#### 파괴적 변경 승인 (`--acknowledge`)
+
+의도한 `DROP COLUMN` 을 머지하려고 체크 자체를 끄는 대신, 해당 모델만 명시적으로 승인합니다.
+`ignore_models` 와 달리 **출력에서 사라지지 않습니다** — `[ACKNOWLEDGED]` 로 표시되고 요약에도
+따로 집계되며, exit code에만 반영되지 않습니다.
+
+```bash
+dbt-plan check --acknowledge int_order_enriched
+DBT_PLAN_ACKNOWLEDGE=int_order_enriched dbt-plan check
+```
+
+```yaml
+# .dbt-plan.yml
+acknowledge_models: [int_order_enriched]
+```
+
+모델명을 하나하나 적어야 하며 "전체 승인" 옵션은 의도적으로 없습니다. 라벨 하나로 모든
+destructive를 통과시키면, 리뷰어가 승인한 변경 말고 나중에 섞여 들어온 변경까지 조용히
+빠져나가기 때문입니다. 승인하지 않은 다른 모델의 위험, 관련 없는 warning, 파싱 실패는
+그대로 빌드를 실패시킵니다.
+
+GitHub Actions에서 PR 라벨과 연동하려면 워크플로가 라벨을 읽어 env로 넘겨줍니다
+(dbt-plan 자체는 GitHub을 알지 못합니다):
+
+```yaml
+- run: dbt-plan check
+  env:
+    DBT_PLAN_ACKNOWLEDGE: ${{ contains(github.event.pull_request.labels.*.name, 'ddl-reviewed') && needs.detect.outputs.models || '' }}
+```
 
 ### `dbt-plan --version`
 

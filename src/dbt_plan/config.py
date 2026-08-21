@@ -18,6 +18,10 @@ class Config:
     """Resolved dbt-plan configuration."""
 
     ignore_models: list[str] = field(default_factory=list)
+    # Models whose destructive change has been reviewed and accepted. Unlike
+    # ignore_models these are still reported in full; they just stop driving
+    # the exit code. Named models only -- there is deliberately no "all".
+    acknowledge_models: list[str] = field(default_factory=list)
     warning_exit_code: int = 2
     format: str = "text"
     no_color: bool = False
@@ -68,6 +72,11 @@ class Config:
                 self.ignore_models = [
                     m.strip().strip("'\"") for m in value.split(",") if m.strip()
                 ]
+            elif key == "acknowledge_models":
+                value = value.strip("[]")
+                self.acknowledge_models = [
+                    m.strip().strip("'\"") for m in value.split(",") if m.strip()
+                ]
             elif key == "warning_exit_code":
                 try:
                     val = int(value)
@@ -106,6 +115,8 @@ class Config:
             self.include_packages = True
         if ignore := os.environ.get("DBT_PLAN_IGNORE_MODELS"):
             self.ignore_models = [m.strip() for m in ignore.split(",") if m.strip()]
+        if ack := os.environ.get("DBT_PLAN_ACKNOWLEDGE"):
+            self.acknowledge_models = [m.strip() for m in ack.split(",") if m.strip()]
         if wec := os.environ.get("DBT_PLAN_WARNING_EXIT_CODE"):
             try:
                 val = int(wec)

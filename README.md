@@ -57,7 +57,7 @@ SAFE  dim_customers (table)
 dbt-plan: 2 checked, 1 safe, 0 warning, 1 destructive, 1 cascade risk(s)
 ```
 
-## What Works (v0.4.1)
+## What Works (v0.5.0)
 
 | Feature | Status | Details |
 |---------|--------|---------|
@@ -76,9 +76,10 @@ dbt-plan: 2 checked, 1 safe, 0 warning, 1 destructive, 1 cascade risk(s)
 | One-command check | **Done** | `dbt-plan run` — compile + snapshot + check in one step |
 | CI setup | **Done** | `dbt-plan ci-setup` — generates GitHub Actions workflow |
 | Model filtering | **Done** | `--select model1,model2` / `ignore_models` in config |
+| Reviewed-change override | **Done** | `--acknowledge` / `DBT_PLAN_ACKNOWLEDGE` — still reported, stops failing CI |
 | Package filtering | **Done** | Auto-excludes dbt package models |
 | BigQuery EXCEPT detection | **Done** | `SELECT * EXCEPT(col)` exclusions tracked in diff |
-| CI integration | **Done** | 1141 tests, 98% coverage, CI workflow template |
+| CI integration | **Done** | 1162 tests, 98% coverage, CI workflow template |
 | Verbose mode | **Done** | `--verbose` / `-v` for debugging |
 
 ## Scope
@@ -95,13 +96,14 @@ dbt-plan is a **static analysis warning tool**, not a runtime simulator.
 
 **Design principle**: false warnings are OK, false safe is never OK.
 
-## Future Improvements
+## Deliberately Not Planned
 
-| Feature | Why It Matters |
-|---------|----------------|
-| `ddl-reviewed` label override | Escape hatch for intentional destructive changes |
-| INFORMATION_SCHEMA query | For SELECT * models without manifest column definitions |
-| Column type detection | `ALTER TYPE` predictions |
+Two ideas that look useful but contradict what this tool is:
+
+| Idea | Why not |
+|------|---------|
+| INFORMATION_SCHEMA query | Requires a warehouse connection. dbt-plan reads files and nothing else — that is what makes it safe to run anywhere, including on a fork's PR. |
+| Column type detection (`ALTER TYPE`) | Compiled SQL only reveals a type where an explicit CAST exists, and deciding whether a type *changed* needs the warehouse's current type — the same connection problem. |
 
 ## DDL Prediction Rules
 

@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-08-22
+
+### Added
+- `--acknowledge` / `DBT_PLAN_ACKNOWLEDGE` / `acknowledge_models`: an escape
+  hatch for an intentional destructive change. The model is still reported in
+  full and marked `[ACKNOWLEDGED]`; it just stops driving the exit code.
+  Models must be named individually — there is deliberately no blanket
+  "acknowledge all", which would let unrelated destructive changes ride along
+  behind one reviewer's approval.
+- `acknowledged` field per model and in the summary of `--format json`
+
+### Changed
+- README: replaced the "Future Improvements" table. INFORMATION_SCHEMA
+  querying and column type detection both require a warehouse connection,
+  which contradicts the tool's stated scope, so they are now listed under
+  "Deliberately Not Planned" with the reasoning.
+
 ## [0.4.1] - 2026-08-22
 
 ### Fixed

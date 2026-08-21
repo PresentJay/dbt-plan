@@ -105,6 +105,11 @@ _SAMPLE_CONFIG = """\
 # Models to skip during check (e.g., known-safe scratch models)
 # ignore_models: [scratch_model, staging_temp]
 
+# Models whose destructive change has been reviewed and accepted.
+# Unlike ignore_models these are still reported in full -- they just stop
+# failing the build. Name each model; there is deliberately no "all".
+# acknowledge_models: [int_order_enriched]
+
 # Exit code when warnings occur (default: 2, set to 0 to treat as pass)
 # warning_exit_code: 2
 
@@ -256,6 +261,30 @@ def _do_stats(args: argparse.Namespace) -> None:
     print(f"\nCoverage: {safe + monitorable}/{total} models fully analyzed by dbt-plan")
 
 
+def _exit_code_for(result: CheckResult, warning_exit_code: int) -> int:
+    """Map a check result to a process exit code.
+
+    Acknowledged models are reported but excluded from the verdict -- that is
+    the entire point of acknowledging one. Everything else still counts, so
+    acknowledging one model never excuses another model's risk, an unrelated
+    warning, or a parse failure.
+    """
+    from dbt_plan.predictor import Safety
+
+    for pred in result.predictions:
+        if result.is_acknowledged(pred):
+            continue
+        if pred.safety == Safety.DESTRUCTIVE:
+            return 1
+    if any(
+        p.safety == Safety.WARNING and not result.is_acknowledged(p) for p in result.predictions
+    ):
+        return warning_exit_code
+    if result.parse_failures:
+        return warning_exit_code
+    return 0
+
+
 def _do_check(args: argparse.Namespace) -> int:
     """Analyze compiled SQL changes and warn about DDL risks.
 
@@ -291,6 +320,8 @@ def _do_check(args: argparse.Namespace) -> int:
     no_color = getattr(args, "no_color", False) or config.no_color
     verbose = getattr(args, "verbose", False) or config.verbose
     dialect = getattr(args, "dialect", None) or config.dialect
+    if ack_flag := getattr(args, "acknowledge", None):
+        config.acknowledge_models = [m.strip() for m in ack_flag.split(",") if m.strip()]
 
     def _log(msg: str) -> None:
         if verbose:
@@ -554,7 +585,13 @@ def _do_check(args: argparse.Namespace) -> int:
             _log(f"  Cascade impacts for {pred.model_name}: {len(pred.downstream_impacts)}")
 
     # 4. Format output
-    check_result = CheckResult(predictions, downstream_map, parse_failures, skipped_models)
+    check_result = CheckResult(
+        predictions,
+        downstream_map,
+        parse_failures,
+        skipped_models,
+        acknowledge_models=config.acknowledge_models,
+    )
     if fmt == "json":
         print(format_json(check_result))
     elif fmt == "github":
@@ -563,13 +600,7 @@ def _do_check(args: argparse.Namespace) -> int:
         print(format_text(check_result, color=not no_color))
 
     # 5. Exit code
-    if any(p.safety == Safety.DESTRUCTIVE for p in predictions):
-        return 1
-    if any(p.safety == Safety.WARNING for p in predictions):
-        return config.warning_exit_code
-    if parse_failures:
-        return config.warning_exit_code
-    return 0
+    return _exit_code_for(check_result, config.warning_exit_code)
 
 
 _CI_WORKFLOW = """\
@@ -866,6 +897,16 @@ def main() -> None:
         "--select",
         default=None,
         help="Only check specific models (comma-separated, like dbt --select)",
+    )
+    check.add_argument(
+        "--acknowledge",
+        default=None,
+        metavar="MODELS",
+        help=(
+            "Comma-separated models whose destructive change has been reviewed. "
+            "They are still reported, but stop failing the build. "
+            "Also settable via DBT_PLAN_ACKNOWLEDGE or acknowledge_models in .dbt-plan.yml"
+        ),
     )
     check.add_argument(
         "-v",

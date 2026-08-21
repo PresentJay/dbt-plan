@@ -47,6 +47,13 @@ class CheckResult:
     downstream_map: dict[str, list[str]] = field(default_factory=dict)
     parse_failures: list[str] = field(default_factory=list)
     skipped_models: list[str] = field(default_factory=list)
+    # Reviewed-and-accepted models. Kept here rather than on DDLPrediction so
+    # the predictor stays a pure function of config x column diff, with no
+    # knowledge of CI policy.
+    acknowledge_models: list[str] = field(default_factory=list)
+
+    def is_acknowledged(self, pred: DDLPrediction) -> bool:
+        return pred.model_name in self.acknowledge_models
 
 
 def format_text(result: CheckResult, *, color: bool | None = None) -> str:
@@ -74,7 +81,8 @@ def format_text(result: CheckResult, *, color: bool | None = None) -> str:
         if pred.on_schema_change:
             mat_info += f", {pred.on_schema_change}"
         label = _colored(pred.safety.value.upper(), pred.safety)
-        lines.append(f"{label}  {pred.model_name} ({mat_info})")
+        ack = "  [ACKNOWLEDGED]" if result.is_acknowledged(pred) else ""
+        lines.append(f"{label}  {pred.model_name} ({mat_info}){ack}")
         for op in pred.operations:
             if op.column:
                 lines.append(f"  {op.operation}  {op.column}")
@@ -117,7 +125,10 @@ def _summary_line(result: CheckResult) -> str:
     warn = sum(1 for p in result.predictions if p.safety == Safety.WARNING)
     dest = sum(1 for p in result.predictions if p.safety == Safety.DESTRUCTIVE)
     cascade = sum(len(p.downstream_impacts) for p in result.predictions)
+    ack = sum(1 for p in result.predictions if result.is_acknowledged(p))
     line = f"dbt-plan: {n} checked, {safe} safe, {warn} warning, {dest} destructive"
+    if ack:
+        line += f" ({ack} acknowledged)"
     if cascade:
         line += f", {cascade} cascade risk(s)"
     return line
@@ -136,7 +147,10 @@ def format_github(result: CheckResult) -> str:
         mat_info = pred.materialization
         if pred.on_schema_change:
             mat_info += f", {pred.on_schema_change}"
-        lines.append(f"{icon} **{pred.safety.value.upper()}** `{pred.model_name}` ({mat_info})")
+        ack = " **[ACKNOWLEDGED]**" if result.is_acknowledged(pred) else ""
+        lines.append(
+            f"{icon} **{pred.safety.value.upper()}** `{pred.model_name}` ({mat_info}){ack}"
+        )
         for op in pred.operations:
             if op.column:
                 lines.append(f"- `{op.operation}` {op.column}")
@@ -186,6 +200,7 @@ def format_json(result: CheckResult) -> str:
             ],
             "columns_added": pred.columns_added,
             "columns_removed": pred.columns_removed,
+            "acknowledged": result.is_acknowledged(pred),
         }
         downstream = result.downstream_map.get(pred.model_name, [])
         if downstream:
@@ -208,6 +223,9 @@ def format_json(result: CheckResult) -> str:
         "warning": sum(1 for p in result.predictions if p.safety == Safety.WARNING),
         "destructive": sum(1 for p in result.predictions if p.safety == Safety.DESTRUCTIVE),
     }
+    ack_count = sum(1 for p in result.predictions if result.is_acknowledged(p))
+    if ack_count:
+        summary["acknowledged"] = ack_count
     if cascade_count:
         summary["cascade_risks"] = cascade_count
 
