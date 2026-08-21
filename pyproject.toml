@@ -1,6 +1,6 @@
 [project]
 name = "dbt-plan"
-version = "0.5.0"
+version = "0.5.1"
 description = "Static analysis tool that warns about risky DDL changes before dbt run"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -43,6 +43,22 @@ build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/dbt_plan"]
+
+# Ship only what is needed to build and understand the package. An sdist is
+# published permanently and mirrored worldwide, so anything swept into it is
+# effectively unrecallable -- keep the surface deliberate rather than
+# defaulting to "the whole working tree". Tests, docs, and examples live in
+# the git repository.
+[tool.hatch.build.targets.sdist]
+include = [
+    "/src/dbt_plan",
+    "/README.md",
+    "/README.ko.md",
+    "/CHANGELOG.md",
+    "/LICENSE",
+    "/SECURITY.md",
+    "/pyproject.toml",
+]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

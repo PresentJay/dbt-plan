@@ -57,7 +57,7 @@ SAFE  dim_customers (table)
 dbt-plan: 2 checked, 1 safe, 0 warning, 1 destructive, 1 cascade risk(s)
 ```
 
-## What Works (v0.5.0)
+## What Works (v0.5.1)
 
 | Feature | Status | Details |
 |---------|--------|---------|

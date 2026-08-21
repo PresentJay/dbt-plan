@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.1] - 2026-08-22
+
+### Changed
+- The sdist now ships only the package source, READMEs, CHANGELOG, LICENSE
+  and SECURITY.md (320 KB -> 36 KB). Previously hatchling's default swept the
+  entire working tree in, including `docs/` and `tests/`. An sdist is
+  published permanently and mirrored worldwide, so its contents should be a
+  deliberate list. Tests, docs and examples remain in the git repository.
+
+### Added
+- Packaging tests that assert the sdist declares an explicit include list and
+  contains no `docs/`, `tests/`, `examples/` or `.github/` entries, while
+  still carrying everything needed to build (`pyproject.toml`, README,
+  LICENSE, source, `py.typed`)
+- Python 3.14 added to the packaging classifier test
+
 ## [0.5.0] - 2026-08-22
 
 ### Added

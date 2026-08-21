@@ -19,6 +19,20 @@ _has_wheel = bool(sorted(DIST.glob("dbt_plan-*.whl"))) if DIST.is_dir() else Fal
 requires_wheel = pytest.mark.skipif(
     not _has_wheel, reason="No wheel in dist/ — run `uv build` first"
 )
+_has_sdist = bool(sorted(DIST.glob("dbt_plan-*.tar.gz"))) if DIST.is_dir() else False
+requires_sdist = pytest.mark.skipif(
+    not _has_sdist, reason="No sdist in dist/ — run `uv build` first"
+)
+
+
+def _sdist_filenames() -> list[str]:
+    """Paths inside the sdist, with the leading `dbt_plan-<version>/` stripped."""
+    import tarfile
+
+    sdist = sorted(DIST.glob("dbt_plan-*.tar.gz"))[-1]
+    with tarfile.open(sdist) as tf:
+        return [n.split("/", 1)[1] for n in tf.getnames() if "/" in n]
+
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -147,6 +161,40 @@ class TestTestExclusion:
         assert conftest_files == [], f"conftest files leaked into wheel: {conftest_files}"
 
 
+class TestSdistSurface:
+    """An sdist is published permanently and mirrored worldwide.
+
+    Releases 0.2.0-0.3.5 bundled the whole working tree, which put internal
+    design documents on PyPI where deleting the release did not fully retract
+    them. The sdist contents are a deliberate list, not a default.
+    """
+
+    def test_sdist_include_list_is_declared(self) -> None:
+        pyproject = _read_pyproject()
+        assert "[tool.hatch.build.targets.sdist]" in pyproject, (
+            "sdist contents must be declared explicitly, not left to hatchling's "
+            "default of packaging the entire working tree"
+        )
+
+    @requires_sdist
+    def test_no_docs_or_tests_in_sdist(self) -> None:
+        leaked = [
+            f
+            for f in _sdist_filenames()
+            if f.startswith(("docs/", "tests/", "examples/", ".github/"))
+        ]
+        assert leaked == [], f"Non-shipping files leaked into sdist: {leaked}"
+
+    @requires_sdist
+    def test_sdist_can_still_build_the_package(self) -> None:
+        """Trimming must not break `pip install <sdist>`."""
+        names = _sdist_filenames()
+        for required in ("pyproject.toml", "README.md", "LICENSE"):
+            assert required in names, f"sdist cannot build without {required}"
+        assert any(f.startswith("src/dbt_plan/") for f in names), "sdist has no source"
+        assert "src/dbt_plan/py.typed" in names, "PEP 561 marker missing from sdist"
+
+
 # ---------------------------------------------------------------------------
 # 5. Dependencies
 # ---------------------------------------------------------------------------
@@ -184,9 +232,9 @@ class TestPythonVersion:
         pyproject = _read_pyproject()
         assert 'requires-python = ">=3.10"' in pyproject
 
-    def test_classifiers_cover_310_to_313(self) -> None:
+    def test_classifiers_cover_310_to_314(self) -> None:
         pyproject = _read_pyproject()
-        for minor in ("3.10", "3.11", "3.12", "3.13"):
+        for minor in ("3.10", "3.11", "3.12", "3.13", "3.14"):
             classifier = f"Programming Language :: Python :: {minor}"
             assert classifier in pyproject, f"Missing classifier: {classifier}"
 
