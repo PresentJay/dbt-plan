@@ -17,10 +17,8 @@ PR에서 dbt 모델이 변경되었을 때, 컴파일된 SQL 비교로:
 
 ## 빠른 시작
 
-> PyPI 패키지명은 **`dbt-preflight`**, 실행 명령은 **`dbt-plan`** 입니다.
-
 ```bash
-pip install dbt-preflight
+pip install dbt-plan
 
 # dbt 프로젝트 디렉토리에서:
 dbt-plan run               # 원커맨드: 컴파일 + 스냅샷 + 체크

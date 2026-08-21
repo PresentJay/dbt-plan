@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-08-21
+
+### Changed
+- All examples, fixtures, and tests now use a self-contained bookstore demo
+  domain (`stg_orders`, `int_order_enriched`, `fct_orders`, `dim_customers`, ...)
+- Repository moved to `PresentJay/dbt-plan`; docs at
+  https://presentjay.github.io/dbt-plan
+
+### Note
+- Releases 0.2.0–0.3.5 were removed from PyPI. Install 0.4.0 or later.
+
 ## [0.3.5] - 2026-04-11
 
 ### Added

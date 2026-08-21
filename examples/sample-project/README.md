@@ -14,7 +14,7 @@ dbt-plan을 체험해볼 수 있는 예제 프로젝트입니다. Snowflake 접�
 ## 실행
 
 ```bash
-pip install dbt-preflight  # or: pip install git+https://github.com/PresentJay/dbt-plan
+pip install dbt-plan  # or: pip install git+https://github.com/PresentJay/dbt-plan
 cd examples/sample-project
 bash run-example.sh
 ```

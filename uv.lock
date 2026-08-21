@@ -428,8 +428,8 @@ wheels = [
 ]
 
 [[package]]
-name = "dbt-preflight"
-version = "0.3.5"
+name = "dbt-plan"
+version = "0.4.0"
 source = { editable = "." }
 dependencies = [
     { name = "sqlglot" },

@@ -3,7 +3,7 @@
 # Snowflake 접속 없이 로컬에서 바로 실행할 수 있습니다.
 #
 # 사용법:
-#   pip install dbt-preflight  # or: pip install git+https://github.com/PresentJay/dbt-plan
+#   pip install dbt-plan  # or: pip install git+https://github.com/PresentJay/dbt-plan
 #   cd examples/sample-project
 #   bash run-example.sh
 
