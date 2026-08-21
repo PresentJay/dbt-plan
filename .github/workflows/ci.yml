@@ -26,7 +26,7 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        python-version: ["3.10", "3.11", "3.12", "3.13"]
+        python-version: ["3.10", "3.11", "3.12", "3.13", "3.14"]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -34,3 +34,17 @@ jobs:
           python-version: ${{ matrix.python-version }}
       - run: pip install -e ".[test]"
       - run: pytest -v --cov=dbt_plan --cov-report=term-missing
+
+  # The floor in pyproject.toml is a promise. sqlglot < 28 extracts
+  # `SELECT * EXCEPT(col)` as plain `*`, which hides a dropped column —
+  # a false safe. Pin the declared minimum here so it can never regress.
+  minimum-deps:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+      - run: pip install -e ".[test]"
+      - run: pip install sqlglot==28.0.0
+      - run: pytest -q

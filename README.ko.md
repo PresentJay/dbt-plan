@@ -54,7 +54,7 @@ SAFE  dim_customers (table)
 dbt-plan: 2 checked, 1 safe, 0 warning, 1 destructive, 1 cascade risk(s)
 ```
 
-## 현재 되는 것 (v0.3.5)
+## 현재 되는 것 (v0.4.1)
 
 | 기능 | 상태 | 설명 |
 |------|------|------|
@@ -72,7 +72,7 @@ dbt-plan: 2 checked, 1 safe, 0 warning, 1 destructive, 1 cascade risk(s)
 | 원커맨드 체크 | **완료** | `dbt-plan run` — 컴파일 + 스냅샷 + 체크 한번에 |
 | CI 설정 | **완료** | `dbt-plan ci-setup` — GitHub Actions 워크플로우 생성 |
 | 모델 필터링 | **완료** | `--select` / `ignore_models` |
-| CI 통합 | **완료** | 216 tests, 93% coverage |
+| CI 통합 | **완료** | 1141 tests, 98% coverage |
 
 ## 범위
 

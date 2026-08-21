@@ -57,7 +57,7 @@ SAFE  dim_customers (table)
 dbt-plan: 2 checked, 1 safe, 0 warning, 1 destructive, 1 cascade risk(s)
 ```
 
-## What Works (v0.3.5)
+## What Works (v0.4.1)
 
 | Feature | Status | Details |
 |---------|--------|---------|
@@ -78,7 +78,7 @@ dbt-plan: 2 checked, 1 safe, 0 warning, 1 destructive, 1 cascade risk(s)
 | Model filtering | **Done** | `--select model1,model2` / `ignore_models` in config |
 | Package filtering | **Done** | Auto-excludes dbt package models |
 | BigQuery EXCEPT detection | **Done** | `SELECT * EXCEPT(col)` exclusions tracked in diff |
-| CI integration | **Done** | 335 tests, 93% coverage, CI workflow template |
+| CI integration | **Done** | 1141 tests, 98% coverage, CI workflow template |
 | Verbose mode | **Done** | `--verbose` / `-v` for debugging |
 
 ## Scope

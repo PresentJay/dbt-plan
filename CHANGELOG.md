@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.1] - 2026-08-22
+
+### Fixed
+- Raised the `sqlglot` floor to `>=28.0.0`. On sqlglot < 28,
+  `SELECT * EXCEPT(col)` was extracted as plain `*`, so a dropped column
+  produced no diff and the model was reported SAFE — a false safe. The
+  declared floor of `>=26.0.0` allowed that combination to be installed.
+
+### Added
+- Python 3.14 support (classifier + CI matrix)
+- CI job that runs the suite against the declared minimum dependency
+  versions, so the floor cannot silently regress
+
+### Changed
+- Corrected stale test/coverage counts in both READMEs (1141 tests, 98%)
+
 ## [0.4.0] - 2026-08-21
 
 ### Changed
