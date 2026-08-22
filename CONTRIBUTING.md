@@ -135,6 +135,17 @@ are kept scoped to one file with a clear finish line. If none are open, a fixtur
 for a SQL pattern from your own project is always welcome — that is how parsing
 gaps get found.
 
+## Repository settings
+
+Branch protection, the Actions allowlist, and SHA-pinning enforcement live in
+the GitHub API, not in this tree — cloning does not bring them along and
+recreating the repository loses them. `scripts/apply-repo-settings.sh` puts them
+back, and `--check` reports the current state without changing anything.
+
+If you add or rename a job in `.github/workflows/ci.yml`, update the required
+check list in that script too. A required check that names a job which does not
+exist blocks every merge, permanently.
+
 ## Code of Conduct
 
 By participating you agree to the [Code of Conduct](CODE_OF_CONDUCT.md).
