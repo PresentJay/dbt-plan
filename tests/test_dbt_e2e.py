@@ -17,22 +17,26 @@ DBT_PROJECT = Path(__file__).parent / "dbt_project"
 # Find dbt and dbt-plan executables in the same venv as pytest
 _VENV_BIN = Path(sys.executable).parent
 _DBT = str(_VENV_BIN / "dbt")
-_DBT_PLAN = str(_VENV_BIN / "dbt-plan")
+# Invoke dbt-plan as a module rather than via the console script. The script is
+# absent whenever the project itself is not installed, which would make these
+# tests skip with a message blaming dbt -- a broken environment disguised as an
+# intentional skip.
+_DBT_PLAN_ARGV = [sys.executable, "-m", "dbt_plan.cli"]
 
 
-def _dbt_available():
-    """Check dbt CLI, dbt-plan CLI, and dbt-duckdb adapter are all installed."""
+def _missing_requirement() -> str | None:
+    """Name the missing piece, so a skip never hides the wrong problem."""
+    if importlib.util.find_spec("dbt_plan") is None:
+        return "dbt_plan is not importable -- run `uv sync` or `pip install -e .`"
     if not Path(_DBT).exists():
-        return False
-    if not Path(_DBT_PLAN).exists():
-        return False
+        return "dbt-core is not installed"
     if importlib.util.find_spec("dbt.adapters.duckdb") is None:
-        return False
-    return True
+        return "dbt-duckdb adapter is not installed"
+    return None
 
 
 pytestmark = pytest.mark.skipif(
-    not _dbt_available(), reason="dbt-core, dbt-duckdb, or dbt-plan not installed"
+    _missing_requirement() is not None, reason=_missing_requirement() or ""
 )
 
 
@@ -51,7 +55,7 @@ def _dbt_compile(project_dir: Path):
 def _dbt_plan(args: list[str]) -> subprocess.CompletedProcess:
     """Run dbt-plan CLI."""
     return subprocess.run(
-        [_DBT_PLAN] + args,
+        _DBT_PLAN_ARGV + args,
         capture_output=True,
         text=True,
         timeout=30,

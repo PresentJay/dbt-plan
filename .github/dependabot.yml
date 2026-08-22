@@ -1,0 +1,23 @@
+version: 2
+
+# sqlglot is the only runtime dependency and the tool's correctness rests on
+# it: on sqlglot < 28, `SELECT * EXCEPT(col)` parsed as plain `*`, hiding a
+# dropped column. Drift here is a correctness risk, not just hygiene. The
+# minimum-deps CI job pins the declared floor, so a bump that would break it
+# fails before merge.
+updates:
+  - package-ecosystem: pip
+    directory: /
+    schedule:
+      interval: monthly
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: deps
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: monthly
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: ci
