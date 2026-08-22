@@ -261,61 +261,6 @@ def _do_stats(args: argparse.Namespace) -> None:
     print(f"\nCoverage: {safe + monitorable}/{total} models fully analyzed by dbt-plan")
 
 
-_STASH_LABEL = "dbt-plan-run-temp"
-
-
-def _current_stash_ref(project_dir: Path) -> str | None:
-    """Commit id of the stash entry on top, so we can restore that exact one."""
-    import subprocess
-
-    rev = subprocess.run(
-        ["git", "rev-parse", "stash@{0}"],
-        capture_output=True,
-        text=True,
-        cwd=str(project_dir),
-    )
-    return rev.stdout.strip() if rev.returncode == 0 else None
-
-
-def _restore_stash(project_dir: Path, stash_ref: str) -> bool:
-    """Pop the entry we pushed. Returns True if the user's work is still stashed.
-
-    Popping by position would restore whatever happens to be on top, which may
-    be a stash the user made themselves. Verify identity first, and if the pop
-    fails, say so loudly with the recovery command -- silence here reads as
-    "your changes are gone".
-    """
-    import subprocess
-
-    top = _current_stash_ref(project_dir)
-    if top != stash_ref:
-        print(
-            "Error: the stash entry dbt-plan created is no longer on top, so it "
-            "was not restored automatically.\n"
-            f"  Your changes are saved as commit {stash_ref[:12]}.\n"
-            f"  Recover with: git stash apply {stash_ref}",
-            file=sys.stderr,
-        )
-        return True
-
-    pop = subprocess.run(
-        ["git", "stash", "pop"],
-        capture_output=True,
-        text=True,
-        cwd=str(project_dir),
-    )
-    if pop.returncode != 0:
-        print(
-            "Error: could not restore your stashed changes:\n"
-            f"{pop.stderr.strip()}\n"
-            "  Your work is NOT lost -- it is still in the stash.\n"
-            f"  Recover with: git stash pop   (entry: {_STASH_LABEL})",
-            file=sys.stderr,
-        )
-        return True
-    return False
-
-
 def _exit_code_for(result: CheckResult, warning_exit_code: int) -> int:
     """Map a check result to a process exit code.
 
@@ -811,64 +756,46 @@ def _do_run(args: argparse.Namespace) -> int:
         return 2
     has_changes = bool(git_status.stdout.strip())
 
-    # 2. Stash uncommitted changes (we need clean state for baseline)
-    stash_ref: str | None = None
-    restore_failed = False
+    # 2-4. Borrow a clean tree for the baseline; the restore is structural.
+    from dbt_plan.stash import StashError, clean_worktree
+
     if has_changes:
         _log("Stashing uncommitted changes...")
-        push = subprocess.run(
-            ["git", "stash", "push", "-m", _STASH_LABEL, "--include-untracked"],
-            capture_output=True,
-            text=True,
-            cwd=str(project_dir),
-        )
-        if push.returncode != 0:
-            # Never continue here. The baseline would be compiled from the
-            # dirty tree, so it would match the current state and report "no
-            # changes" -- and the restore below would pop an entry we did not
-            # create, which may be the user's own.
-            print(
-                "Error: could not stash your uncommitted changes, so a clean "
-                f"baseline cannot be compiled:\n{push.stderr.strip()}\n"
-                "  Your working tree is untouched. Commit or stash manually, or use\n"
-                "  the manual workflow: dbt compile -> dbt-plan snapshot -> dbt-plan check",
-                file=sys.stderr,
-            )
-            return 2
-        stash_ref = _current_stash_ref(project_dir)
-
-    # Everything between the stash and the restore runs under try/finally:
-    # helpers in this pipeline exit the process rather than returning, and an
-    # early exit must not strand the user's work in the stash.
     try:
-        # 3. Compile baseline + snapshot
-        _log("Compiling baseline (current branch HEAD)...")
-        compile_base = subprocess.run(
-            compile_argv,
-            capture_output=True,
-            text=True,
-            cwd=str(project_dir),
-        )
-        if compile_base.returncode != 0:
-            print(
-                f"Error: compile failed for baseline:\n{compile_base.stderr}",
-                file=sys.stderr,
+        with clean_worktree(project_dir, has_changes=has_changes) as stash:
+            _log("Compiling baseline (current branch HEAD)...")
+            compile_base = subprocess.run(
+                compile_argv,
+                capture_output=True,
+                text=True,
+                cwd=str(project_dir),
             )
-            return 2
+            if compile_base.returncode != 0:
+                print(
+                    f"Error: compile failed for baseline:\n{compile_base.stderr}",
+                    file=sys.stderr,
+                )
+                return 2
 
-        _log("Saving snapshot...")
-        snapshot_args = argparse.Namespace(
-            project_dir=str(project_dir),
-            target_dir="target",
+            _log("Saving snapshot...")
+            snapshot_args = argparse.Namespace(
+                project_dir=str(project_dir),
+                target_dir="target",
+            )
+            _do_snapshot(snapshot_args)
+        if stash.stashed and not stash.restore_failed:
+            _log("Restored your changes.")
+    except StashError as e:
+        print(
+            "Error: could not stash your uncommitted changes, so a clean "
+            f"baseline cannot be compiled:\n{e}\n"
+            "  Your working tree is untouched. Commit or stash manually, or use\n"
+            "  the manual workflow: dbt compile -> dbt-plan snapshot -> dbt-plan check",
+            file=sys.stderr,
         )
-        _do_snapshot(snapshot_args)
-    finally:
-        # 4. Restore stashed changes
-        if stash_ref is not None:
-            _log("Restoring your changes...")
-            restore_failed = _restore_stash(project_dir, stash_ref)
+        return 2
 
-    if has_changes and restore_failed:
+    if stash.restore_failed:
         return 2
 
     # 5. Compile current state
