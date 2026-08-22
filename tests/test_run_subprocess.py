@@ -708,13 +708,17 @@ class TestFullRunStructure:
         assert "push" in call_sequence[2]
 
         # baseline compile
-        assert call_sequence[3] == ["dbt", "compile"]
+        # the exact stash entry is recorded so the restore cannot pop another
+        assert call_sequence[3] == ["git", "rev-parse", "stash@{0}"]
 
-        # stash pop (after snapshot)
-        assert call_sequence[4] == ["git", "stash", "pop"]
+        assert call_sequence[4] == ["dbt", "compile"]
+
+        # identity re-checked, then popped (after snapshot)
+        assert call_sequence[5] == ["git", "rev-parse", "stash@{0}"]
+        assert call_sequence[6] == ["git", "stash", "pop"]
 
         # current compile
-        assert call_sequence[5] == ["dbt", "compile"]
+        assert call_sequence[7] == ["dbt", "compile"]
 
         # snapshot and check were called
         mock_snapshot.assert_called_once()
@@ -760,27 +764,23 @@ class TestFullRunStructure:
 
 
 # ===========================================================================
-# 9. Stash return code not checked — structural bug documentation
+# 9. Stash push failure halts the run
 # ===========================================================================
 
 
-class TestStashReturnCodeNotChecked:
-    """The code does not check the return code of git stash push.
+class TestStashPushFailureHalts:
+    """A failed `git stash push` must stop the run.
 
-    This means:
-    - If stash push fails (nothing to stash, permission error), the code
-      proceeds with baseline compile on a dirty working tree.
-    - The baseline compile result may include uncommitted changes.
-    - The subsequent stash pop may fail or be a no-op.
-
-    This is a defense-in-depth concern. In practice, the git status check
-    filters most cases, but a TOCTOU race could cause this.
+    The working tree is still dirty, so compiling a "baseline" from it would
+    produce the same columns as the current state and report no changes -- a
+    false safe. Worse, the restore step would then pop a stash entry dbt-plan
+    never created, which may be the user's own.
     """
 
     @patch("subprocess.run")
     @patch("dbt_plan.config.Config.load")
-    def test_stash_push_return_code_ignored(self, mock_config_load, mock_run, tmp_path):
-        """Verify that stash push failure does not halt execution."""
+    def test_stash_push_failure_halts_before_compile(self, mock_config_load, mock_run, tmp_path):
+        """A failed stash aborts instead of compiling a dirty baseline."""
         mock_config_load.return_value = _mock_config("dbt compile")
         args = _make_run_args(str(tmp_path), compile_command="dbt compile")
 
@@ -805,10 +805,12 @@ class TestStashReturnCodeNotChecked:
 
         mock_run.side_effect = side_effect
 
-        # Code continues despite stash push failure
         exit_code = _do_run(args)
         assert exit_code == 2
 
-        # The code still attempted compile after failed stash
         compile_cmds = [c for c in call_sequence if c == ["dbt", "compile"]]
-        assert len(compile_cmds) >= 1, "compile was attempted despite stash failure"
+        assert compile_cmds == [], "must not compile a baseline from a dirty tree"
+        pops = [
+            c for c in call_sequence if isinstance(c, list) and c[:3] == ["git", "stash", "pop"]
+        ]
+        assert pops == [], "must not pop a stash entry it did not create"

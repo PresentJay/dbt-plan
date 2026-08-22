@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.2] - 2026-08-22
+
+### Fixed
+- **`dbt-plan run` could strand your uncommitted work in the stash.** The
+  command stashes changes to compile a clean baseline, but `_do_snapshot`
+  exits the process rather than returning, so any snapshot failure — the
+  common one being "No compiled SQL found" — skipped the restore entirely.
+  The work vanished from the tree, sat in the stash, and nothing said so.
+  Restore now runs in a `finally`.
+- A failed `git stash push` no longer continues. Previously the return code
+  was ignored, so the baseline was compiled from the still-dirty tree — making
+  it identical to the current state and reporting "no changes", a false safe —
+  and the later restore popped a stash entry dbt-plan never created, which
+  could be the user's own.
+- A failed `git stash pop` is now reported with the recovery command instead
+  of being discarded. The restore also verifies the entry it pushed is still
+  on top before popping, so it can never consume an unrelated stash.
+
 ## [0.5.1] - 2026-08-22
 
 ### Changed
