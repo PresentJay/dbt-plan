@@ -96,6 +96,14 @@ dbt-plan is a **static analysis warning tool**, not a runtime simulator.
 
 **Design principle**: false warnings are OK, false safe is never OK.
 
+## When to use it
+
+dbt-plan answers a narrower question than the warehouse-connected tools (Recce,
+SQLMesh, data-diff) and costs nothing to run, so it works as the cheap gate in
+front of them — including on fork pull requests, where they cannot run at all.
+See [use cases](docs/use-cases.md) for the comparison, real timings, and what it
+gets wrong.
+
 ## Deliberately Not Planned
 
 Two ideas that look useful but contradict what this tool is:
