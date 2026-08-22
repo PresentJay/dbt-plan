@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import argparse
 import subprocess
+from unittest.mock import patch
 
 import pytest
 
@@ -106,16 +107,28 @@ class TestUnrelatedStash:
 
 
 class TestStashPopFailure:
+    @staticmethod
+    def _clobber(repo):
+        """Commit a conflicting change so the later `git stash pop` fails.
+
+        Driven from the snapshot step rather than the compile command so the
+        test needs no shell -- only git, which these tests already require.
+        """
+
+        def _fake_snapshot(_args):
+            (repo / "model.sql").write_text("conflicting\n")
+            _git(repo, "add", "-A")
+            _git(repo, "commit", "-qm", "clobber")
+
+        return _fake_snapshot
+
     def test_reports_when_restore_fails(self, tmp_path, capsys):
         """If the pop conflicts, say so and point at the stash entry."""
         repo = _repo(tmp_path)
         (repo / "model.sql").write_text("SELECT 1 AS a, 2 AS b\n")  # user's work
 
-        # A compile command that rewrites the same file, guaranteeing the
-        # later `git stash pop` conflicts.
-        clobber = "sh -c 'echo conflicting > model.sql; git add -A; git commit -qm x'"
-
-        code = _run(_args(repo, clobber))
+        with patch("dbt_plan.cli._do_snapshot", self._clobber(repo)):
+            code = _run(_args(repo, "git --version"))
 
         err = capsys.readouterr().err
         assert code != 0, "a failed restore must not look like success"
@@ -128,8 +141,8 @@ class TestStashPopFailure:
         original = "SELECT 1 AS a, 2 AS b\n"
         (repo / "model.sql").write_text(original)
 
-        clobber = "sh -c 'echo conflicting > model.sql; git add -A; git commit -qm x'"
-        _run(_args(repo, clobber))
+        with patch("dbt_plan.cli._do_snapshot", self._clobber(repo)):
+            _run(_args(repo, "git --version"))
 
         # Either restored to the tree, or still in the stash -- never gone.
         in_tree = original in (repo / "model.sql").read_text()
