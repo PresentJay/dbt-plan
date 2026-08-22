@@ -1,0 +1,51 @@
+name: Feature request
+description: Suggest something dbt-plan should do
+labels: [enhancement]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        dbt-plan reads files and nothing else. It does not connect to a warehouse,
+        run dbt, or simulate a run — that constraint is what makes it safe to run
+        anywhere, including on a fork's pull request.
+
+        Please skim [Scope](https://github.com/PresentJay/dbt-plan#scope) and
+        [Deliberately Not Planned](https://github.com/PresentJay/dbt-plan#deliberately-not-planned)
+        first. Ideas needing a warehouse connection get declined, and it is nicer
+        for everyone to find that out before writing the issue.
+
+  - type: checkboxes
+    id: scope
+    attributes:
+      label: Scope check
+      options:
+        - label: This works from compiled SQL, `manifest.json`, and config alone — no warehouse connection, no `dbt run`.
+          required: true
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: What goes wrong today
+      description: >
+        Describe the situation you hit, not the solution you have in mind. A
+        concrete case dbt-plan currently misses or gets wrong is the most useful
+        thing you can write here.
+      placeholder: >
+        We rename columns through a macro, so every rename shows up as one DROP and
+        one ADD. In review it is indistinguishable from an actual column deletion.
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: What you would like it to do
+      description: Optional. Skip it if you would rather just describe the problem.
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: What you do instead right now
+      description: >
+        Workarounds are useful signal — if `ignore_models` or `--acknowledge`
+        already covers this well enough, that is worth knowing.

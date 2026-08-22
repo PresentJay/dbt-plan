@@ -1,0 +1,94 @@
+name: Bug report
+description: dbt-plan got a verdict wrong, crashed, or misread your SQL
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        dbt-plan decides everything from compiled SQL plus a model's config, so a
+        report without those is usually not reproducible. The fields below are the
+        minimum needed to turn this into a failing test.
+
+  - type: textarea
+    id: compiled-sql
+    attributes:
+      label: Compiled SQL
+      description: >
+        From `target/compiled/...`, not the model source — dbt-plan never sees
+        Jinja. Trim it to the smallest query that still reproduces the problem and
+        rename anything private; column and table names only need to keep their shape.
+      render: sql
+      placeholder: |
+        SELECT
+            order_id,
+            customer_id
+        FROM orders
+    validations:
+      required: true
+
+  - type: dropdown
+    id: dialect
+    attributes:
+      label: Dialect
+      description: The `--dialect` value, or the default if you did not set one.
+      options:
+        - snowflake (default)
+        - bigquery
+        - redshift
+        - postgres
+        - duckdb
+        - databricks
+        - trino
+        - mysql
+        - other (say which below)
+    validations:
+      required: true
+
+  - type: dropdown
+    id: materialization
+    attributes:
+      label: Materialization
+      options: [table, view, incremental, ephemeral, snapshot, not sure]
+    validations:
+      required: true
+
+  - type: dropdown
+    id: on-schema-change
+    attributes:
+      label: on_schema_change
+      description: Only meaningful for incremental models; pick n/a otherwise.
+      options: [ignore, fail, append_new_columns, sync_all_columns, "n/a", not sure]
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected-actual
+    attributes:
+      label: What you expected, and what happened
+      description: >
+        Include the `dbt-plan` output and its exit code if you have them
+        (0 safe, 1 destructive, 2 warning or error).
+      placeholder: |
+        Expected: DESTRUCTIVE, because revenue is dropped
+        Got:      dbt-plan -- no model changes detected  (exit 0)
+    validations:
+      required: true
+
+  - type: input
+    id: versions
+    attributes:
+      label: Versions
+      description: "Output of: `dbt-plan --version` and `python -c 'import sqlglot; print(sqlglot.__version__)'`"
+      placeholder: dbt-plan 0.5.2, sqlglot 30.17.0
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: severity
+    attributes:
+      label: Does this report a model as safe when it is not?
+      description: >
+        A false safe is the one bug class this tool exists to prevent, so those
+        get looked at first. False warnings are expected and much lower priority.
+      options:
+        - label: Yes — dbt-plan said SAFE (or reported no change) for something that would drop or break a column

@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Configuration reference
+    url: https://presentjay.github.io/dbt-plan
+    about: Flags, .dbt-plan.yml keys, environment variables, and exit codes.
+  - name: Security vulnerability
+    url: https://github.com/PresentJay/dbt-plan/security/advisories/new
+    about: Report privately here rather than in a public issue.

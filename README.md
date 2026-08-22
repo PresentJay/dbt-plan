@@ -205,7 +205,7 @@ src/dbt_plan/
 - `ddl-reviewed` label override — escape hatch for intentional destructive changes
 - INFORMATION_SCHEMA integration — query warehouse for SELECT * resolution
 
-**Design decisions:** See [docs/architecture-decisions.md](docs/architecture-decisions.md).
+**Design decisions:** See [docs/design-notes.md](docs/design-notes.md).
 
 ## Supported
 
