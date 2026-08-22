@@ -142,6 +142,11 @@ the GitHub API, not in this tree — cloning does not bring them along and
 recreating the repository loses them. `scripts/apply-repo-settings.sh` puts them
 back, and `--check` reports the current state without changing anything.
 
+Branch protection applies to everyone including maintainers, so every change
+reaches `main` through a pull request with green CI. Tag pushes are exempt, so
+releases are unaffected, and no review is required, so a PR can be merged as
+soon as the checks pass.
+
 If you add or rename a job in `.github/workflows/ci.yml`, update the required
 check list in that script too. A required check that names a job which does not
 exist blocks every merge, permanently.

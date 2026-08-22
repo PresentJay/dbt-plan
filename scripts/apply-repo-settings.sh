@@ -47,13 +47,14 @@ $CHECK_ONLY && echo "(check only -- nothing will be changed)"
 
 echo
 echo "Branch protection on $BRANCH"
-# enforce_admins is deliberately false: the threat model is external
-# contributions, and a sole maintainer who cannot push is a maintainer who
-# stops maintaining. Set it true once a second maintainer exists.
-apply "required checks, no force-push, no deletion" PUT \
+# enforce_admins is true: the rules bind the maintainer too. Everything reaches
+# main through a pull request with green CI. Tag pushes are unaffected, so
+# releases still work, and no review is required, so a solo maintainer can merge
+# their own PR as soon as the checks pass.
+apply "required checks, no force-push, no deletion, applies to admins" PUT \
   "repos/$REPO/branches/$BRANCH/protection" \
   "{\"required_status_checks\":{\"strict\":true,\"contexts\":$REQUIRED_CHECKS},
-    \"enforce_admins\":false,
+    \"enforce_admins\":true,
     \"required_pull_request_reviews\":null,
     \"restrictions\":null,
     \"allow_force_pushes\":false,
