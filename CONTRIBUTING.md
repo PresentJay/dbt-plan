@@ -15,12 +15,12 @@ negotiable; this one is the reason the tool exists.
 git clone https://github.com/PresentJay/dbt-plan
 cd dbt-plan
 uv sync --extra test --extra dbt   # or: pip install -e ".[dev,dbt]"
-make test                          # expect 1174 passed
+make test                          # expect 1193 passed
 ```
 
 The `dbt` extra is what makes the four end-to-end tests in `tests/test_dbt_e2e.py`
 actually run; they compile a real dbt project with duckdb. Without it you get
-`1170 passed, 4 skipped`, which is fine for most changes but means you are not
+`1189 passed, 4 skipped`, which is fine for most changes but means you are not
 exercising the `dbt-plan run` pipeline. Run `pytest -rs` to see why anything
 skipped — the reasons name the specific missing piece.
 
@@ -55,6 +55,31 @@ SELECT ...
 Use the invented bookstore domain the other fixtures use — orders, customers,
 books, publishers. Never paste schema from a real warehouse; this package is
 published to PyPI, and a published artifact cannot be taken back.
+
+## Using an AI assistant
+
+Allowed, with two conditions.
+
+**Run it and understand it.** If you cannot explain why the change is correct
+without the assistant, it is not ready. Review time is the scarce resource here,
+and a patch that has to be verified from scratch costs more than it saves.
+
+**Anything non-trivial should target an open issue first.** Typos, a fixture, a
+doc fix — open the pull request. A behaviour change, a new flag, a refactor —
+comment on an issue, or open one, before writing code. Issues labelled
+[good first issue](https://github.com/PresentJay/dbt-plan/labels/good%20first%20issue)
+are already scoped and count as agreed.
+
+Unsolicited large pull requests are closed without review. Not out of hostility
+to the tooling — the same rule applies to hand-written ones. It is that this
+project's rules are unusual (never return SAFE when unsure; no warehouse
+connection; sqlglot is the only dependency), and generated code tends to be
+plausible in a way that quietly violates exactly those.
+
+Some of that is enforced mechanically in `tests/test_invariants.py` — a
+warehouse driver import, a network import, or `shell=True` fails CI rather than
+waiting for review. Those checks exist to save you a round trip, not to catch
+you out.
 
 ## Architecture
 
