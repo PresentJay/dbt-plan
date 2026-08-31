@@ -4,6 +4,26 @@ Static analysis tool that warns about risky DDL changes before `dbt run`.
 
 Like `terraform plan` for dbt. Runs on compiled SQL — you need a `dbt compile` (which connects), but from there dbt-plan works on files alone. Works with any warehouse (Snowflake, BigQuery, Redshift, Postgres, etc.).
 
+## What It Looks Like
+
+```
+$ dbt-plan check
+
+dbt-plan -- 2 model(s) changed
+
+DESTRUCTIVE  int_order_enriched (incremental, sync_all_columns)
+  DROP COLUMN  shipping_info
+  DROP COLUMN  billing_info
+  ADD COLUMN   shipping_city
+  Downstream: dim_customers, fct_orders (2 model(s))
+  >> BROKEN_REF  fct_orders: references dropped column(s): shipping_info
+
+SAFE  dim_customers (table)
+  CREATE OR REPLACE TABLE
+
+dbt-plan: 2 checked, 1 safe, 0 warning, 1 destructive, 1 cascade risk(s)
+```
+
 ## What It Does
 
 dbt-plan analyzes compiled SQL diffs to catch dangerous schema changes at PR time:
@@ -38,50 +58,7 @@ dbt-plan check --format json     # JSON for CI pipelines
 dbt-plan check --select model1   # Check specific model only
 ```
 
-## Output Example
 
-```
-$ dbt-plan check
-
-dbt-plan -- 2 model(s) changed
-
-DESTRUCTIVE  int_order_enriched (incremental, sync_all_columns)
-  DROP COLUMN  shipping_info
-  DROP COLUMN  billing_info
-  ADD COLUMN   shipping_city
-  Downstream: dim_customers, fct_orders (2 model(s))
-  >> BROKEN_REF  fct_orders: references dropped column(s): shipping_info
-
-SAFE  dim_customers (table)
-  CREATE OR REPLACE TABLE
-
-dbt-plan: 2 checked, 1 safe, 0 warning, 1 destructive, 1 cascade risk(s)
-```
-
-## What Works (v0.5.2)
-
-| Feature | Status | Details |
-|---------|--------|---------|
-| Column extraction (SQLGlot) | **Done** | Multi-dialect (Snowflake, BigQuery, Postgres, etc.) |
-| DDL prediction | **Done** | All materialization x on_schema_change combinations |
-| Downstream impact | **Done** | Memoized batch BFS, cycle protection |
-| Cascade impact analysis | **Done** | Broken column refs, build failures in downstream models |
-| Config change detection | **Done** | Materialization and on_schema_change policy changes |
-| Removed model detection | **Done** | Always DESTRUCTIVE (ephemeral = SAFE) |
-| Parse failure safety | **Done** | Never returns SAFE when columns unknown |
-| Duplicate column safety | **Done** | Ambiguous columns trigger REVIEW REQUIRED |
-| SELECT * fallback | **Done** | Manifest column definitions as fallback |
-| Output formats | **Done** | `--format text` (color) / `github` / `json` |
-| Configuration | **Done** | `.dbt-plan.yml` + env vars (`DBT_PLAN_*`) + `compile_command` |
-| Commands | **Done** | `snapshot`, `check`, `init`, `stats`, `run`, `ci-setup` |
-| One-command check | **Done** | `dbt-plan run` — compile + snapshot + check in one step |
-| CI setup | **Done** | `dbt-plan ci-setup` — generates GitHub Actions workflow |
-| Model filtering | **Done** | `--select model1,model2` / `ignore_models` in config |
-| Reviewed-change override | **Done** | `--acknowledge` / `DBT_PLAN_ACKNOWLEDGE` — still reported, stops failing CI |
-| Package filtering | **Done** | Auto-excludes dbt package models |
-| BigQuery EXCEPT detection | **Done** | `SELECT * EXCEPT(col)` exclusions tracked in diff |
-| CI integration | **Done** | 1162 tests, 98% coverage, CI workflow template |
-| Verbose mode | **Done** | `--verbose` / `-v` for debugging |
 
 ## Scope
 

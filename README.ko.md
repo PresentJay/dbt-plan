@@ -4,6 +4,25 @@
 
 dbt 버전의 `terraform plan`. 컴파일된 SQL로 동작 — `dbt compile`은 접속이 필요하지만, 그 다음부터 dbt-plan은 파일만 읽습니다. 모든 warehouse 지원 (Snowflake, BigQuery, Redshift, Postgres 등).
 
+## 어떻게 보이는가
+
+```text
+$ dbt-plan check
+
+dbt-plan -- 2 model(s) changed
+
+DESTRUCTIVE  int_order_enriched (incremental, sync_all_columns)
+  DROP COLUMN  shipping_info
+  ADD COLUMN   shipping_city
+  Downstream: dim_customers, fct_orders (2 model(s))
+  >> BROKEN_REF  fct_orders: references dropped column(s): shipping_info
+
+SAFE  dim_customers (table)
+  CREATE OR REPLACE TABLE
+
+dbt-plan: 2 checked, 1 safe, 0 warning, 1 destructive, 1 cascade risk(s)
+```
+
 ## 무엇을 하는가
 
 PR에서 dbt 모델이 변경되었을 때, 컴파일된 SQL 비교로:
@@ -38,45 +57,7 @@ dbt-plan check --format json     # CI 파이프라인용 JSON
 dbt-plan check --select model1   # 특정 모델만 체크
 ```
 
-## 출력 예시
 
-```text
-$ dbt-plan check
-
-dbt-plan -- 2 model(s) changed
-
-DESTRUCTIVE  int_order_enriched (incremental, sync_all_columns)
-  DROP COLUMN  shipping_info
-  ADD COLUMN   shipping_city
-  Downstream: dim_customers, fct_orders (2 model(s))
-  >> BROKEN_REF  fct_orders: references dropped column(s): shipping_info
-
-SAFE  dim_customers (table)
-  CREATE OR REPLACE TABLE
-
-dbt-plan: 2 checked, 1 safe, 0 warning, 1 destructive, 1 cascade risk(s)
-```
-
-## 현재 되는 것 (v0.5.2)
-
-| 기능 | 상태 | 설명 |
-|------|------|------|
-| 컬럼 추출 (SQLGlot) | **완료** | 멀티 dialect (Snowflake, BigQuery, Postgres 등) |
-| DDL 위험도 판정 | **완료** | materialization × on_schema_change 전체 조합 |
-| Cascade 영향 분석 | **완료** | Broken ref, build failure 감지 |
-| 설정 변경 감지 | **완료** | materialization, on_schema_change 정책 변경 |
-| 삭제된 모델 감지 | **완료** | 항상 DESTRUCTIVE (ephemeral = SAFE) |
-| 파싱 실패 안전 | **완료** | 컬럼 추출 실패 시 절대 SAFE 반환 안 함 |
-| 중복 컬럼 안전 | **완료** | 모호한 컬럼 → REVIEW REQUIRED |
-| SELECT * fallback | **완료** | manifest 컬럼 정의로 대체 |
-| 출력 포맷 | **완료** | `--format text` (컬러) / `github` / `json` |
-| 설정 시스템 | **완료** | `.dbt-plan.yml` + 환경변수 (`DBT_PLAN_*`) + `compile_command` |
-| 명령어 | **완료** | `snapshot`, `check`, `init`, `stats`, `run`, `ci-setup` |
-| 원커맨드 체크 | **완료** | `dbt-plan run` — 컴파일 + 스냅샷 + 체크 한번에 |
-| CI 설정 | **완료** | `dbt-plan ci-setup` — GitHub Actions 워크플로우 생성 |
-| 모델 필터링 | **완료** | `--select` / `ignore_models` |
-| 검토 완료 승인 | **완료** | `--acknowledge` / `DBT_PLAN_ACKNOWLEDGE` — 출력엔 남고 CI만 통과 |
-| CI 통합 | **완료** | 1162 tests, 98% coverage |
 
 ## 범위
 
