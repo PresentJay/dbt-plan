@@ -83,9 +83,17 @@ class TestWorkflowStructure:
         """Job uses ubuntu-latest runner."""
         assert re.search(r"runs-on:\s*ubuntu-latest", _CI_WORKFLOW)
 
-    def test_pull_requests_write_permission(self):
-        """Job has permissions.pull-requests: write."""
-        assert re.search(r"pull-requests:\s*write", _CI_WORKFLOW)
+    def test_permissions_are_least_privilege(self):
+        """Job grants contents: read and nothing else — the step summary needs no scope.
+
+        Scoped to the permissions block rather than the whole template: comments
+        legitimately mention scopes (BigQuery OIDC needs id-token: write) without
+        the job actually granting them.
+        """
+        block = re.search(r"\n    permissions:\n((?:      \S+:.*\n)+)", _CI_WORKFLOW)
+        assert block, "permissions block not found"
+        scopes = dict(re.findall(r"(\S+):\s*(\S+)", block.group(1)))
+        assert scopes == {"contents": "read"}, f"expected only contents: read, got {scopes}"
 
 
 # ---------------------------------------------------------------------------
@@ -178,18 +186,38 @@ class TestStepsComplete:
         assert gate_match, "Gate step not found"
         assert "dbt-plan check" in gate_match.group(1)
 
+    def test_preflight_fails_when_credentials_missing(self):
+        """Preflight step exits non-zero with an actionable message when the secret is empty."""
+        preflight = re.search(
+            r"- name: Preflight\s*\n\s*run: \|(.+?)(?=\n\s*- )", _CI_WORKFLOW, re.DOTALL
+        )
+        assert preflight, "Preflight step not found"
+        block = preflight.group(1)
+        assert re.search(r'if \[ -z "\$\w+" \]', block), "must test for an empty credential"
+        assert "exit 1" in block
+        assert "Fork PRs" in block, "message must explain the fork case"
+
     def test_steps_are_in_correct_order(self):
-        """Steps appear in logical order: checkout, setup-python, install, snapshot, check, gate."""
+        """Steps run in logical order, with preflight before the expensive install."""
         positions = {
             "checkout": _CI_WORKFLOW.index("actions/checkout@v4"),
             "setup-python": _CI_WORKFLOW.index("actions/setup-python@v5"),
+            "preflight": _CI_WORKFLOW.index("name: Preflight"),
             "install": _CI_WORKFLOW.index("name: Install"),
             "snapshot": _CI_WORKFLOW.index("name: Snapshot base"),
             "check": _CI_WORKFLOW.index("name: Check current"),
             "gate": _CI_WORKFLOW.index("name: Gate"),
         }
         ordered = sorted(positions.keys(), key=lambda k: positions[k])
-        assert ordered == ["checkout", "setup-python", "install", "snapshot", "check", "gate"]
+        assert ordered == [
+            "checkout",
+            "setup-python",
+            "preflight",
+            "install",
+            "snapshot",
+            "check",
+            "gate",
+        ]
 
 
 # ---------------------------------------------------------------------------
@@ -221,6 +249,40 @@ class TestSecurityConsiderations:
     def test_no_comment_body_injection(self):
         """Workflow does not use github.event.comment.body (injection vector)."""
         assert "github.event.comment.body" not in _CI_WORKFLOW
+
+    def test_trigger_is_not_pull_request_target(self):
+        """`pull_request_target` is never used as a trigger.
+
+        dbt compile executes Jinja/macros authored in the PR. Under
+        pull_request_target that untrusted code would run with warehouse
+        secrets attached. The constant mentions the name in a warning comment,
+        so assert on the YAML key rather than the bare substring.
+        """
+        assert not re.search(r"^\s*pull_request_target:", _CI_WORKFLOW, re.MULTILINE)
+
+    def test_secrets_never_referenced_inside_steps(self):
+        """Secrets appear only in the job-level env block, never inside a step.
+
+        Interpolating ${{ secrets.* }} into a `run:` block puts the plaintext
+        value on the command line. Every reference must sit above `steps:`.
+        """
+        steps_at = _CI_WORKFLOW.index("\n    steps:")
+        for match in re.finditer(r"secrets\.\w+", _CI_WORKFLOW):
+            assert match.start() < steps_at, (
+                f"{match.group(0)} is referenced inside a step; move it to the job-level env block"
+            )
+
+    def test_checkout_does_not_persist_credentials(self):
+        """Checkout sets persist-credentials: false so no git token is left on disk."""
+        assert re.search(r"persist-credentials:\s*false", _CI_WORKFLOW)
+
+    def test_no_hardcoded_credential_material(self):
+        """No credential is baked into the template as a literal."""
+        for literal in ("BEGIN PRIVATE KEY", "BEGIN RSA PRIVATE KEY", "snowflakecomputing.com"):
+            assert literal not in _CI_WORKFLOW, f"hardcoded credential material: {literal}"
+        # Every credential env value must be an expression, never a literal.
+        for _, value in re.findall(r"^      ([A-Z_]+): (.+)$", _CI_WORKFLOW, re.MULTILINE):
+            assert value.startswith("${{"), f"credential env value is a literal: {value}"
 
     def test_all_dangerous_patterns_absent(self):
         """Comprehensive check: no user-controlled GitHub expressions in workflow."""

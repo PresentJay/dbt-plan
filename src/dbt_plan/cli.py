@@ -605,6 +605,17 @@ def _do_check(args: argparse.Namespace) -> int:
 
 _CI_WORKFLOW = """\
 name: dbt-plan
+# dbt-plan itself never connects to your warehouse, but `dbt compile` does.
+# That compile runs Jinja and macros authored in the pull request, so treat it
+# as running untrusted code with credentials attached:
+#
+#   * Keep the `pull_request` trigger. NEVER change it to `pull_request_target`
+#     -- that hands your warehouse secrets to code from any fork.
+#   * Give the CI account the least privilege that still compiles: log in plus
+#     USAGE on the warehouse. `dbt compile` reads no tables unless your macros
+#     introspect (run_query / get_column_values / get_columns_in_relation).
+#   * Fork PRs receive no secrets by design; the Preflight step says so plainly
+#     instead of failing later with a confusing driver error.
 on:
   pull_request:
     paths: ['models/**', 'macros/**', 'dbt_project.yml']
@@ -617,14 +628,51 @@ jobs:
   plan:
     name: DDL Impact Check
     runs-on: ubuntu-latest
+    # Results go to the step summary, which needs no token scope.
     permissions:
-      pull-requests: write
+      contents: read
+    # Optional: gate secret access behind a protected environment.
+    # environment: dbt-plan-ci
+
+    # Credentials for `dbt compile`. profiles.yml should read these via
+    # env_var(). Declaring them here -- rather than interpolating
+    # ${{ secrets.* }} inside a `run:` block -- keeps the values out of the
+    # command line and out of any script the PR could influence.
+    # Non-secret settings (account, user, role) are better kept in `vars`.
+    env:
+      # Uncomment if profiles.yml lives in the repo root rather than ~/.dbt/.
+      # DBT_PROFILES_DIR: ${{ github.workspace }}
+      SNOWFLAKE_ACCOUNT: ${{ secrets.SNOWFLAKE_ACCOUNT }}
+      SNOWFLAKE_USER: ${{ secrets.SNOWFLAKE_USER }}
+      # Key-pair auth; prefer it over a password. Paste the full PEM.
+      SNOWFLAKE_PRIVATE_KEY: ${{ secrets.SNOWFLAKE_PRIVATE_KEY }}
+      SNOWFLAKE_PRIVATE_KEY_PASSPHRASE: ${{ secrets.SNOWFLAKE_PRIVATE_KEY_PASSPHRASE }}
+      # Postgres / Redshift replace the SNOWFLAKE_* lines above with just:
+      # PGPASSWORD: ${{ secrets.PGPASSWORD }}
+      # BigQuery needs no variable here. Add a google-github-actions/auth step
+      # for keyless OIDC, which also requires id-token: write on the job.
+
     steps:
       - uses: actions/checkout@v4
-        with: { fetch-depth: 0 }
+        with:
+          fetch-depth: 0
+          # dbt compile runs PR-authored code -- leave no git token on disk.
+          persist-credentials: false
 
       - uses: actions/setup-python@v5
         with: { python-version: '3.12' }
+
+      # Fail fast and legibly. Change the variable below to whichever one your
+      # profiles.yml requires -- or drop this step entirely if you authenticate
+      # without a secret, as BigQuery OIDC does.
+      - name: Preflight
+        run: |
+          if [ -z "$SNOWFLAKE_PRIVATE_KEY" ]; then
+            echo "::error::dbt compile needs warehouse credentials, but none are set."
+            echo "Add them under Settings > Secrets and variables > Actions."
+            echo "Fork PRs never receive secrets - run this from a branch in this repo."
+            exit 1
+          fi
 
       - name: Install
         run: |
@@ -665,6 +713,89 @@ def _do_ci_setup(args: argparse.Namespace) -> None:
     workflow_path.write_text(_CI_WORKFLOW)
     print(f"Created {workflow_path}")
     print("Push this file to enable dbt-plan on every PR.")
+
+
+_AGENTS_MARKER = "<!-- dbt-plan -->"
+
+_AGENTS_GUIDE = """\
+<!-- dbt-plan -->
+## dbt-plan
+
+This project uses [dbt-plan](https://github.com/PresentJay/dbt-plan) to catch destructive schema
+changes before `dbt run` executes them.
+
+### When to run it
+
+After changing any model SQL, materialization, or `on_schema_change` setting, and before
+opening or approving a pull request:
+
+```bash
+dbt-plan run
+```
+
+That compiles the baseline and the current state, then compares them. It shells out to
+`dbt compile`, so it needs the same warehouse credentials `dbt compile` normally needs.
+dbt-plan itself never connects to the warehouse and never runs SQL.
+
+### Reading the result
+
+- `0` — every change is safe.
+- `1` — destructive: a column is being dropped, or a model removed.
+- `2` — dbt-plan could not decide. A human has to look.
+
+A warning is not automatically a blocker; it means "explain this before merging."
+
+### What not to do
+
+The failure this tool exists to prevent is a column disappearing without anyone noticing.
+Two edits will silence a real finding, and neither makes the change safe:
+
+- Adding the model to `ignore_models` in `.dbt-plan.yml`.
+- Switching `on_schema_change` from `sync_all_columns` to `ignore`.
+
+If a destructive change is intentional, say so in the pull request. Do not edit config to
+make the warning disappear.
+
+### Why a change is judged risky
+
+Risk is materialization crossed with `on_schema_change`:
+
+| Config | Result |
+|---|---|
+| `table` / `view` | `CREATE OR REPLACE` — safe |
+| `incremental` + `ignore` | no DDL — safe |
+| `incremental` + `append_new_columns` | ADD COLUMN only — safe |
+| `incremental` + `fail` | run fails on schema drift — warning |
+| `incremental` + `sync_all_columns` | ADD and DROP COLUMN — destructive if a column was removed |
+| `snapshot` | review required — warning |
+| model deleted | destructive |
+
+When dbt-plan cannot extract columns it reports "review required" rather than "safe".
+False warnings are acceptable here; a false all-clear is not.
+"""
+
+
+def _do_agent_setup(args: argparse.Namespace) -> None:
+    """Write dbt-plan guidance into the project's AGENTS.md for coding agents."""
+    project_dir = Path(args.project_dir)
+    path = project_dir / "AGENTS.md"
+
+    if path.exists():
+        content = path.read_text()
+        if _AGENTS_MARKER in content:
+            print(
+                f"AGENTS.md already has a dbt-plan section: {path}\n"
+                "Edit it directly, or delete that section and re-run 'dbt-plan agent-setup'.",
+                file=sys.stderr,
+            )
+            sys.exit(2)
+        with path.open("a") as f:
+            f.write(("" if content.endswith("\n") else "\n") + "\n" + _AGENTS_GUIDE)
+        print(f"Appended dbt-plan section to {path}")
+    else:
+        path.write_text(f"# AGENTS.md\n\n{_AGENTS_GUIDE}")
+        print(f"Created {path}")
+    print("Coding agents that read AGENTS.md will pick this up automatically.")
 
 
 def _do_run(args: argparse.Namespace) -> int:
@@ -846,8 +977,10 @@ def main() -> None:
             "  dbt compile\n"
             "  dbt-plan check             # see what changed\n"
             "\n"
-            "ci setup:\n"
+            "project setup:\n"
+            "  dbt-plan init              # generate .dbt-plan.yml\n"
             "  dbt-plan ci-setup          # generate GitHub Actions workflow\n"
+            "  dbt-plan agent-setup       # tell coding agents how to use dbt-plan\n"
             "\n"
             "exit codes:\n"
             "  0  all changes are safe\n"
@@ -954,6 +1087,12 @@ def main() -> None:
     )
     ci_cmd.add_argument("--project-dir", default=".", help="dbt project directory (default: .)")
 
+    # agent-setup
+    agent_cmd = subparsers.add_parser(
+        "agent-setup", help="Write dbt-plan guidance into AGENTS.md for coding agents"
+    )
+    agent_cmd.add_argument("--project-dir", default=".", help="dbt project directory (default: .)")
+
     # run
     run_cmd = subparsers.add_parser(
         "run",
@@ -1011,6 +1150,8 @@ def main() -> None:
         sys.exit(_do_check(args))
     elif args.command == "stats":
         _do_stats(args)
+    elif args.command == "agent-setup":
+        _do_agent_setup(args)
     elif args.command == "ci-setup":
         _do_ci_setup(args)
     elif args.command == "run":
