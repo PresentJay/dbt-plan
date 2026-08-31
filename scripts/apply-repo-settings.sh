@@ -85,6 +85,18 @@ apply "external pull requests need approval to run workflows" PUT \
   '{"approval_policy":"all_external_contributors"}'
 
 echo
+echo "Discoverability"
+# Topics and description are the only search surface GitHub gives a repository,
+# and like everything else here they live in the API -- recreating the repo in
+# 2026-08 lost them once already. Topics are exact-match search terms, so both
+# "ci" and "ci-cd" earn their place.
+apply "description and homepage" PATCH "repos/$REPO" \
+  '{"description":"Preview the DDL changes dbt run will execute — like terraform plan for dbt. Any warehouse, from compiled SQL.","homepage":"https://presentjay.github.io/dbt-plan"}'
+
+apply "topics" PUT "repos/$REPO/topics" \
+  '{"names":["dbt","dbt-core","analytics-engineering","data-engineering","data-quality","static-analysis","sqlglot","ci","ci-cd","github-actions","developer-tools","schema-migration","sql","snowflake","bigquery","redshift","postgres"]}'
+
+echo
 echo "Current state"
 gh api "repos/$REPO/branches/$BRANCH/protection" > /tmp/.rs-prot.json
 gh api "repos/$REPO/actions/permissions" > /tmp/.rs-perm.json
