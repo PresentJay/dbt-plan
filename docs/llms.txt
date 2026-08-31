@@ -52,6 +52,12 @@ Being noisy is acceptable; missing a destructive change is not.
 
 Use `--dialect` to pick the sqlglot dialect (default: snowflake).
 
+In GitHub Actions, `PresentJay/dbt-plan@v1` wraps the whole sequence: it installs
+dbt-plan, compiles the base revision and yours, and fails the job on a destructive
+verdict. It needs `actions/checkout` with `fetch-depth: 0`, and whatever credentials
+`dbt compile` needs. Keep the `pull_request` trigger -- `pull_request_target` would
+expose those credentials to code from any fork.
+
 ## Docs
 
 - [README](https://github.com/PresentJay/dbt-plan/blob/main/README.md): install, quick start, command reference
