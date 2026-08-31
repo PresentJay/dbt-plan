@@ -4,7 +4,15 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>dbt-plan — DDL risk warnings before dbt run</title>
-<meta name="description" content="Static analysis tool that warns about risky DDL changes before dbt run. Like terraform plan for dbt.">
+<meta name="description" content="Static analysis tool that warns about risky DDL changes before dbt run. Like terraform plan for dbt. Works with Snowflake, BigQuery, Redshift, Postgres, and any other warehouse — it reads compiled SQL and never connects.">
+<link rel="canonical" href="https://presentjay.github.io/dbt-plan/">
+<meta property="og:type" content="website">
+<meta property="og:url" content="https://presentjay.github.io/dbt-plan/">
+<meta property="og:title" content="dbt-plan — DDL risk warnings before dbt run">
+<meta property="og:description" content="Catch dropped columns and destructive schema changes at PR time. Like terraform plan for dbt, for any warehouse.">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:title" content="dbt-plan — DDL risk warnings before dbt run">
+<meta name="twitter:description" content="Catch dropped columns and destructive schema changes at PR time. Like terraform plan for dbt, for any warehouse.">
 <style>
   :root {
     --bg: #0d1117;
@@ -247,7 +255,7 @@
     <div class="steps">
       <div class="step">
         <div><span class="step-num">1</span><span class="step-title">Install</span></div>
-        <div class="step-desc">One package, one dependency (sqlglot). No warehouse connection needed.</div>
+        <div class="step-desc">One package, one dependency (sqlglot). Nothing else to configure.</div>
         <pre>pip install dbt-plan</pre>
       </div>
       <div class="step">
@@ -311,7 +319,7 @@
       </div>
       <div class="feature">
         <div class="feature-title">Zero runtime deps</div>
-        <div class="feature-desc">Only sqlglot. No warehouse connection. Analyzes files on disk, nothing else.</div>
+        <div class="feature-desc">Only sqlglot. It analyzes compiled SQL on disk, so dbt compile is the step that talks to your warehouse.</div>
       </div>
       <div class="feature">
         <div class="feature-title">Safe by design</div>
@@ -402,7 +410,7 @@ DBT_PLAN_WARNING_EXIT_CODE=0</pre>
       <tbody>
         <tr><td>False safe = never</td><td>If we can't determine safety, we warn. Never silently pass.</td></tr>
         <tr><td>False warning = OK</td><td>Over-warning is fine. Use ignore_models to suppress.</td></tr>
-        <tr><td>No runtime deps</td><td>Only sqlglot. No warehouse connection needed.</td></tr>
+        <tr><td>No runtime deps</td><td>Only sqlglot, and dbt-plan reads files rather than querying a warehouse.</td></tr>
         <tr><td>CI-first</td><td>Exit codes, structured output, one-line summary.</td></tr>
       </tbody>
     </table>

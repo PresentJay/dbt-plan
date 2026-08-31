@@ -2,7 +2,7 @@
 
 Static analysis tool that warns about risky DDL changes before `dbt run`.
 
-Like `terraform plan` for dbt. No warehouse connection needed. Works with any warehouse (Snowflake, BigQuery, Redshift, Postgres, etc.).
+Like `terraform plan` for dbt. Runs on compiled SQL — you need a `dbt compile` (which connects), but from there dbt-plan works on files alone. Works with any warehouse (Snowflake, BigQuery, Redshift, Postgres, etc.).
 
 ## What It Does
 
@@ -24,7 +24,7 @@ pip install dbt-plan
 dbt-plan run               # One command: compile baseline → compile current → check
 ```
 
-That's it. `dbt-plan run` handles `dbt compile`, snapshotting, and checking automatically.
+That's it. `dbt-plan run` handles `dbt compile`, snapshotting, and checking automatically — so it needs whatever credentials your `dbt compile` normally needs. If you can't compile locally, run it in CI (see below) and dbt-plan reads the artifacts there.
 
 ### More commands
 
@@ -32,6 +32,7 @@ That's it. `dbt-plan run` handles `dbt compile`, snapshotting, and checking auto
 dbt-plan init              # Generate .dbt-plan.yml config + update .gitignore
 dbt-plan stats             # Analyze project readiness
 dbt-plan ci-setup          # Generate GitHub Actions workflow
+dbt-plan agent-setup       # Write AGENTS.md so coding agents know to run the check
 dbt-plan check --format github   # GitHub markdown output
 dbt-plan check --format json     # JSON for CI pipelines
 dbt-plan check --select model1   # Check specific model only

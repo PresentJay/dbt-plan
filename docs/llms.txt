@@ -1,0 +1,69 @@
+# dbt-plan
+
+> Static analysis that warns about risky DDL changes before `dbt run`. Like `terraform plan`
+> for dbt. It compares compiled SQL between two revisions, predicts what DDL dbt would emit,
+> and fails CI on destructive changes. Works with any warehouse — Snowflake, BigQuery,
+> Redshift, Postgres — because it reads files rather than querying a database.
+
+Install with `pip install dbt-plan`. Requires Python 3.10+. The only runtime dependency is
+sqlglot.
+
+## What it does and does not do
+
+dbt-plan reads `target/compiled/**/*.sql` and `target/manifest.json`, diffs them against a
+saved baseline, and reports column additions/removals, materialization changes, and
+downstream models broken by a dropped column. Exit codes drive CI: 0 safe, 1 destructive,
+2 warning.
+
+It does not execute SQL, simulate `dbt run`, or connect to a warehouse. It does not judge
+`--full-refresh` behavior (a runtime flag), seed/source changes, or pre/post-hook DDL.
+
+Note on credentials: dbt-plan itself never connects, but producing its input requires
+`dbt compile`, which does connect. In CI, run compile where credentials already exist;
+dbt-plan then reads the artifacts. `dbt compile` reads no tables, so a login with warehouse
+USAGE is usually enough unless project macros introspect.
+
+## Risk rules
+
+Safety is decided by materialization crossed with `on_schema_change`:
+
+- table or view, any setting: `CREATE OR REPLACE` — safe
+- ephemeral: no physical object — safe
+- incremental + `ignore`: no DDL — safe
+- incremental + `append_new_columns`: ADD COLUMN only — safe
+- incremental + `fail`: build failure on schema drift — warning
+- incremental + `sync_all_columns`: ADD and DROP COLUMN — destructive if a column was removed
+- snapshot, any setting: review required — warning
+- model removed, any setting: destructive
+- unrecognized `on_schema_change`: warning
+
+When a column cannot be extracted, dbt-plan reports "review required" rather than "safe".
+Being noisy is acceptable; missing a destructive change is not.
+
+## Commands
+
+- `dbt-plan run` — compile baseline, compile current, check, in one step
+- `dbt-plan snapshot` — save the current compiled state as the baseline
+- `dbt-plan check` — compare against the baseline; `--format text|github|json`
+- `dbt-plan stats` — summarize the manifest; needs only `dbt parse`, no connection
+- `dbt-plan init` — write a `.dbt-plan.yml`
+- `dbt-plan ci-setup` — generate `.github/workflows/dbt-plan.yml`
+- `dbt-plan agent-setup` — write dbt-plan guidance into the project's `AGENTS.md`
+
+Use `--dialect` to pick the sqlglot dialect (default: snowflake).
+
+## Docs
+
+- [README](https://github.com/PresentJay/dbt-plan/blob/main/README.md): install, quick start, command reference
+- [README (Korean)](https://github.com/PresentJay/dbt-plan/blob/main/README.ko.md): the same, in Korean
+- [CI integration](https://github.com/PresentJay/dbt-plan/blob/main/docs/ci-integration.md): GitHub Actions, credential wiring, least-privilege guidance
+- [Configuration](https://github.com/PresentJay/dbt-plan/blob/main/docs/configuration.md): `.dbt-plan.yml` and environment variables
+- [Design notes](https://github.com/PresentJay/dbt-plan/blob/main/docs/design-notes.md): why compiled-SQL diffing over warehouse introspection, and what is deliberately out of scope
+- [Use cases](https://github.com/PresentJay/dbt-plan/blob/main/docs/use-cases.md): where the tool fits, and where it does not
+- [Contributing](https://github.com/PresentJay/dbt-plan/blob/main/CONTRIBUTING.md): development setup and test requirements
+
+## Optional
+
+- [Homepage](https://presentjay.github.io/dbt-plan/)
+- [Source](https://github.com/PresentJay/dbt-plan)
+- [PyPI](https://pypi.org/project/dbt-plan/)

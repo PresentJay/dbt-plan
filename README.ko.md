@@ -2,7 +2,7 @@
 
 `dbt run` 전에 위험한 DDL 변경을 경고하는 정적 분석 도구.
 
-dbt 버전의 `terraform plan`. Warehouse 접속 없이 동작. 모든 warehouse 지원 (Snowflake, BigQuery, Redshift, Postgres 등).
+dbt 버전의 `terraform plan`. 컴파일된 SQL로 동작 — `dbt compile`은 접속이 필요하지만, 그 다음부터 dbt-plan은 파일만 읽습니다. 모든 warehouse 지원 (Snowflake, BigQuery, Redshift, Postgres 등).
 
 ## 무엇을 하는가
 
@@ -24,12 +24,15 @@ pip install dbt-plan
 dbt-plan run               # 원커맨드: 컴파일 + 스냅샷 + 체크
 ```
 
+`dbt compile`을 대신 실행해주므로, 평소 `dbt compile`에 쓰던 자격증명이 그대로 필요합니다. 로컬에서 컴파일이 안 되면 CI에서 돌리세요 (아래 참고) — dbt-plan은 거기서 나온 아티팩트를 읽습니다.
+
 ### 더 많은 명령
 
 ```bash
 dbt-plan init              # .dbt-plan.yml 설정 파일 생성
 dbt-plan stats             # 프로젝트 분석
 dbt-plan ci-setup          # GitHub Actions 워크플로우 생성
+dbt-plan agent-setup       # AGENTS.md 생성 — 코딩 에이전트에게 체크 실행법을 알려줌
 dbt-plan check --format github   # GitHub 마크다운 출력
 dbt-plan check --format json     # CI 파이프라인용 JSON
 dbt-plan check --select model1   # 특정 모델만 체크
