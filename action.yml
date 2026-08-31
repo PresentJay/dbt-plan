@@ -1,0 +1,141 @@
+name: dbt-plan
+description: Warn about destructive dbt schema changes before dbt run. Like terraform plan, for dbt.
+author: PresentJay
+
+branding:
+  icon: alert-triangle
+  color: yellow
+
+inputs:
+  compile-command:
+    description: >-
+      Command that produces target/compiled/ and target/manifest.json. Runs twice, once on
+      the base revision and once on yours. It needs whatever credentials your dbt profile
+      needs -- dbt-plan itself never connects to a warehouse.
+    default: dbt compile
+  base-ref:
+    description: >-
+      Revision to compare against. Defaults to the pull request base. Requires the caller to
+      check out with fetch-depth: 0, since a shallow clone does not contain it.
+    default: ${{ github.event.pull_request.base.sha }}
+  project-dir:
+    description: dbt project directory.
+    default: .
+  dialect:
+    description: sqlglot dialect used to parse compiled SQL.
+    default: snowflake
+  version:
+    description: dbt-plan version to install. Empty installs the latest release.
+    default: ''
+  fail-on:
+    description: >-
+      Which verdict fails the job: destructive, warning, or never. "warning" honours
+      warning_exit_code from .dbt-plan.yml, so setting that to 0 opts out of it.
+    default: destructive
+  summary:
+    description: Write the report to the job step summary.
+    default: 'true'
+
+outputs:
+  verdict:
+    description: safe, destructive, or warning.
+    value: ${{ steps.check.outputs.verdict }}
+  exit-code:
+    description: The dbt-plan exit code -- 0 safe, 1 destructive, 2 warning.
+    value: ${{ steps.check.outputs.exit-code }}
+  report:
+    description: Path to the JSON report.
+    value: ${{ steps.check.outputs.report }}
+
+# Inputs are passed through env rather than interpolated into run:, so a value
+# containing shell metacharacters cannot become a command.
+runs:
+  using: composite
+  steps:
+    - name: Install dbt-plan
+      shell: bash
+      env:
+        VERSION: ${{ inputs.version }}
+      run: |
+        set -eu
+        if [ -n "$VERSION" ]; then
+          pip install --quiet "dbt-plan==$VERSION"
+        else
+          pip install --quiet dbt-plan
+        fi
+        dbt-plan --version
+
+    - name: Snapshot base
+      shell: bash
+      working-directory: ${{ inputs.project-dir }}
+      env:
+        BASE_REF: ${{ inputs.base-ref }}
+        COMPILE: ${{ inputs.compile-command }}
+      run: |
+        set -eu
+        if [ -z "$BASE_REF" ]; then
+          echo "::error::base-ref is empty. Outside a pull_request event, set it explicitly."
+          exit 1
+        fi
+        if ! git cat-file -e "$BASE_REF^{commit}" 2>/dev/null; then
+          echo "::error::base-ref $BASE_REF is not in this clone. Check out with fetch-depth: 0."
+          exit 1
+        fi
+        git rev-parse HEAD > "$RUNNER_TEMP/dbt-plan-head"
+        git checkout --detach --quiet "$BASE_REF"
+        eval "$COMPILE"
+        dbt-plan snapshot
+
+    - name: Compile current
+      shell: bash
+      working-directory: ${{ inputs.project-dir }}
+      env:
+        COMPILE: ${{ inputs.compile-command }}
+      run: |
+        set -eu
+        git checkout --detach --quiet "$(cat "$RUNNER_TEMP/dbt-plan-head")"
+        eval "$COMPILE"
+
+    - name: Check
+      id: check
+      shell: bash
+      working-directory: ${{ inputs.project-dir }}
+      env:
+        DIALECT: ${{ inputs.dialect }}
+        SUMMARY: ${{ inputs.summary }}
+      run: |
+        set -u
+        report="$RUNNER_TEMP/dbt-plan-report.json"
+        dbt-plan check --dialect "$DIALECT" --format json > "$report"
+        code=$?
+        case "$code" in
+          0) verdict=safe ;;
+          1) verdict=destructive ;;
+          2) verdict=warning ;;
+          *) echo "::error::dbt-plan exited $code"; cat "$report"; exit "$code" ;;
+        esac
+        if [ "$SUMMARY" = "true" ]; then
+          dbt-plan check --dialect "$DIALECT" --format github >> "$GITHUB_STEP_SUMMARY" || true
+        fi
+        dbt-plan check --dialect "$DIALECT" --no-color || true
+        {
+          echo "verdict=$verdict"
+          echo "exit-code=$code"
+          echo "report=$report"
+        } >> "$GITHUB_OUTPUT"
+
+    - name: Gate
+      shell: bash
+      env:
+        FAIL_ON: ${{ inputs.fail-on }}
+        VERDICT: ${{ steps.check.outputs.verdict }}
+        CODE: ${{ steps.check.outputs.exit-code }}
+      run: |
+        set -u
+        fail() { echo "::error::dbt-plan verdict: $VERDICT"; exit 1; }
+        case "$FAIL_ON" in
+          never)       exit 0 ;;
+          destructive) [ "$CODE" = "1" ] && fail; exit 0 ;;
+          warning)     [ "$CODE" = "0" ] || fail; exit 0 ;;
+          *) echo "::error::fail-on must be destructive, warning, or never (got '$FAIL_ON')"; exit 1 ;;
+        esac

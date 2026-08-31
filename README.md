@@ -112,33 +112,50 @@ Two ideas that look useful but contradict what this tool is:
 name: dbt-plan
 on:
   pull_request:
-    paths: ['models/**', 'macros/**']
+    paths: ['models/**', 'macros/**', 'dbt_project.yml']
 
 jobs:
   plan:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    env:
+      # Whatever your profiles.yml reads. `dbt compile` connects; dbt-plan does not.
+      SNOWFLAKE_ACCOUNT: ${{ secrets.SNOWFLAKE_ACCOUNT }}
+      SNOWFLAKE_USER: ${{ secrets.SNOWFLAKE_USER }}
+      SNOWFLAKE_PRIVATE_KEY: ${{ secrets.SNOWFLAKE_PRIVATE_KEY }}
     steps:
       - uses: actions/checkout@v4
-        with: { fetch-depth: 0 }
-
+        with:
+          fetch-depth: 0          # the base revision has to be in the clone
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with: { python-version: '3.12' }
       - run: pip install uv && uv sync
-      - run: pip install dbt-plan
 
-      # Compile and snapshot base branch
-      - run: |
-          git checkout ${{ github.event.pull_request.base.sha }}
-          dbt compile
-          dbt-plan snapshot
-
-      # Compile current and check
-      - run: |
-          git checkout ${{ github.event.pull_request.head.sha }}
-          dbt compile
-          dbt-plan check --format github >> $GITHUB_STEP_SUMMARY
-
-      # Block destructive changes (exit 1)
-      - run: dbt-plan check
+      - uses: PresentJay/dbt-plan@v1
 ```
+
+Keep the `pull_request` trigger. Never switch it to `pull_request_target` — `dbt compile`
+runs Jinja and macros written in the pull request, so that would hand your warehouse
+credentials to code from any fork.
+
+| Input | Default | |
+|---|---|---|
+| `compile-command` | `dbt compile` | Runs twice, once per revision. |
+| `base-ref` | the PR base | The revision to compare against. |
+| `project-dir` | `.` | dbt project directory. |
+| `dialect` | `snowflake` | sqlglot dialect for parsing compiled SQL. |
+| `version` | latest | Pin a dbt-plan release. |
+| `fail-on` | `destructive` | Or `warning`, or `never`. |
+| `summary` | `true` | Write the report to the job step summary. |
+
+Outputs `verdict` (`safe` / `destructive` / `warning`), `exit-code`, and `report`
+(path to the JSON report), so a later step can comment on the PR or open a ticket.
+
+For a workflow you own outright rather than a wrapped action, `dbt-plan ci-setup`
+generates one with the credential wiring and least-privilege notes inline. Details in
+[docs/ci-integration.md](docs/ci-integration.md).
 
 ## How It Works
 
