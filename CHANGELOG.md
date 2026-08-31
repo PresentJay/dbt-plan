@@ -7,6 +7,43 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-08-31
+
+### Added
+- **`dbt-plan agent-setup`** writes dbt-plan guidance into a consuming project's
+  `AGENTS.md`, creating the file or appending a marked section. It leads with
+  what a coding agent is most likely to get wrong: adding a model to
+  `ignore_models`, or downgrading `on_schema_change` from `sync_all_columns` to
+  `ignore`, silences a real finding without making the change safe.
+- **A GitHub Action.** `PresentJay/dbt-plan@v1` wraps install, compile-base,
+  snapshot, compile-head, check and gate. Seven inputs, all defaulted; outputs
+  `verdict`, `exit-code` and `report`. Inputs reach the shell through `env:`
+  rather than being interpolated into `run:`, since the action runs beside
+  pull-request-authored code compiling with credentials attached.
+- `docs/llms.txt`, plus canonical and social meta tags on the landing page, so
+  an agent asked about dbt-plan reads the scope boundaries instead of guessing.
+
+### Changed
+- **`dbt-plan ci-setup` now wires warehouse credentials.** The generated
+  workflow had none, so it failed in CI the same way it fails locally. `dbt
+  compile` runs Jinja and macros authored in the pull request, so secrets sit
+  in a job-level `env:` instead of being interpolated into `run:`,
+  `pull_request_target` is forbidden in a header comment, `permissions` drops
+  from `pull-requests: write` to `contents: read`, `persist-credentials` is
+  off, and a Preflight step fails fast naming the fork case.
+- The README leads with the output example rather than a feature table. The
+  `What Works` table was a changelog with a version number in its heading, so
+  it was guaranteed to go stale — and had, claiming v0.3.5 at v0.5.2.
+- The release workflow triggers on `v*.*.*` rather than `v*`, so the action's
+  moving `v1` tag cannot fire a PyPI publish.
+
+### Fixed
+- **"No warehouse connection needed" is gone from the README, the Korean
+  README and the landing page.** dbt-plan never connects, but producing its
+  input requires `dbt compile`, which does — and that sentence was the one
+  users acted on before hitting an empty-password error. It shipped on the
+  PyPI page, which is where most people meet this project.
+
 ## [0.5.2] - 2026-08-22
 
 ### Fixed

@@ -2,7 +2,9 @@ name: Release
 
 on:
   push:
-    tags: ["v*"]
+    # Package releases only. The action's Marketplace tag (v1) deliberately
+    # does not match, so moving it never republishes to PyPI.
+    tags: ["v*.*.*"]
 
 # Only a tag push reaches this, and only a maintainer can push a tag. The job
 # below narrows to what it needs; actions are pinned by commit because this is
