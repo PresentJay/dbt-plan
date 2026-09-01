@@ -1,6 +1,6 @@
 """dbt-plan: Static analysis tool that warns about risky DDL changes before dbt run."""
 
-__version__ = "0.7.0"
+__version__ = "0.8.0"
 
 # Re-export key symbols for library usage
 from dbt_plan.columns import extract_columns

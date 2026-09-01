@@ -7,6 +7,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.0] - 2026-09-01
+
+### Added
+- **`SELECT *` is now resolved through the CTEs of the same statement.** The
+  canonical dbt staging model — the one dbt's own style guide teaches — ends in
+  `select * from renamed`, where `renamed` is a CTE with an explicit column list.
+  Every name is in the file, and dbt-plan used to answer `["*"]` to all of them.
+  On a jaffle_shop project extended with realistic patterns (window functions,
+  pivots, unions, nested CTEs), precise extraction went from **4 of 11 models to
+  10 of 11**. No warehouse, no new dependency — the SQL was already in hand.
+
+  This matters beyond coverage. A model that falls back to `["*"]` then falls
+  back again to the manifest's documented columns, and a `schema.yml` that lists
+  only the tested columns makes both sides of the diff identical — a confident
+  "safe" built on a column list that was never complete. jaffle_shop's own
+  `stg_orders` documents 2 of its 4 columns.
+
+  Resolution refuses rather than guesses. It falls back to `["*"]` for an
+  unqualified star over a join (whose columns come from every joined source), a
+  set operation or recursive CTE, a source that is not a CTE, a subquery source,
+  a chain that bottoms out in another unknown, a circular reference, and anything
+  combined with `EXCEPT`. A merely plausible column list is worse than admitting
+  ignorance: it gets compared against another plausible list and yields a silent
+  "safe".
+
 ## [0.7.0] - 2026-09-01
 
 ### Fixed
