@@ -125,6 +125,27 @@ class TestGuidanceContent:
         for term in ("table", "view", "incremental", "snapshot", "append_new_columns", "fail"):
             assert term in _AGENTS_GUIDE, f"risk table missing {term}"
 
+    def test_distinguishes_the_three_kinds_of_exit_2(self):
+        """An agent that reads "warning" and stops has learned nothing actionable.
+
+        Each of the three produces a different next step, and conflating them is how
+        "the compile is incomplete" gets treated as a flaky check to rerun.
+        """
+        for phrase in ("review required", "not found in manifest", "the compile is incomplete"):
+            assert phrase in _AGENTS_GUIDE, f"exit 2 case not distinguished: {phrase}"
+
+    def test_warns_against_ignoring_an_uncompiled_model(self):
+        """The newest way to silence the check, and the most tempting to an agent.
+
+        Adding the uncompiled model to ignore_models turns the check green while
+        leaving the one model nobody has examined unexamined.
+        """
+        assert "Fix the compile instead" in _AGENTS_GUIDE
+
+    def test_explains_why_a_partial_compile_happens(self):
+        """Without the cause, "incomplete compile" reads as a dbt-plan bug."""
+        assert "Fusion" in _AGENTS_GUIDE
+
     def test_guide_starts_with_the_marker(self):
         """The marker must be first so idempotency detection cannot be fooled."""
         assert _AGENTS_GUIDE.startswith(_AGENTS_MARKER)
