@@ -15,6 +15,25 @@ def _is_star(expr: exp.Expression) -> bool:
     return isinstance(expr, exp.Star) or (isinstance(expr, exp.Column) and expr.name == "*")
 
 
+def _star_is_modified(expr: exp.Expression) -> bool:
+    """True when the star carries EXCEPT / EXCLUDE / REPLACE / RENAME.
+
+    Every one of these changes what the star expands to, so resolving the star
+    while ignoring the modifier yields the *unmodified* list. The same thing
+    happens on both sides of the diff, so adding an `EXCEPT(secret)` compares
+    equal and reports safe while dbt drops the column.
+
+    Whitelisted rather than enumerated: any argument on the Star node counts. A
+    modifier this code has not heard of must not default to being ignored, and
+    for a qualified `a.*` the modifier hangs off the inner Star rather than the
+    Column wrapper -- which is precisely how the first version of this missed it.
+    """
+    star = expr.this if isinstance(expr, exp.Column) else expr
+    if not isinstance(star, exp.Star):
+        return False
+    return any(value for value in star.args.values())
+
+
 def _sole_source(select: exp.Select) -> exp.Table | None:
     """The only FROM source, or None when there is not exactly one.
 
@@ -92,8 +111,8 @@ def _resolve_star_columns(
             columns.append((name.lower(), _projection_cast(expr, dialect)))
             continue
 
-        if expr.args.get("except_"):
-            return None  # the EXCEPT marker is the caller's business
+        if _star_is_modified(expr):
+            return None  # EXCEPT / EXCLUDE / REPLACE / RENAME -- not a plain star
 
         # A qualified `t.*` names its own source, so it is safe beside a join --
         # but mapping that alias back to a physical table is not attempted, so it

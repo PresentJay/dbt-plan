@@ -7,6 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.1] - 2026-09-01
+
+### Fixed
+- **A star carrying `EXCEPT` / `EXCLUDE` / `RENAME` / `REPLACE` is no longer
+  resolved as if it were plain.** Regression introduced in 0.8.0 by CTE star
+  resolution and widened in 0.9.0 by `ref()` resolution. Each of these modifiers
+  changes what the star expands to, so resolving it while ignoring the modifier
+  produced the *unmodified* column list — on both sides of the diff, which made
+  adding an `EXCEPT(secret)` compare equal and report `SAFE` while dbt drops the
+  column. A false all-clear, the one verdict this tool exists to prevent.
+
+  The guard shipped with the feature only checked `except_` on the outer
+  expression. For a qualified `a.*` the modifier hangs off the inner `Star` node,
+  so it was never seen — and `RENAME` and `REPLACE` were not checked at all, in
+  either form. The check is now a whitelist: a star with *any* argument is
+  refused, so a modifier this code has not heard of cannot default to being
+  ignored.
+
+  Affects 0.8.0 and 0.9.0 only. Before 0.8.0 these all returned `["*"]` and the
+  verdict was "review required".
+
 ## [0.9.0] - 2026-09-01
 
 ### Added
