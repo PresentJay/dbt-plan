@@ -87,7 +87,7 @@ dbt-plan check --select model1   # 특정 모델만 체크
 
 ## 지원 환경
 
-- dbt-core 1.7+
+- dbt-core 1.7+, dbt Fusion 엔진 (`2.0.0-preview.218`로 검증)
 - 모든 warehouse: Snowflake, BigQuery, Redshift, Postgres, DuckDB 등 (`--dialect`)
 - Python 3.10+
 - CTE, UNION ALL, QUALIFY, 윈도우 함수, VARIANT 접근

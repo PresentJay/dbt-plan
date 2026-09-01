@@ -47,6 +47,11 @@ class CheckResult:
     downstream_map: dict[str, list[str]] = field(default_factory=dict)
     parse_failures: list[str] = field(default_factory=list)
     skipped_models: list[str] = field(default_factory=list)
+    # Models the manifest declares but the compile never produced. The mirror
+    # image of skipped_models, and the more dangerous direction: a model absent
+    # from both compiled directories produces no diff entry at all, so it is
+    # silently never examined.
+    uncompiled_models: list[str] = field(default_factory=list)
     # Reviewed-and-accepted models. Kept here rather than on DDLPrediction so
     # the predictor stays a pure function of config x column diff, with no
     # knowledge of CI policy.
@@ -54,6 +59,22 @@ class CheckResult:
 
     def is_acknowledged(self, pred: DDLPrediction) -> bool:
         return pred.model_name in self.acknowledge_models
+
+
+def _has_nothing_to_report(result: CheckResult) -> bool:
+    """True only when there is genuinely nothing to say.
+
+    Returning "no model changes detected" while holding an unreported warning is
+    how a check that never looked at a model comes out green. Predictions are not
+    the only finding: a model missing from the manifest, one that failed to parse,
+    and one the compile never produced all have to survive to the output.
+    """
+    return not (
+        result.predictions
+        or result.parse_failures
+        or result.skipped_models
+        or result.uncompiled_models
+    )
 
 
 def format_text(result: CheckResult, *, color: bool | None = None) -> str:
@@ -70,7 +91,7 @@ def format_text(result: CheckResult, *, color: bool | None = None) -> str:
         c = _SAFETY_COLOR.get(safety, "")
         return f"{c}{_BOLD}{text}{_RESET}"
 
-    if not result.predictions:
+    if _has_nothing_to_report(result):
         return "dbt-plan -- no model changes detected"
 
     sorted_preds = sorted(result.predictions, key=lambda p: _SAFETY_ORDER.get(p.safety, 9))
@@ -112,6 +133,15 @@ def format_text(result: CheckResult, *, color: bool | None = None) -> str:
             f"{warn}: Skipped {len(result.skipped_models)} model(s) not found in manifest: {names}"
         )
 
+    if result.uncompiled_models:
+        names = ", ".join(result.uncompiled_models)
+        warn = _colored("WARNING", Safety.WARNING) if use_color else "WARNING"
+        lines.append(
+            f"{warn}: The compile is incomplete -- {len(result.uncompiled_models)} model(s) in "
+            f"the manifest have no compiled SQL: {names}"
+        )
+        lines.append("         This report covers only what compiled. Fix the compile and rerun.")
+
     # Summary line (grepable for CI: grep "^dbt-plan:" output)
     lines.append(_summary_line(result))
 
@@ -136,7 +166,7 @@ def _summary_line(result: CheckResult) -> str:
 
 def format_github(result: CheckResult) -> str:
     """Format result as GitHub-flavored markdown."""
-    if not result.predictions:
+    if _has_nothing_to_report(result):
         return "### dbt-plan -- no model changes detected"
 
     sorted_preds = sorted(result.predictions, key=lambda p: _SAFETY_ORDER.get(p.safety, 9))
@@ -177,6 +207,14 @@ def format_github(result: CheckResult) -> str:
         lines.append(
             f"> **WARNING**: Skipped {len(result.skipped_models)} model(s)"
             f" not found in manifest: {names}"
+        )
+
+    if result.uncompiled_models:
+        names = ", ".join(result.uncompiled_models)
+        lines.append(
+            f"> **WARNING**: The compile is incomplete --"
+            f" {len(result.uncompiled_models)} model(s) in the manifest have no compiled SQL:"
+            f" {names}. This report covers only what compiled."
         )
 
     lines.append(f"\n`{_summary_line(result)}`")
@@ -234,5 +272,6 @@ def format_json(result: CheckResult) -> str:
         "models": models,
         "parse_failures": result.parse_failures,
         "skipped_models": result.skipped_models,
+        "uncompiled_models": result.uncompiled_models,
     }
     return json.dumps(output, indent=2)
