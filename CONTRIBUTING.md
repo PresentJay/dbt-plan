@@ -11,17 +11,24 @@ negotiable; this one is the reason the tool exists.
 
 ## Development setup
 
+**You never need warehouse credentials to work on dbt-plan.** That is unusual for a
+tool in the dbt ecosystem, and it is a direct consequence of what the tool is: it
+reads compiled SQL and `manifest.json` from disk and never connects to anything.
+Fixtures are checked in, the end-to-end tests compile against duckdb in memory, and
+`tests/test_invariants.py` fails the build if a warehouse driver or a network
+library is ever imported. Clone, `uv sync`, run the tests.
+
 ```bash
 git clone https://github.com/PresentJay/dbt-plan
 cd dbt-plan
 uv sync --extra test --extra dbt   # or: pip install -e ".[dev,dbt]"
-make test                          # expect 1193 passed
+make test                          # the full suite
 ```
 
 The `dbt` extra is what makes the four end-to-end tests in `tests/test_dbt_e2e.py`
-actually run; they compile a real dbt project with duckdb. Without it you get
-`1189 passed, 4 skipped`, which is fine for most changes but means you are not
-exercising the `dbt-plan run` pipeline. Run `pytest -rs` to see why anything
+actually run; they compile a real dbt project with duckdb. Without it those four
+skip, which is fine for most changes but means you are not exercising the
+`dbt-plan run` pipeline. Run `pytest -rs` to see why anything
 skipped — the reasons name the specific missing piece.
 
 If those tests skip complaining that `dbt_plan is not importable`, your virtualenv
