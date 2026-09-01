@@ -777,11 +777,15 @@ class TestManifestColumnFallback:
         assert data["summary"]["total"] == 1
         pred = data["models"][0]
         assert pred["model_name"] == "m"
-        # With manifest fallback, columns are resolved so we get a real prediction
-        # (ADD COLUMN email) instead of "REVIEW REQUIRED (SELECT *)"
-        op_texts = [op["operation"] for op in pred["operations"]]
-        assert all("REVIEW REQUIRED" not in op for op in op_texts)
+        # The fallback still does its job: a real column diff instead of a bare
+        # "REVIEW REQUIRED (SELECT *)" with nothing in it.
         assert "email" in pred["columns_added"]
+        # But it cannot conclude "safe". The current SQL is SELECT * over a table
+        # whose real columns nobody read; the documented list may be missing some,
+        # so an ADD-only diff is plausible rather than established.
+        op_texts = [op["operation"] for op in pred["operations"]]
+        assert any("came from the manifest" in op for op in op_texts)
+        assert pred["safety"] == "warning"
 
     def test_base_cols_fallback_from_base_manifest(self, tmp_path, capsys):
         """When base extract_columns returns ['*'], use base_node.columns from base manifest."""
@@ -827,10 +831,12 @@ class TestManifestColumnFallback:
         assert data["summary"]["total"] == 1
         pred = data["models"][0]
         assert pred["model_name"] == "m"
-        # With base manifest fallback, we get a real column diff (ADD COLUMN email)
-        op_texts = [op["operation"] for op in pred["operations"]]
-        assert all("REVIEW REQUIRED" not in op for op in op_texts)
+        # Same as above, from the base side: the diff is real, the verdict is not
+        # strong enough to be "safe".
         assert "email" in pred["columns_added"]
+        op_texts = [op["operation"] for op in pred["operations"]]
+        assert any("came from the manifest" in op for op in op_texts)
+        assert pred["safety"] == "warning"
 
     def test_no_fallback_without_manifest_columns(self, tmp_path, capsys):
         """When manifest has no columns and SQL is SELECT *, no fallback occurs."""
