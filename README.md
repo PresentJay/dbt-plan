@@ -33,6 +33,7 @@ dbt-plan analyzes compiled SQL diffs to catch dangerous schema changes at PR tim
 - **Cascade analysis**: finds downstream models that reference dropped columns
 - **Config changes**: detects materialization or on_schema_change policy changes
 - **Type changes**: compares explicit `CAST` types between revisions
+- **`SELECT *` resolution**: reads the columns from the CTEs of the same statement, and follows a `ref()` into the referenced model's compiled SQL
 
 It does NOT execute anything, connect to any warehouse, or simulate `dbt run`. It reads files, compares them, and warns you.
 
@@ -72,6 +73,7 @@ dbt-plan is a **static analysis warning tool**, not a runtime simulator.
 | Cascade broken ref / build failure analysis | `seed` / `source` change detection |
 | Config change detection (materialization, osc) | `pre_hook` / `post_hook` DDL analysis |
 | Explicit `CAST` type changes | Type changes on uncast columns |
+| `SELECT *` resolved through CTEs and `ref()` | `SELECT *` over a source or a raw table |
 | CI exit codes + structured output | `full_refresh` mode judgment |
 
 **Design principle**: false warnings are OK, false safe is never OK.

@@ -7,6 +7,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.0] - 2026-09-01
+
+### Added
+- **`select * from {{ ref(other_model) }}` is resolved through the project's own
+  DAG.** After 0.8.0 this was the last shape dbt-plan could not read on the
+  measured corpus. The columns are not in the file, but they are not in the
+  warehouse either — they are in the other model's compiled SQL, which dbt-plan
+  already holds on disk, indexed by the manifest it already parses. Compiled SQL
+  names the physical relation rather than the model, so the lookup is keyed on
+  the manifest's `relation_name`, with the bare model name as a fallback (dbt
+  model names are unique across a project). Resolution is memoized per model and
+  refuses on a chain that loops; a referenced model that is itself unreadable
+  propagates the refusal instead of yielding a shorter, wrong list.
+
+  On the measured corpus, precise extraction is now **6 of 6** — up from 4 of 11
+  before 0.8.0.
+
+  The refusals from 0.8.0 all still apply. A qualified `t.*` over a physical
+  table is deliberately not resolved: that needs alias-to-table mapping, which is
+  not attempted.
+- **A `SELECT *` left behind by `dbt_utils.star()` is explained.** The macro
+  introspects the warehouse at compile time, so against a schema where the
+  relation does not exist yet — a fresh CI run — it returns nothing and emits a
+  bare `*`. dbt-plan reported "review required (SELECT *)" on every such model
+  forever with no hint that the cause was upstream of it, which reads as the tool
+  being noisy and makes `ignore_models` look like the fix. It now names the macro
+  and says to compile against an environment where the relation exists.
+
+### Changed
+- `extract_columns` and `extract_cast_types` take an optional `table_columns`
+  resolver. Without it, behaviour is exactly as before.
+
 ## [0.8.0] - 2026-09-01
 
 ### Fixed

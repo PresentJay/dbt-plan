@@ -1,5 +1,7 @@
 """SQLGlot-based column extraction from compiled SQL."""
 
+from collections.abc import Callable
+
 import sqlglot
 from sqlglot import exp
 
@@ -13,8 +15,8 @@ def _is_star(expr: exp.Expression) -> bool:
     return isinstance(expr, exp.Star) or (isinstance(expr, exp.Column) and expr.name == "*")
 
 
-def _sole_source_name(select: exp.Select) -> str | None:
-    """Name of the only FROM source, or None when there is not exactly one.
+def _sole_source(select: exp.Select) -> exp.Table | None:
+    """The only FROM source, or None when there is not exactly one.
 
     An unqualified `*` over a join means every joined source's columns. Resolving
     just the FROM would silently drop the rest, so removing the join would compare
@@ -27,8 +29,18 @@ def _sole_source_name(select: exp.Select) -> str | None:
         return None
     source = frm.this
     if not isinstance(source, exp.Table):
-        return None  # subquery, table function, UNNEST -- not a CTE reference
-    return source.alias_or_name
+        return None  # subquery, table function, UNNEST -- not a resolvable name
+    return source
+
+
+def _relation_key(table: exp.Table) -> str:
+    """`"j"."main"."stg_orders"` -> `j.main.stg_orders`, to match manifest relations."""
+    parts = [
+        part.name
+        for part in (table.args.get("catalog"), table.args.get("db"), table.this)
+        if part is not None
+    ]
+    return ".".join(parts).lower()
 
 
 def _cte_bodies(tree: exp.Expression) -> dict[str, exp.Expression]:
@@ -57,6 +69,7 @@ def _resolve_star_columns(
     ctes: dict[str, exp.Expression],
     seen: frozenset[str],
     dialect: str,
+    table_columns: Callable[[str], list[str] | None] | None = None,
 ) -> list[tuple[str, str | None]] | None:
     """Columns of `select`, expanding any star that points at a CTE.
 
@@ -82,30 +95,55 @@ def _resolve_star_columns(
         if expr.args.get("except_"):
             return None  # the EXCEPT marker is the caller's business
 
-        source = expr.table if isinstance(expr, exp.Column) and expr.table else None
-        if source is None:
-            source = _sole_source_name(select)
-        if source is None or source in seen:
+        # A qualified `t.*` names its own source, so it is safe beside a join --
+        # but mapping that alias back to a physical table is not attempted, so it
+        # only resolves against a CTE.
+        if isinstance(expr, exp.Column) and expr.table:
+            source, table = expr.table, None
+        else:
+            table = _sole_source(select)
+            if table is None:
+                return None
+            source = table.alias_or_name
+
+        if source in seen:
             return None
 
         body = ctes.get(source)
-        if not isinstance(body, exp.Select):
-            # Missing, or a set operation / recursive CTE, whose column list is not
-            # a straight read of one SELECT's projections.
-            return None
-        if body.args.get("with_") or body.args.get("with"):
-            # Its own CTE scope, which would resolve against the wrong names.
-            return None
+        if body is not None:
+            if not isinstance(body, exp.Select):
+                # A set operation or recursive CTE, whose column list is not a
+                # straight read of one SELECT's projections.
+                return None
+            if body.args.get("with_") or body.args.get("with"):
+                # Its own CTE scope, which would resolve against the wrong names.
+                return None
+            inner = _resolve_star_columns(body, ctes, seen | {source}, dialect, table_columns)
+            if not inner:
+                return None
+            columns.extend(inner)
+            continue
 
-        inner = _resolve_star_columns(body, ctes, seen | {source}, dialect)
-        if not inner:
+        # Not a CTE: it is a physical relation, which for a dbt project is
+        # another model whose compiled SQL the caller already has on disk.
+        if table is None or table_columns is None:
             return None
-        columns.extend(inner)
+        found = table_columns(_relation_key(table)) or table_columns(source.lower())
+        if not found:
+            return None
+        # Casts are not carried across a model boundary; that model is checked
+        # on its own, where its casts are visible.
+        columns.extend((name.lower(), None) for name in found)
 
     return columns or None
 
 
-def extract_columns(sql: str, *, dialect: str = "snowflake") -> list[str] | None:
+def extract_columns(
+    sql: str,
+    *,
+    dialect: str = "snowflake",
+    table_columns: Callable[[str], list[str] | None] | None = None,
+) -> list[str] | None:
     """Extract column names from compiled SQL's final SELECT.
 
     Parses with the given SQL dialect. Returns lowercased column names
@@ -139,8 +177,8 @@ def extract_columns(sql: str, *, dialect: str = "snowflake") -> list[str] | None
     # file. Try to read them before giving up; _resolve_star_columns refuses
     # rather than guessing, so a refusal leaves the behaviour below untouched.
     ctes = _cte_bodies(tree)
-    if ctes and any(_is_star(e) for e in select.expressions):
-        resolved = _resolve_star_columns(select, ctes, frozenset(), dialect)
+    if (ctes or table_columns) and any(_is_star(e) for e in select.expressions):
+        resolved = _resolve_star_columns(select, ctes, frozenset(), dialect, table_columns)
         if resolved:
             return [name for name, _ in resolved]
 
@@ -173,7 +211,12 @@ def extract_columns(sql: str, *, dialect: str = "snowflake") -> list[str] | None
     return columns if columns else None
 
 
-def extract_cast_types(sql: str, *, dialect: str = "snowflake") -> dict[str, str] | None:
+def extract_cast_types(
+    sql: str,
+    *,
+    dialect: str = "snowflake",
+    table_columns: Callable[[str], list[str] | None] | None = None,
+) -> dict[str, str] | None:
     """Map column name -> declared type, for columns carrying an explicit CAST.
 
     Deciding whether a column's type changed generally needs the warehouse's
@@ -197,7 +240,9 @@ def extract_cast_types(sql: str, *, dialect: str = "snowflake") -> dict[str, str
     if select is None:
         return None
 
-    resolved = _resolve_star_columns(select, _cte_bodies(tree), frozenset(), dialect)
+    resolved = _resolve_star_columns(
+        select, _cte_bodies(tree), frozenset(), dialect, table_columns
+    )
     if resolved is None:
         return None
     return {name: cast for name, cast in resolved if cast}
