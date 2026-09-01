@@ -35,6 +35,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   compile rather than implying a deletion.
 - `uncompiled_models` in the JSON output. Additive; the four existing top-level
   keys are unchanged.
+- The guidance `dbt-plan agent-setup` writes now separates the three things an
+  exit code of 2 can mean — columns unreadable, manifest stale, compile
+  incomplete — because each needs a different response, and names the newest way
+  to silence the check: adding an uncompiled model to `ignore_models`, which
+  turns the check green while leaving the one unexamined model unexamined.
 
 ### Changed
 - Verified against the dbt Fusion engine `2.0.0-preview.218`: the compiled

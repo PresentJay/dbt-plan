@@ -764,17 +764,32 @@ dbt-plan itself never connects to the warehouse and never runs SQL.
 
 - `0` — every change is safe.
 - `1` — destructive: a column is being dropped, or a model removed.
-- `2` — dbt-plan could not decide. A human has to look.
+- `2` — dbt-plan could not answer. Either it could not read a model, or it never saw one.
+  A human has to look.
 
 A warning is not automatically a blocker; it means "explain this before merging."
+
+`2` covers three different situations, and they need different responses:
+
+| Message | What it means | What to do |
+|---|---|---|
+| "review required" | a model's columns could not be extracted | read that model's SQL yourself |
+| "not found in manifest" | the compiled SQL and the manifest disagree | the manifest is stale — recompile |
+| "the compile is incomplete" | a model in the manifest produced no compiled SQL | **fix the compile, then rerun** |
+
+The last one matters most. The dbt Fusion engine keeps compiling the rest of the DAG after
+a node fails, so a broken model leaves a partial `target/` behind while the other models
+look fine. dbt-plan cannot judge what it never received.
 
 ### What not to do
 
 The failure this tool exists to prevent is a column disappearing without anyone noticing.
-Two edits will silence a real finding, and neither makes the change safe:
+These edits will silence a real finding, and none of them makes the change safe:
 
 - Adding the model to `ignore_models` in `.dbt-plan.yml`.
 - Switching `on_schema_change` from `sync_all_columns` to `ignore`.
+- Adding an uncompiled model to `ignore_models` to clear "the compile is incomplete".
+  That model is the one nobody has checked. Fix the compile instead.
 
 If a destructive change is intentional, say so in the pull request. Do not edit config to
 make the warning disappear.
@@ -793,8 +808,9 @@ Risk is materialization crossed with `on_schema_change`:
 | `snapshot` | review required — warning |
 | model deleted | destructive |
 
-When dbt-plan cannot extract columns it reports "review required" rather than "safe".
-False warnings are acceptable here; a false all-clear is not.
+When dbt-plan cannot extract columns it reports "review required" rather than "safe", and
+when it never received a model at all it says so rather than staying quiet. False warnings
+are acceptable here; a false all-clear is not.
 """
 
 
