@@ -301,7 +301,7 @@ def _do_check(args: argparse.Namespace) -> int:
     # Lazy imports: sqlglot and heavy modules only loaded when actually needed
     from dataclasses import replace as _replace
 
-    from dbt_plan.columns import extract_columns
+    from dbt_plan.columns import extract_cast_types, extract_columns
     from dbt_plan.config import Config
     from dbt_plan.diff import diff_compiled_dirs
     from dbt_plan.manifest import (
@@ -503,11 +503,14 @@ def _do_check(args: argparse.Namespace) -> int:
 
         # Fallback: use manifest columns when SELECT * detected
         base_node = base_node_index.get(diff.model_name)
+        used_manifest_columns = False
         if base_cols == ["*"] and base_node and base_node.columns:
             base_cols = list(base_node.columns)
+            used_manifest_columns = True
             _log(f"  base_cols fallback from manifest: {len(base_cols)} columns")
         if current_cols == ["*"] and node.columns:
             current_cols = list(node.columns)
+            used_manifest_columns = True
             _log(f"  current_cols fallback from manifest: {len(current_cols)} columns")
 
         _log(f"  base_cols={base_cols}")
@@ -578,6 +581,72 @@ def _do_check(args: argparse.Namespace) -> int:
                     operations=extra_ops + list(prediction.operations),
                     safety=final_safety,
                 )
+
+        # A column's type is invisible in compiled SQL unless it is cast
+        # explicitly. But when both revisions cast the same column and the two
+        # casts differ, that comparison is compiled SQL against compiled SQL --
+        # no warehouse involved, which is the objection that kept this out. dbt
+        # acts on it: its docs describe sync_all_columns as "inclusive of data
+        # type changes". Whether a given change loses data (VARCHAR -> INT) or is
+        # a harmless widening (INT -> BIGINT) is not decidable from the SQL, so
+        # the verdict is review, never destructive and never safe.
+        if diff.status == "modified" and node.materialization not in (
+            "table",
+            "view",
+            "ephemeral",
+        ):
+            base_sql_text = diff.base_sql
+            if base_sql_text is None and diff.base_path:
+                base_sql_text = diff.base_path.read_text()
+            current_sql_text = diff.current_sql
+            if current_sql_text is None and diff.current_path:
+                current_sql_text = diff.current_path.read_text()
+
+            base_casts = (
+                extract_cast_types(base_sql_text, dialect=dialect) if base_sql_text else None
+            )
+            current_casts = (
+                extract_cast_types(current_sql_text, dialect=dialect) if current_sql_text else None
+            )
+            if base_casts and current_casts:
+                type_ops = [
+                    DDLOperation(f"TYPE CHANGED: {before} -> {current_casts[col]}", col)
+                    for col, before in sorted(base_casts.items())
+                    if col in current_casts and current_casts[col] != before
+                ]
+                if type_ops:
+                    prediction = _replace(
+                        prediction,
+                        operations=[*type_ops, *prediction.operations],
+                        safety=(
+                            prediction.safety
+                            if prediction.safety == Safety.DESTRUCTIVE
+                            else Safety.WARNING
+                        ),
+                    )
+                    _log(f"  Cast type change on {len(type_ops)} column(s)")
+
+        # A clean bill that rests on the manifest fallback is not evidence of
+        # safety. schema.yml conventionally documents only the columns you test,
+        # and the same incomplete list is substituted on *both* sides -- so an
+        # empty diff can equally mean "nothing changed" or "we never looked".
+        # Only SAFE is escalated; a real finding still stands on its own. table
+        # and view are rebuilt by CREATE OR REPLACE whatever the columns are, so
+        # escalating those would be noise with nothing behind it.
+        if (
+            used_manifest_columns
+            and prediction.safety == Safety.SAFE
+            and node.materialization not in ("table", "view", "ephemeral")
+        ):
+            prediction = _replace(
+                prediction,
+                operations=[
+                    DDLOperation("REVIEW REQUIRED (columns came from the manifest, not the SQL)"),
+                    *prediction.operations,
+                ],
+                safety=Safety.WARNING,
+            )
+            _log("  Verdict rests on manifest columns -- escalated to review required")
 
         predictions.append(prediction)
         model_node_ids[diff.model_name] = node.node_id

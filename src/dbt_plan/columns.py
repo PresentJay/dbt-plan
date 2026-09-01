@@ -39,12 +39,29 @@ def _cte_bodies(tree: exp.Expression) -> dict[str, exp.Expression]:
     return {cte.alias_or_name: cte.this for cte in with_.expressions}
 
 
+def _projection_cast(expr: exp.Expression, dialect: str) -> str | None:
+    """Rendered target type of an explicit CAST on this projection, else None.
+
+    Only an explicit cast is readable from compiled SQL. A column with no cast has
+    whatever type the warehouse gave it, which is exactly the thing dbt-plan does
+    not ask.
+    """
+    node = expr.this if isinstance(expr, exp.Alias) else expr
+    if isinstance(node, exp.Cast):
+        return node.to.sql(dialect=dialect)
+    return None
+
+
 def _resolve_star_columns(
     select: exp.Select,
     ctes: dict[str, exp.Expression],
     seen: frozenset[str],
-) -> list[str] | None:
+    dialect: str,
+) -> list[tuple[str, str | None]] | None:
     """Columns of `select`, expanding any star that points at a CTE.
+
+    Each entry is (column name, explicit cast type or None), so column extraction
+    and cast comparison share one walker rather than two that drift apart.
 
     Returns None to mean "refuse" -- the caller then falls back to ["*"]. A column
     list that is merely plausible is worse than admitting ignorance: it gets
@@ -53,13 +70,13 @@ def _resolve_star_columns(
     if len(seen) > _MAX_CTE_DEPTH:
         return None
 
-    columns: list[str] = []
+    columns: list[tuple[str, str | None]] = []
     for expr in select.expressions:
         if not _is_star(expr):
             name = expr.alias or expr.output_name
             if not name:
                 return None
-            columns.append(name.lower())
+            columns.append((name.lower(), _projection_cast(expr, dialect)))
             continue
 
         if expr.args.get("except_"):
@@ -80,7 +97,7 @@ def _resolve_star_columns(
             # Its own CTE scope, which would resolve against the wrong names.
             return None
 
-        inner = _resolve_star_columns(body, ctes, seen | {source})
+        inner = _resolve_star_columns(body, ctes, seen | {source}, dialect)
         if not inner:
             return None
         columns.extend(inner)
@@ -123,9 +140,9 @@ def extract_columns(sql: str, *, dialect: str = "snowflake") -> list[str] | None
     # rather than guessing, so a refusal leaves the behaviour below untouched.
     ctes = _cte_bodies(tree)
     if ctes and any(_is_star(e) for e in select.expressions):
-        resolved = _resolve_star_columns(select, ctes, frozenset())
+        resolved = _resolve_star_columns(select, ctes, frozenset(), dialect)
         if resolved:
-            return resolved
+            return [name for name, _ in resolved]
 
     columns = []
     expr_count = 0
@@ -154,3 +171,33 @@ def extract_columns(sql: str, *, dialect: str = "snowflake") -> list[str] | None
         return None
 
     return columns if columns else None
+
+
+def extract_cast_types(sql: str, *, dialect: str = "snowflake") -> dict[str, str] | None:
+    """Map column name -> declared type, for columns carrying an explicit CAST.
+
+    Deciding whether a column's type changed generally needs the warehouse's
+    current type, which is why dbt-plan does not attempt it. But when both
+    revisions carry an explicit CAST on the same column, the comparison is
+    compiled SQL against compiled SQL -- the only thing this tool ever does.
+
+    Returns:
+        dict: column name -> rendered type. Empty when nothing is cast.
+        None: parse failure, or a star this cannot resolve -- same refusal
+            contract as extract_columns, so callers never compare a guess.
+    """
+    sql = sql.lstrip("\ufeff")
+
+    try:
+        tree = sqlglot.parse_one(sql, dialect=dialect)
+    except (sqlglot.errors.ParseError, sqlglot.errors.TokenError, ValueError, RecursionError):
+        return None
+
+    select = tree.find(exp.Select)
+    if select is None:
+        return None
+
+    resolved = _resolve_star_columns(select, _cte_bodies(tree), frozenset(), dialect)
+    if resolved is None:
+        return None
+    return {name: cast for name, cast in resolved if cast}

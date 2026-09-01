@@ -9,7 +9,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [0.8.0] - 2026-09-01
 
+### Fixed
+- **A verdict resting on the manifest fallback is no longer reported as safe.**
+  When a model's SQL resolves to `["*"]`, dbt-plan substitutes the columns
+  documented in `manifest.json` — on *both* sides of the diff. `schema.yml`
+  conventionally documents only the columns you test (jaffle_shop's own
+  `stg_orders` lists 2 of its 4), and you edit SQL far more often than docs, so
+  both sides receive the same incomplete list, the difference is zero, and the
+  verdict was `SAFE` for a model whose SQL may have dropped a column. The
+  comparison never happened. Such a model is now "review required". Scoped to
+  materializations where columns matter: `table` and `view` are rebuilt by
+  `CREATE OR REPLACE` regardless, so escalating those would be noise. A real
+  destructive finding still stands on its own and still exits 1.
+
 ### Added
+- **Explicit `CAST` type changes are detected.** The README listed this as
+  deliberately out of scope, reasoning that deciding whether a type changed needs
+  the warehouse's current type. True in general, and false in the case that
+  matters: when both revisions carry an explicit `CAST` on the same column, the
+  comparison is compiled SQL against compiled SQL, which is all this tool ever
+  does. dbt acts on it — its docs describe `sync_all_columns` as "inclusive of
+  data type changes" — and dbt-plan previously said `SAFE` because the column
+  *names* matched. Reported as review required, never destructive and never safe,
+  since whether `VARCHAR -> INT` loses data or `INT -> BIGINT` is a harmless
+  widening is not decidable from the SQL. Columns cast on only one side are not
+  reported: the other type is unknown.
 - **`SELECT *` is now resolved through the CTEs of the same statement.** The
   canonical dbt staging model — the one dbt's own style guide teaches — ends in
   `select * from renamed`, where `renamed` is a CTE with an explicit column list.

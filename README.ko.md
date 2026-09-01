@@ -30,6 +30,7 @@ PR에서 dbt 모델이 변경되었을 때, 컴파일된 SQL 비교로:
 - **컬럼 변경 감지**: ADD/DROP COLUMN
 - **위험도 판정**: materialization × on_schema_change 규칙 기반
 - **하위 모델 영향 분석**: 삭제된 컬럼을 참조하는 downstream 모델 감지
+- **타입 변경 감지**: 양쪽에 명시적 `CAST`가 있는 컬럼의 타입 비교
 - **설정 변경 감지**: materialization/on_schema_change 정책 변경
 
 실행하지 않습니다. Warehouse에 접속하지 않습니다. 파일을 읽고, 비교하고, 경고합니다.

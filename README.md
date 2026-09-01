@@ -32,6 +32,7 @@ dbt-plan analyzes compiled SQL diffs to catch dangerous schema changes at PR tim
 - **Risk assessment**: judges safety based on materialization x on_schema_change rules
 - **Cascade analysis**: finds downstream models that reference dropped columns
 - **Config changes**: detects materialization or on_schema_change policy changes
+- **Type changes**: compares explicit `CAST` types between revisions
 
 It does NOT execute anything, connect to any warehouse, or simulate `dbt run`. It reads files, compares them, and warns you.
 
@@ -70,6 +71,7 @@ dbt-plan is a **static analysis warning tool**, not a runtime simulator.
 | materialization × on_schema_change risk rules | Warehouse connection |
 | Cascade broken ref / build failure analysis | `seed` / `source` change detection |
 | Config change detection (materialization, osc) | `pre_hook` / `post_hook` DDL analysis |
+| Explicit `CAST` type changes | Type changes on uncast columns |
 | CI exit codes + structured output | `full_refresh` mode judgment |
 
 **Design principle**: false warnings are OK, false safe is never OK.
@@ -84,12 +86,12 @@ gets wrong.
 
 ## Deliberately Not Planned
 
-Two ideas that look useful but contradict what this tool is:
+Ideas that look useful but contradict what this tool is:
 
 | Idea | Why not |
 |------|---------|
 | INFORMATION_SCHEMA query | Requires a warehouse connection. dbt-plan reads files and nothing else — that is what makes it safe to run anywhere, including on a fork's PR. |
-| Column type detection (`ALTER TYPE`) | Compiled SQL only reveals a type where an explicit CAST exists, and deciding whether a type *changed* needs the warehouse's current type — the same connection problem. |
+| Type changes on columns with no explicit `CAST` | The type is whatever the warehouse assigned, so seeing a change would mean asking it. Columns that *are* cast explicitly on both sides are compared — see below. |
 
 ## DDL Prediction Rules
 
