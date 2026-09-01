@@ -292,6 +292,87 @@ def _exit_code_for(result: CheckResult, warning_exit_code: int) -> int:
     return 0
 
 
+# dbt_utils.star() introspects the warehouse at compile time. Against a schema
+# where the relation does not exist yet -- a fresh CI run -- it returns nothing
+# and emits a bare `*` with this comment. Matching two phrases rather than one
+# keeps it from firing on ordinary SQL that happens to mention columns.
+_STAR_MACRO_MARKERS = ("No columns were returned", "star is only output during")
+
+
+def _star_macro_degraded(sql: str) -> bool:
+    """True when a `*` in this SQL came from dbt_utils.star() finding nothing."""
+    return all(marker in sql for marker in _STAR_MACRO_MARKERS)
+
+
+def _build_relation_index(manifest: dict, node_index: dict) -> dict[str, str]:
+    """Map the relation a model writes -> the model's name.
+
+    `select * from {{ ref(x) }}` compiles to the physical relation, not the model
+    name, so matching needs the manifest's `relation_name`. The bare name is
+    registered too: dbt model names are unique across a project, so it is an
+    unambiguous fallback when a manifest predates `relation_name`.
+    """
+    index: dict[str, str] = {}
+    for node_id, node in (manifest.get("nodes") or {}).items():
+        if not node_id.startswith("model."):
+            continue
+        name = node.get("name")
+        if not name or name not in node_index:
+            continue
+        relation = node.get("relation_name")
+        if relation:
+            index[relation.replace('"', "").replace("`", "").lower()] = name
+        index.setdefault(name.lower(), name)
+    return index
+
+
+def _make_table_resolver(compiled_dir, relation_index: dict[str, str], dialect: str):
+    """Resolve a relation to the columns of the model that produces it.
+
+    dbt-plan already holds every model's compiled SQL and a manifest naming the
+    relation each one writes, so `select * from {{ ref(x) }}` is answerable from
+    the project itself -- no warehouse, which is the whole reason this tool can
+    run on a fork's pull request.
+
+    Memoized per model, and guarded against a chain that loops back on itself.
+    A referenced model that is itself unreadable resolves to None, so the refusal
+    propagates instead of turning into a shorter, wrong column list.
+    """
+    from dbt_plan.columns import extract_columns
+
+    sql_by_model = (
+        {f.stem: f for f in compiled_dir.rglob("*.sql") if not f.is_symlink()}
+        if compiled_dir
+        else {}
+    )
+    cache: dict[str, list[str] | None] = {}
+    in_progress: set[str] = set()
+
+    def resolve(key: str) -> list[str] | None:
+        model = relation_index.get(key)
+        if model is None or model in in_progress:
+            return None
+        if model in cache:
+            return cache[model]
+        path = sql_by_model.get(model)
+        if path is None:
+            return None
+
+        in_progress.add(model)
+        try:
+            columns = extract_columns(path.read_text(), dialect=dialect, table_columns=resolve)
+        except OSError:
+            columns = None
+        finally:
+            in_progress.discard(model)
+
+        unresolved = columns is None or not columns or columns[0].startswith("*")
+        cache[model] = None if unresolved else columns
+        return cache[model]
+
+    return resolve
+
+
 def _do_check(args: argparse.Namespace) -> int:
     """Analyze compiled SQL changes and warn about DDL risks.
 
@@ -440,6 +521,17 @@ def _do_check(args: argparse.Namespace) -> int:
         if base_manifest
         else {}
     )
+    # `select * from {{ ref(x) }}` names a relation, not a model. These let the
+    # column resolver follow that reference into the other model's compiled SQL.
+    current_table_columns = _make_table_resolver(
+        current_compiled, _build_relation_index(manifest, node_index), dialect
+    )
+    base_table_columns = _make_table_resolver(
+        base_compiled,
+        _build_relation_index(base_manifest or manifest, base_node_index or node_index),
+        dialect,
+    )
+
     _log(f"Manifest: {len(node_index)} model(s) indexed")
     if base_node_index:
         _log(f"Base manifest: {len(base_node_index)} model(s) indexed")
@@ -493,13 +585,23 @@ def _do_check(args: argparse.Namespace) -> int:
         base_cols = None
         current_cols = None
         if diff.base_sql is not None:
-            base_cols = extract_columns(diff.base_sql, dialect=dialect)
+            base_cols = extract_columns(
+                diff.base_sql, dialect=dialect, table_columns=base_table_columns
+            )
         elif diff.base_path:
-            base_cols = extract_columns(diff.base_path.read_text(), dialect=dialect)
+            base_cols = extract_columns(
+                diff.base_path.read_text(), dialect=dialect, table_columns=base_table_columns
+            )
         if diff.current_sql is not None:
-            current_cols = extract_columns(diff.current_sql, dialect=dialect)
+            current_cols = extract_columns(
+                diff.current_sql, dialect=dialect, table_columns=current_table_columns
+            )
         elif diff.current_path:
-            current_cols = extract_columns(diff.current_path.read_text(), dialect=dialect)
+            current_cols = extract_columns(
+                diff.current_path.read_text(),
+                dialect=dialect,
+                table_columns=current_table_columns,
+            )
 
         # Fallback: use manifest columns when SELECT * detected
         base_node = base_node_index.get(diff.model_name)
@@ -581,6 +683,29 @@ def _do_check(args: argparse.Namespace) -> int:
                     operations=extra_ops + list(prediction.operations),
                     safety=final_safety,
                 )
+
+        # A bare `*` left behind by dbt_utils.star() is not the user's SELECT --
+        # it is the macro finding no relation to introspect. Saying so is the
+        # difference between "fix your compile target" and "this tool is noisy,
+        # add it to ignore_models".
+        if prediction.safety == Safety.WARNING and any(
+            _star_macro_degraded(text)
+            for text in (
+                diff.current_sql or (diff.current_path.read_text() if diff.current_path else ""),
+                diff.base_sql or (diff.base_path.read_text() if diff.base_path else ""),
+            )
+        ):
+            prediction = _replace(
+                prediction,
+                operations=[
+                    DDLOperation(
+                        "SELECT * came from dbt_utils.star() returning nothing -- the "
+                        "relation did not exist when this compiled. Compile against an "
+                        "environment where it does, or list the columns explicitly."
+                    ),
+                    *prediction.operations,
+                ],
+            )
 
         # A column's type is invisible in compiled SQL unless it is cast
         # explicitly. But when both revisions cast the same column and the two
