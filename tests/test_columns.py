@@ -190,11 +190,23 @@ class TestRealWorldFixtures:
         assert "lifetime_spend" in result
 
     def test_cte_chain_with_select_star(self):
-        """Multi-CTE chain ending in SELECT * FROM final — returns ["*"]."""
+        """Multi-CTE chain ending in SELECT * FROM final — resolved through the CTEs.
+
+        This fixture's own comment calls the shape "very common in dbt models", and
+        it is: it is what dbt's style guide teaches. It used to return ["*"], so the
+        most common model in a dbt project was the one dbt-plan could say least
+        about. `final` lists its columns explicitly, so they are readable from the
+        file with no warehouse involved.
+        """
         sql = (self.FIXTURES / "cte_chain.sql").read_text()
         result = extract_columns(sql)
-        # SELECT * FROM final → ["*"]
-        assert result == ["*"]
+        assert result == [
+            "order_id",
+            "ordered_at",
+            "user_id",
+            "customer_tier",
+            "order_date",
+        ]
 
     def test_union_staging_pattern(self):
         """UNION ALL multi-source pattern — returns first branch columns."""
