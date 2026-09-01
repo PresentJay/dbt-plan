@@ -7,6 +7,45 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-09-01
+
+### Fixed
+- **A model dbt-plan never examined no longer reports as safe.** Two paths
+  computed a warning and then discarded it. `skipped_models` — a model in the
+  compiled diff but absent from the manifest — was dropped twice over: the text
+  and markdown formatters returned "no model changes detected" before reaching
+  the warning block, and `_exit_code_for` never consulted it. Through 0.6.0, a
+  model that dropped a column reported clean and exited 0 whenever the manifest
+  did not contain it, which a stale manifest or a wrong `--manifest` path is
+  enough to cause. This is a false all-clear, the one verdict this tool exists
+  to prevent.
+- An unreadable `manifest.json` is no longer exit 0 when nothing changed. The
+  path with a diff already exited 2; the two now agree. "I could not read your
+  project metadata" is not evidence of safety.
+
+### Added
+- **Incomplete-compile detection, for the dbt Fusion engine.** dbt Core aborts a
+  compile on the first failure, so `target/compiled/` was effectively
+  all-or-nothing. Fusion keeps compiling the rest of the DAG after a node fails,
+  which makes a partial target directory an ordinary outcome. A model missing
+  from *both* compiled directories produces no diff entry at all, so it was
+  silently never examined — and with nothing else changed, dbt-plan printed
+  "no model changes detected" and exited 0. It now cross-checks the manifest
+  against the compiled directory and reports what did not compile, naming the
+  compile rather than implying a deletion.
+- `uncompiled_models` in the JSON output. Additive; the four existing top-level
+  keys are unchanged.
+
+### Changed
+- Verified against the dbt Fusion engine `2.0.0-preview.218`: the compiled
+  layout matches dbt Core, the manifest is schema v12 with only additive
+  Fusion-specific fields, ephemeral models are written to `compiled/` as before,
+  and the `<model>.macro_spans.json` sidecars Fusion writes beside each `.sql`
+  are ignored. No code change was needed for compatibility itself.
+- Exit codes: a skipped or uncompiled model now yields `warning_exit_code`
+  (default 2) where it previously yielded 0. A destructive finding still
+  outranks both and exits 1.
+
 ## [0.6.0] - 2026-08-31
 
 ### Added

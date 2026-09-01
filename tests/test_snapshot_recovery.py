@@ -194,8 +194,15 @@ class TestEmptyManifest:
         assert exit_code == 2
         assert "Could not parse manifest.json" in captured.err
 
-    def test_empty_current_manifest_no_diff_returns_safe(self, tmp_path, capsys):
-        """Empty current manifest.json with no SQL changes returns 0 (no manifest needed)."""
+    def test_empty_current_manifest_is_an_error_even_with_no_diff(self, tmp_path, capsys):
+        """An unreadable manifest is never a green light, changes or not.
+
+        This used to return 0 on the reasoning that an unchanged project does not
+        need the manifest. But dbt-plan now reads it to check that every model it
+        declares actually compiled, and more to the point, "I could not read your
+        project metadata" is not evidence of safety. The path with a diff already
+        exited 2 (see the test above); this makes the two agree.
+        """
         project_dir = tmp_path / "project"
         project_dir.mkdir()
 
@@ -214,11 +221,9 @@ class TestEmptyManifest:
 
         exit_code = _do_check(_check_args(project_dir))
         captured = capsys.readouterr()
-        result = json.loads(captured.out)
 
-        # No changes = exit 0, manifest is never parsed
-        assert exit_code == 0
-        assert result["summary"]["total"] == 0
+        assert exit_code == 2
+        assert "manifest" in captured.err.lower()
 
 
 # ---------------------------------------------------------------------------

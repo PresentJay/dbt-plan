@@ -212,7 +212,7 @@ src/dbt_plan/
 
 ## Supported
 
-- dbt-core 1.7+
+- dbt-core 1.7+, and the dbt Fusion engine (verified against `2.0.0-preview.218`)
 - Any warehouse: Snowflake, BigQuery, Redshift, Postgres, DuckDB, etc. (`--dialect`)
 - Python 3.10+
 - CTE, UNION ALL, QUALIFY, window functions, VARIANT access

@@ -53,10 +53,22 @@ class TestJsonSchemaStability:
     """Top-level keys and per-model keys are always present and typed correctly."""
 
     def test_top_level_keys_always_present(self):
-        """Every JSON output has exactly summary, models, parse_failures, skipped_models."""
+        """Every JSON output carries the same top-level keys, findings or not.
+
+        uncompiled_models joined the set in 0.7.0. Additive, so a consumer reading
+        the older four keys is unaffected -- but it is part of the contract now and
+        must be emitted even when empty, or a consumer cannot tell "none" from
+        "this dbt-plan is too old to know".
+        """
         result = CheckResult()
         data = _parse(result)
-        assert set(data.keys()) == {"summary", "models", "parse_failures", "skipped_models"}
+        assert set(data.keys()) == {
+            "summary",
+            "models",
+            "parse_failures",
+            "skipped_models",
+            "uncompiled_models",
+        }
 
     def test_summary_always_has_required_keys(self):
         """summary always contains total, safe, warning, destructive."""

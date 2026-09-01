@@ -282,6 +282,13 @@ def _exit_code_for(result: CheckResult, warning_exit_code: int) -> int:
         return warning_exit_code
     if result.parse_failures:
         return warning_exit_code
+    # Models dbt-plan could not examine are "unknown", not "safe", and both of
+    # these were previously computed and then dropped on the floor: a model in
+    # the diff but absent from the manifest, and a model in the manifest that
+    # the compile never produced. Either way the tool did not look, so it must
+    # not answer "safe". Ranked below destructive so a real finding still exits 1.
+    if result.skipped_models or result.uncompiled_models:
+        return warning_exit_code
     return 0
 
 
@@ -402,16 +409,6 @@ def _do_check(args: argparse.Namespace) -> int:
         if ignored:
             _log(f"Ignored {ignored} model(s) per config: {config.ignore_models}")
 
-    if not model_diffs:
-        empty = CheckResult()
-        if fmt == "json":
-            print(format_json(empty))
-        elif fmt == "github":
-            print(format_github(empty))
-        else:
-            print(format_text(empty, color=not no_color))
-        return 0
-
     # 2. Load manifests (current + base for removed model fallback)
     try:
         manifest = load_manifest(manifest_path)
@@ -446,6 +443,31 @@ def _do_check(args: argparse.Namespace) -> int:
     _log(f"Manifest: {len(node_index)} model(s) indexed")
     if base_node_index:
         _log(f"Base manifest: {len(base_node_index)} model(s) indexed")
+
+    # Models the manifest declares that the compile never produced. dbt Core
+    # aborted on the first failure, so a partial target/ was exceptional; the
+    # Fusion engine keeps compiling the rest of the DAG after a node fails, which
+    # makes it ordinary. It matters because a model missing from *both* compiled
+    # directories yields no diff entry, so it is never examined -- and with
+    # nothing else changed that used to print "no model changes" and exit 0.
+    compiled_stems = {f.stem for f in current_compiled.rglob("*.sql") if not f.is_symlink()}
+    uncompiled_models = sorted(
+        name
+        for name in node_index
+        if name not in compiled_stems and name not in config.ignore_models
+    )
+    if uncompiled_models:
+        _log(f"Uncompiled: {len(uncompiled_models)} manifest model(s) have no compiled SQL")
+
+    if not model_diffs:
+        empty = CheckResult(uncompiled_models=uncompiled_models)
+        if fmt == "json":
+            print(format_json(empty))
+        elif fmt == "github":
+            print(format_github(empty))
+        else:
+            print(format_text(empty, color=not no_color))
+        return _exit_code_for(empty, config.warning_exit_code)
 
     # 3. For each changed model: extract columns, predict DDL
     predictions = []
@@ -590,6 +612,7 @@ def _do_check(args: argparse.Namespace) -> int:
         downstream_map,
         parse_failures,
         skipped_models,
+        uncompiled_models,
         acknowledge_models=config.acknowledge_models,
     )
     if fmt == "json":
