@@ -838,17 +838,22 @@ dbt-plan itself never connects to the warehouse and never runs SQL.
 
 A warning is not automatically a blocker; it means "explain this before merging."
 
-`2` covers three different situations, and they need different responses:
+`2` covers several situations, and they need different responses:
 
 | Message | What it means | What to do |
 |---|---|---|
 | "review required" | a model's columns could not be extracted | read that model's SQL yourself |
+| "columns came from the manifest, not the SQL" | the SQL was `SELECT *`, so documented columns stood in for it — on both sides, which is why the diff came out empty | give the model an explicit column list, or document its columns fully in `schema.yml` |
+| "TYPE CHANGED" | an explicit `CAST` on a column changed between revisions | decide whether the new type can hold the existing data |
 | "not found in manifest" | the compiled SQL and the manifest disagree | the manifest is stale — recompile |
 | "the compile is incomplete" | a model in the manifest produced no compiled SQL | **fix the compile, then rerun** |
 
-The last one matters most. The dbt Fusion engine keeps compiling the rest of the DAG after
-a node fails, so a broken model leaves a partial `target/` behind while the other models
-look fine. dbt-plan cannot judge what it never received.
+Two of these deserve extra care. The dbt Fusion engine keeps compiling the rest of the DAG
+after a node fails, so a broken model leaves a partial `target/` behind while every other
+model looks fine — dbt-plan cannot judge what it never received. And a verdict built from
+manifest columns is not evidence: `schema.yml` usually documents only the columns you test,
+and the same partial list is substituted on both sides, so "no difference" can equally mean
+"nothing changed" or "nobody looked".
 
 ### What not to do
 
@@ -859,6 +864,9 @@ These edits will silence a real finding, and none of them makes the change safe:
 - Switching `on_schema_change` from `sync_all_columns` to `ignore`.
 - Adding an uncompiled model to `ignore_models` to clear "the compile is incomplete".
   That model is the one nobody has checked. Fix the compile instead.
+- Adding columns to `schema.yml` purely to make "columns came from the manifest" go away.
+  Documenting the columns is right; documenting *some* of them is what caused the problem.
+  Prefer giving the model an explicit column list instead of `SELECT *`.
 
 If a destructive change is intentional, say so in the pull request. Do not edit config to
 make the warning disappear.

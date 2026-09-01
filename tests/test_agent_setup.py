@@ -146,6 +146,15 @@ class TestGuidanceContent:
         """Without the cause, "incomplete compile" reads as a dbt-plan bug."""
         assert "Fusion" in _AGENTS_GUIDE
 
+    def test_names_the_manifest_fallback_and_type_change_cases(self):
+        """0.8.0 added two more ways to reach exit 2; the table has to keep up."""
+        for phrase in ("came from the manifest", "TYPE CHANGED"):
+            assert phrase in _AGENTS_GUIDE, f"exit 2 case not documented: {phrase}"
+
+    def test_warns_against_papering_over_the_fallback_with_partial_docs(self):
+        """Documenting *some* columns is what caused the problem in the first place."""
+        assert "documenting *some* of them" in _AGENTS_GUIDE
+
     def test_guide_starts_with_the_marker(self):
         """The marker must be first so idempotency detection cannot be fooled."""
         assert _AGENTS_GUIDE.startswith(_AGENTS_MARKER)

@@ -23,6 +23,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   destructive finding still stands on its own and still exits 1.
 
 ### Added
+- The guidance `dbt-plan agent-setup` writes lists the two new ways to reach an
+  exit code of 2, and warns against the matching new silencer: adding columns to
+  `schema.yml` purely to clear "columns came from the manifest". Documenting the
+  columns is right; documenting *some* of them is what caused the problem.
 - **Explicit `CAST` type changes are detected.** The README listed this as
   deliberately out of scope, reasoning that deciding whether a type changed needs
   the warehouse's current type. True in general, and false in the case that
