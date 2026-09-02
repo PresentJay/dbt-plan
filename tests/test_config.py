@@ -40,6 +40,37 @@ class TestConfigFile:
         config = Config.load(tmp_path)
         assert config.dialect == "bigquery"
 
+    def test_load_quoted_scalar(self, tmp_path):
+        (tmp_path / ".dbt-plan.yml").write_text('dialect: "bigquery"\n')
+        assert Config.load(tmp_path).dialect == "bigquery"
+
+    def test_load_trailing_comment(self, tmp_path):
+        (tmp_path / ".dbt-plan.yml").write_text("dialect: bigquery  # warehouse\n")
+        assert Config.load(tmp_path).dialect == "bigquery"
+
+    def test_hash_inside_quoted_scalar_is_not_a_comment(self, tmp_path):
+        (tmp_path / ".dbt-plan.yml").write_text('compile_command: "dbt # compile"\n')
+        assert Config.load(tmp_path).compile_command == "dbt # compile"
+
+    def test_load_block_lists(self, tmp_path):
+        (tmp_path / ".dbt-plan.yml").write_text(
+            "ignore_models:\n"
+            "  - staging_a\n"
+            "  - 'staging_b' # comment\n"
+            "acknowledge_models:\n"
+            '  - "accepted_model"\n'
+        )
+        config = Config.load(tmp_path)
+        assert config.ignore_models == ["staging_a", "staging_b"]
+        assert config.acknowledge_models == ["accepted_model"]
+
+    def test_malformed_setting_warns_with_line_number(self, tmp_path, capsys):
+        (tmp_path / ".dbt-plan.yml").write_text("format: xml\n")
+        config = Config.load(tmp_path)
+        assert config.format == "text"
+        warning = capsys.readouterr().err
+        assert ":1: warning: cannot understand format" in warning
+
     def test_ignores_comments_and_blanks(self, tmp_path):
         """Comments and blank lines are skipped."""
         (tmp_path / ".dbt-plan.yml").write_text(
@@ -177,11 +208,12 @@ class TestEnvVars:
         config = Config.load(tmp_path)
         assert config.warning_exit_code == 2  # default
 
-    def test_line_without_colon_ignored(self, tmp_path):
-        """Config lines without colon separator are silently ignored."""
+    def test_line_without_colon_warns(self, tmp_path, capsys):
+        """Config lines without colon separator warn and do not stop parsing."""
         (tmp_path / ".dbt-plan.yml").write_text("this line has no separator\nformat: json\n")
         config = Config.load(tmp_path)
         assert config.format == "json"
+        assert ":1: warning: cannot understand setting" in capsys.readouterr().err
 
     def test_unreadable_config_file(self, tmp_path):
         """Config file that can't be read uses defaults."""

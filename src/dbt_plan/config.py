@@ -6,6 +6,7 @@ Precedence (highest wins): CLI flags > env vars > config file > defaults.
 from __future__ import annotations
 
 import os
+import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -56,48 +57,155 @@ class Config:
         # Strip BOM that some editors prepend to UTF-8 files
         text = text.lstrip("\ufeff")
 
-        for line in text.splitlines():
-            line = line.strip()
-            if not line or line.startswith("#"):
+        lines = text.splitlines()
+        list_keys = {"ignore_models", "acknowledge_models"}
+        known_keys = list_keys | {
+            "warning_exit_code",
+            "format",
+            "no_color",
+            "verbose",
+            "dialect",
+            "include_packages",
+            "compile_command",
+        }
+
+        line_number = 0
+        while line_number < len(lines):
+            raw_line = lines[line_number]
+            line_number += 1
+            stripped_line = self._strip_inline_comment(raw_line).strip()
+            if not stripped_line:
                 continue
-            if ":" not in line:
+
+            if ":" not in stripped_line:
+                self._warn_config(project_dir, line_number, "cannot understand setting")
                 continue
-            key, _, value = line.partition(":")
+
+            key, _, value = stripped_line.partition(":")
             key = key.strip()
             value = value.strip()
 
+            if not key:
+                self._warn_config(project_dir, line_number, "cannot understand setting")
+                continue
+
+            if key not in known_keys:
+                continue
+
+            if key in list_keys and not value:
+                values = []
+                key_indent = len(raw_line) - len(raw_line.lstrip())
+                while line_number < len(lines):
+                    list_line = lines[line_number]
+                    list_content = self._strip_inline_comment(list_line).strip()
+                    if not list_content:
+                        line_number += 1
+                        continue
+                    list_indent = len(list_line) - len(list_line.lstrip())
+                    if list_indent <= key_indent:
+                        break
+                    line_number += 1
+                    if not list_content.startswith("-"):
+                        self._warn_config(
+                            project_dir,
+                            line_number,
+                            f"cannot understand {key} list item",
+                        )
+                        continue
+                    item = list_content[1:].strip()
+                    if item:
+                        values.append(self._unquote_scalar(item))
+                setattr(self, key, values)
+                continue
+
+            value = self._unquote_scalar(self._strip_inline_comment(value).strip())
+
             if key == "ignore_models":
                 # Parse bracket list: [model1, model2] or comma-separated
-                value = value.strip("[]")
-                self.ignore_models = [
-                    m.strip().strip("'\"") for m in value.split(",") if m.strip()
-                ]
+                parsed = self._parse_inline_list(value)
+                if parsed is None:
+                    self._warn_config(project_dir, line_number, f"cannot understand {key}")
+                else:
+                    self.ignore_models = parsed
             elif key == "acknowledge_models":
-                value = value.strip("[]")
-                self.acknowledge_models = [
-                    m.strip().strip("'\"") for m in value.split(",") if m.strip()
-                ]
+                parsed = self._parse_inline_list(value)
+                if parsed is None:
+                    self._warn_config(project_dir, line_number, f"cannot understand {key}")
+                else:
+                    self.acknowledge_models = parsed
             elif key == "warning_exit_code":
                 try:
                     val = int(value)
                     if 0 <= val <= 255:
                         self.warning_exit_code = val
+                    else:
+                        self._warn_config(project_dir, line_number, f"cannot understand {key}")
                 except ValueError:
-                    pass
+                    self._warn_config(project_dir, line_number, f"cannot understand {key}")
             elif key == "format":
                 if value in ("text", "github", "json"):
                     self.format = value
+                else:
+                    self._warn_config(project_dir, line_number, f"cannot understand {key}")
             elif key == "no_color":
-                self.no_color = value.lower() in ("true", "1", "yes")
+                if value.lower() in ("true", "1", "yes"):
+                    self.no_color = True
+                elif value.lower() in ("false", "0", "no"):
+                    self.no_color = False
+                else:
+                    self._warn_config(project_dir, line_number, f"cannot understand {key}")
             elif key == "dialect":
                 # Only allow alphanumeric dialect names (sqlglot dialect identifiers)
                 if value.isalnum():
-                    self.dialect = value
+                    self.dialect = self._unquote_scalar(value)
+                else:
+                    self._warn_config(project_dir, line_number, f"cannot understand {key}")
             elif key == "include_packages":
-                self.include_packages = value.lower() in ("true", "1", "yes")
+                if value.lower() in ("true", "1", "yes"):
+                    self.include_packages = True
+                elif value.lower() in ("false", "0", "no"):
+                    self.include_packages = False
+                else:
+                    self._warn_config(project_dir, line_number, f"cannot understand {key}")
             elif key == "compile_command":
                 if value:
                     self.compile_command = value
+                else:
+                    self._warn_config(project_dir, line_number, f"cannot understand {key}")
+
+    @staticmethod
+    def _strip_inline_comment(value: str) -> str:
+        quote = None
+        for index, char in enumerate(value):
+            if char in ("'", '"'):
+                if quote == char:
+                    quote = None
+                elif quote is None:
+                    quote = char
+            elif char == "#" and quote is None and (index == 0 or value[index - 1].isspace()):
+                return value[:index]
+        return value
+
+    @staticmethod
+    def _unquote_scalar(value: str) -> str:
+        if len(value) >= 2 and value[0] == value[-1] and value[0] in ("'", '"'):
+            return value[1:-1]
+        return value
+
+    @classmethod
+    def _parse_inline_list(cls, value: str) -> list[str] | None:
+        if value.startswith("[") != value.endswith("]"):
+            return None
+        if value.startswith("["):
+            value = value[1:-1].strip()
+        return [cls._unquote_scalar(item.strip()) for item in value.split(",") if item.strip()]
+
+    @staticmethod
+    def _warn_config(project_dir: Path, line_number: int, message: str) -> None:
+        print(
+            f"{project_dir / '.dbt-plan.yml'}:{line_number}: warning: {message}",
+            file=sys.stderr,
+        )
 
     def _load_env(self) -> None:
         """Override config with environment variables."""
