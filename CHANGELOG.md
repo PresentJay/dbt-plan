@@ -7,6 +7,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.10.0] - 2026-09-02
+
+### Fixed
+- **A materialization dbt-plan has no rule for is no longer reported safe.**
+  `predict_ddl` handled `table`, `view`, `ephemeral` and `snapshot` by name and
+  fell through to the incremental branch for everything else. With no
+  `on_schema_change` set, that branch defaulted to `"ignore"` and returned
+  `SAFE / NO DDL` — so a `materialized_view`, a Snowflake dynamic table or a
+  custom materialization could drop a column and report clean.
+
+  It was reasoning with a setting that does not apply: dbt drives materialized
+  views with `on_configuration_change`, not `on_schema_change`, and its docs do
+  not say what a column change does to one. `materialized_view` now says exactly
+  that instead of a generic "unknown".
+
+  Note the asymmetry this closes. An unrecognized *`on_schema_change`* already
+  returned `WARNING`; an unrecognized *materialization* did not.
+
+### Changed
+- **An explicitly set `on_schema_change` is still honoured on any
+  materialization.** Setting it is an assertion by the author about how their
+  materialization behaves, so a custom materialization with `sync_all_columns`
+  still earns a `DESTRUCTIVE` verdict rather than being downgraded to a warning.
+  Only its *absence* is treated as unknown — silence is not a claim, and reading
+  it as `"ignore"` is what produced the false all-clear.
+
+  The verdict carries the column diff either way, since "unknown" with nothing
+  attached tells a reviewer nothing about what to look at.
+
 ## [0.9.2] - 2026-09-02
 
 ### Fixed

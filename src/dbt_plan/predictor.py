@@ -59,7 +59,9 @@ def predict_ddl(
 
     Args:
         model_name: dbt model name.
-        materialization: "table", "view", "incremental", "ephemeral".
+        materialization: "table", "view", "incremental", "ephemeral",
+            "snapshot". Anything else is reported as unknown rather than
+            being treated as incremental.
         on_schema_change: "ignore", "fail", "append_new_columns",
                           "sync_all_columns", or None.
         base_columns: Columns from base (None if parse failed).
@@ -122,6 +124,47 @@ def predict_ddl(
             on_schema_change=on_schema_change,
             safety=Safety.WARNING,
             operations=[DDLOperation("REVIEW REQUIRED (snapshot)")],
+        )
+
+    if materialization != "incremental" and on_schema_change is None:
+        # Everything dbt ships is handled above except incremental, so this is a
+        # materialized view, an adapter-specific object like a Snowflake dynamic
+        # table, or a custom materialization -- and nobody has said how it treats
+        # a schema change.
+        #
+        # An explicit on_schema_change is an assertion by the author about how
+        # their materialization behaves, and honouring it is more useful than
+        # refusing: a custom materialization set to sync_all_columns still earns
+        # a DESTRUCTIVE verdict below. Its *absence* asserts nothing, and
+        # defaulting it to "ignore" is what produced the false all-clear -- a
+        # materialized view dropping a column reported SAFE / NO DDL, from a
+        # setting that does not govern materialized views at all.
+        if materialization == "materialized_view":
+            reason = (
+                "REVIEW REQUIRED (materialized_view is driven by "
+                "on_configuration_change, which dbt-plan does not model)"
+            )
+        else:
+            reason = f"UNKNOWN materialization: {materialization}"
+
+        base_set = set(base_columns or [])
+        current_set = set(current_columns or [])
+        unknown_added = sorted(current_set - base_set)
+        unknown_removed = sorted(base_set - current_set)
+        return DDLPrediction(
+            model_name=model_name,
+            materialization=materialization,
+            on_schema_change=on_schema_change,
+            safety=Safety.WARNING,
+            operations=[
+                DDLOperation(reason),
+                # Carry the diff anyway: "unknown" with nothing attached tells a
+                # reviewer nothing about what to go and look at.
+                *[DDLOperation("ADD COLUMN", col) for col in unknown_added],
+                *[DDLOperation("DROP COLUMN", col) for col in unknown_removed],
+            ],
+            columns_added=unknown_added,
+            columns_removed=unknown_removed,
         )
 
     # Incremental: depends on on_schema_change
