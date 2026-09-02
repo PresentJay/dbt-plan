@@ -978,6 +978,7 @@ A warning is not automatically a blocker; it means "explain this before merging.
 | "review required" | a model's columns could not be extracted | read that model's SQL yourself |
 | "columns came from the manifest, not the SQL" | the SQL was `SELECT *`, so documented columns stood in for it — on both sides, which is why the diff came out empty | give the model an explicit column list, or document its columns fully in `schema.yml` |
 | "TYPE CHANGED" | an explicit `CAST` on a column changed between revisions | decide whether the new type can hold the existing data |
+| "UNKNOWN materialization" | a materialization dbt-plan has no rule for, with no `on_schema_change` set | set `on_schema_change` if your materialization honours it; otherwise review by hand |
 | "not found in manifest" | the compiled SQL and the manifest disagree | the manifest is stale — recompile |
 | "the compile is incomplete" | a model in the manifest produced no compiled SQL | **fix the compile, then rerun** |
 
@@ -1000,6 +1001,9 @@ These edits will silence a real finding, and none of them makes the change safe:
 - Adding columns to `schema.yml` purely to make "columns came from the manifest" go away.
   Documenting the columns is right; documenting *some* of them is what caused the problem.
   Prefer giving the model an explicit column list instead of `SELECT *`.
+- Setting `on_schema_change: ignore` on a custom materialization to clear "UNKNOWN
+  materialization". dbt-plan takes that setting at its word, so this converts an honest
+  "I do not know" into a confident "safe" without changing what the materialization does.
 
 If a destructive change is intentional, say so in the pull request. Do not edit config to
 make the warning disappear.
