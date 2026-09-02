@@ -109,6 +109,8 @@ Ideas that look useful but contradict what this tool is:
 | incremental | sync_all_columns | `ADD + DROP COLUMN` | DESTRUCTIVE if columns removed |
 | any | (model removed) | `MODEL REMOVED` | DESTRUCTIVE |
 | any | (unknown osc) | `UNKNOWN on_schema_change` | WARNING |
+| materialized_view / custom | (none set) | `UNKNOWN materialization` | WARNING |
+| materialized_view / custom | (osc set) | follows the incremental rules | per osc |
 
 ## CI Integration (GitHub Actions)
 
