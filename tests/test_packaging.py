@@ -40,7 +40,7 @@ def _sdist_filenames() -> list[str]:
 
 
 def _read_pyproject() -> str:
-    return (ROOT / "pyproject.toml").read_text()
+    return (ROOT / "pyproject.toml").read_text(encoding="utf-8")
 
 
 def _pyproject_version() -> str:
@@ -269,6 +269,7 @@ class TestCLIEntryPoint:
             [sys.executable, "-m", "dbt_plan.cli", "--version"],
             capture_output=True,
             text=True,
+            encoding="utf-8",
             cwd=str(ROOT),
         )
         # Some CLIs use argparse which may write to stdout
@@ -283,6 +284,7 @@ class TestCLIEntryPoint:
             [sys.executable, "-m", "dbt_plan.cli", "--help"],
             capture_output=True,
             text=True,
+            encoding="utf-8",
             cwd=str(ROOT),
         )
         assert result.returncode == 0, f"--help exited with {result.returncode}"
@@ -329,12 +331,12 @@ class TestChangelog:
         assert (ROOT / "CHANGELOG.md").exists(), "CHANGELOG.md missing"
 
     def test_changelog_mentions_current_version(self) -> None:
-        changelog = (ROOT / "CHANGELOG.md").read_text()
+        changelog = (ROOT / "CHANGELOG.md").read_text(encoding="utf-8")
         version = _pyproject_version()
         assert version in changelog, f"CHANGELOG.md does not mention current version {version}"
 
     def test_changelog_has_section_for_current_version(self) -> None:
-        changelog = (ROOT / "CHANGELOG.md").read_text()
+        changelog = (ROOT / "CHANGELOG.md").read_text(encoding="utf-8")
         version = _pyproject_version()
         # Expect a header like ## [0.3.5]
         pattern = rf"## \[{re.escape(version)}\]"
@@ -354,7 +356,7 @@ class TestLicense:
         assert (ROOT / "LICENSE").exists(), "LICENSE file missing"
 
     def test_license_is_apache2(self) -> None:
-        content = (ROOT / "LICENSE").read_text()
+        content = (ROOT / "LICENSE").read_text(encoding="utf-8")
         assert "Apache License" in content
         assert "Version 2.0" in content
 

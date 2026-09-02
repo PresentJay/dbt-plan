@@ -7,6 +7,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.2] - 2026-09-02
+
+### Fixed
+- **Files are read and written as UTF-8 rather than as whatever the locale
+  happens to be.** `Path.read_text()` with no `encoding=` uses the locale codec,
+  which is cp1252 on Windows, so a UTF-8 file containing any non-ASCII byte
+  raised `UnicodeDecodeError`. dbt writes `manifest.json` as UTF-8 and compiled
+  SQL inherits the model's encoding, so **a project with a column description in
+  any language but English could not be read on Windows at all.** Twenty-two call
+  sites, covering compiled SQL, `manifest.json`, `.dbt-plan.yml`, `.gitignore`,
+  the generated CI workflow and the consumer's `AGENTS.md`.
+
+  `subprocess(text=True)` decodes the same way, so `git` and `dbt compile` output
+  is now decoded explicitly too — with `errors="replace"`, since crashing on
+  another tool's diagnostic output would be absurd and the values actually
+  consumed from it are commit ids and emptiness checks.
+
+  File reads stay strict: a genuinely mis-encoded compiled SQL file still raises,
+  and the caller treats that as "could not read", which is the safe direction.
+
+  It hit this project's own guarantees first. `tests/test_invariants.py` reads
+  `src/dbt_plan/cli.py` to assert the package imports no database driver, nothing
+  that reaches the network, and never passes `shell=True`. That file contains 72
+  non-ASCII bytes, so on Windows **the three checks enforcing this tool's security
+  premises did not run at all.**
+
+  Found because an outside contributor added a Windows CI matrix while fixing a
+  different bug (#38, #32). Nothing in this repository had ever run on Windows.
+
+### Added
+- An invariant test asserting that no `read_text` / `write_text` / `open` /
+  `subprocess(text=True)` call in `src/` omits its encoding, so this cannot
+  return quietly.
+
 ## [0.9.1] - 2026-09-01
 
 ### Fixed

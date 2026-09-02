@@ -21,7 +21,7 @@ from dbt_plan.formatter import CheckResult
 from dbt_plan.predictor import DDLOperation, DDLPrediction, Safety
 
 ACTION = Path(__file__).parent.parent / "action.yml"
-ACTION_TEXT = ACTION.read_text()
+ACTION_TEXT = ACTION.read_text(encoding="utf-8")
 
 # `dbt-plan <args>` inside the action's run: blocks, stopping at any redirect or pipe.
 _INVOCATION = re.compile(r"^\s*dbt-plan\s+(?P<args>.+?)\s*(?:[|>]|$)", re.M)
@@ -102,6 +102,7 @@ class TestInvocations:
                 [sys.executable, "-m", "dbt_plan.cli", *args],
                 capture_output=True,
                 text=True,
+                encoding="utf-8",
                 cwd=tmp_path,
             )
             stderr = proc.stderr.lower()

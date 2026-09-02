@@ -25,11 +25,11 @@ class TestCreatesFile:
     def test_creates_agents_md_when_missing(self, tmp_path):
         path = _run(tmp_path)
         assert path.exists()
-        assert _AGENTS_MARKER in path.read_text()
+        assert _AGENTS_MARKER in path.read_text(encoding="utf-8")
 
     def test_new_file_starts_with_a_heading(self, tmp_path):
         """A fresh AGENTS.md needs its own H1; the guide itself starts at H2."""
-        content = _run(tmp_path).read_text()
+        content = _run(tmp_path).read_text(encoding="utf-8")
         assert content.startswith("# AGENTS.md\n")
 
     def test_reports_creation(self, tmp_path, capsys):
@@ -42,7 +42,7 @@ class TestAppendsToExisting:
         path = tmp_path / "AGENTS.md"
         path.write_text("# AGENTS.md\n\n## house rules\n\nRun the linter.\n")
         _run(tmp_path)
-        content = path.read_text()
+        content = path.read_text(encoding="utf-8")
         assert "## house rules" in content
         assert "Run the linter." in content
         assert _AGENTS_MARKER in content
@@ -51,7 +51,7 @@ class TestAppendsToExisting:
         path = tmp_path / "AGENTS.md"
         path.write_text("# AGENTS.md\n\nexisting\n")
         _run(tmp_path)
-        content = path.read_text()
+        content = path.read_text(encoding="utf-8")
         assert content.index("existing") < content.index(_AGENTS_MARKER)
 
     def test_handles_file_without_trailing_newline(self, tmp_path):
@@ -59,13 +59,13 @@ class TestAppendsToExisting:
         path = tmp_path / "AGENTS.md"
         path.write_text("# AGENTS.md\n\nno trailing newline")
         _run(tmp_path)
-        assert "no trailing newline\n" in path.read_text()
+        assert "no trailing newline\n" in path.read_text(encoding="utf-8")
 
     def test_does_not_add_a_second_h1(self, tmp_path):
         path = tmp_path / "AGENTS.md"
         path.write_text("# AGENTS.md\n\nexisting\n")
         _run(tmp_path)
-        assert path.read_text().count("# AGENTS.md") == 1
+        assert path.read_text(encoding="utf-8").count("# AGENTS.md") == 1
 
     def test_reports_append(self, tmp_path, capsys):
         (tmp_path / "AGENTS.md").write_text("# AGENTS.md\n")
@@ -82,16 +82,16 @@ class TestIdempotency:
 
     def test_second_run_leaves_content_unchanged(self, tmp_path):
         path = _run(tmp_path)
-        before = path.read_text()
+        before = path.read_text(encoding="utf-8")
         with pytest.raises(SystemExit):
             _run(tmp_path)
-        assert path.read_text() == before
+        assert path.read_text(encoding="utf-8") == before
 
     def test_second_run_does_not_duplicate_the_section(self, tmp_path):
         path = _run(tmp_path)
         with pytest.raises(SystemExit):
             _run(tmp_path)
-        assert path.read_text().count(_AGENTS_MARKER) == 1
+        assert path.read_text(encoding="utf-8").count(_AGENTS_MARKER) == 1
 
 
 class TestGuidanceContent:

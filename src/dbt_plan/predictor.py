@@ -403,7 +403,7 @@ def analyze_cascade_impacts(
                 ds_sql = None
                 if ds_sql_path:
                     try:
-                        ds_sql = ds_sql_path.read_text()
+                        ds_sql = ds_sql_path.read_text(encoding="utf-8")
                     except (OSError, UnicodeDecodeError):
                         pass  # unreadable file — skip broken_ref check for this model
 

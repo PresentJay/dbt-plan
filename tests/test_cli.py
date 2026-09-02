@@ -144,7 +144,7 @@ class TestSnapshotPathValidation:
         _do_snapshot(args)
 
         base = project_dir / ".dbt-plan" / "base"
-        assert (base / "compiled" / "m.sql").read_text() == "SELECT 2"
+        assert (base / "compiled" / "m.sql").read_text(encoding="utf-8") == "SELECT 2"
 
     def test_snapshot_no_compiled_sql_exits_2(self, tmp_path):
         """Snapshot exits 2 when no compiled SQL exists."""
@@ -883,7 +883,7 @@ class TestInit:
         _do_init(args)
         config_path = tmp_path / ".dbt-plan.yml"
         assert config_path.exists()
-        content = config_path.read_text()
+        content = config_path.read_text(encoding="utf-8")
         assert "ignore_models" in content
         assert "warning_exit_code" in content
 
@@ -897,7 +897,7 @@ class TestInit:
         _do_init(args)
         gitignore = tmp_path / ".gitignore"
         assert gitignore.exists()
-        assert ".dbt-plan/" in gitignore.read_text()
+        assert ".dbt-plan/" in gitignore.read_text(encoding="utf-8")
 
     def test_appends_to_existing_gitignore(self, tmp_path):
         """init appends .dbt-plan/ to existing .gitignore."""
@@ -909,7 +909,7 @@ class TestInit:
         from dbt_plan.cli import _do_init
 
         _do_init(args)
-        content = gitignore.read_text()
+        content = gitignore.read_text(encoding="utf-8")
         assert "node_modules/" in content
         assert ".dbt-plan/" in content
 
@@ -1046,7 +1046,7 @@ class TestCiSetup:
 
         workflow = tmp_path / ".github" / "workflows" / "dbt-plan.yml"
         assert workflow.exists()
-        content = workflow.read_text()
+        content = workflow.read_text(encoding="utf-8")
         assert "dbt-plan" in content
         assert "dbt compile" in content
         assert "dbt-plan check" in content

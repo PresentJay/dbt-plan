@@ -77,7 +77,7 @@ def _source_files() -> list[Path]:
 
 def _imported_modules(path: Path) -> set[str]:
     """Every module name imported by a file, including inside functions."""
-    tree = ast.parse(path.read_text(), filename=str(path))
+    tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
     names: set[str] = set()
     for node in ast.walk(tree):
         if isinstance(node, ast.Import):
@@ -130,7 +130,7 @@ class TestSubprocessSurface:
     def test_no_shell_true(self) -> None:
         offenders = []
         for path in _source_files():
-            tree = ast.parse(path.read_text(), filename=str(path))
+            tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
             for node in ast.walk(tree):
                 if not isinstance(node, ast.Call):
                     continue
@@ -141,4 +141,63 @@ class TestSubprocessSurface:
             f"subprocess called with shell=True at {offenders}. "
             "compile_command comes from user config; a shell would make it "
             "arbitrary code execution."
+        )
+
+
+class TestExplicitEncoding:
+    """Text is read and written as UTF-8, never as whatever the locale happens to be.
+
+    `Path.read_text(encoding="utf-8")` with no `encoding=` uses the locale codec. On Windows that
+    is cp1252, so a UTF-8 file containing any non-ASCII byte raises
+    UnicodeDecodeError. dbt writes `manifest.json` as UTF-8 and compiled SQL
+    inherits the model's encoding, so a project with a column description in any
+    language but English cannot be read at all.
+
+    It bit this file first: the checks above read `cli.py`, which contains em
+    dashes, so on Windows the three premises this module exists to enforce did
+    not run.
+
+    `subprocess(text=True)` decodes the same way, which covers `git` and
+    `dbt compile` output.
+    """
+
+    @staticmethod
+    def _needs_encoding(node: ast.Call) -> bool:
+        """True when this call decodes or encodes text and was not told how."""
+        if any(kw.arg == "encoding" for kw in node.keywords):
+            return False
+
+        func = node.func
+        name = func.attr if isinstance(func, ast.Attribute) else getattr(func, "id", None)
+
+        if name in ("read_text", "write_text"):
+            return True
+
+        if name == "open":
+            # Binary mode does not decode, so it needs no encoding.
+            mode = node.args[0] if node.args else None
+            if isinstance(mode, ast.Constant) and "b" in str(mode.value):
+                return False
+            return True
+
+        if name == "run":
+            return any(
+                kw.arg in ("text", "universal_newlines")
+                and getattr(kw.value, "value", False) is True
+                for kw in node.keywords
+            )
+
+        return False
+
+    def test_every_text_read_and_write_names_its_encoding(self) -> None:
+        offenders = []
+        for path in _source_files():
+            tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+            for node in ast.walk(tree):
+                if isinstance(node, ast.Call) and self._needs_encoding(node):
+                    offenders.append(f"{path.name}:{node.lineno}")
+        assert offenders == [], (
+            f"text decoded or encoded with the locale codec at {offenders}. "
+            "Pass encoding='utf-8'; dbt's artifacts are UTF-8 and the locale is "
+            "cp1252 on Windows, where this raises UnicodeDecodeError."
         )

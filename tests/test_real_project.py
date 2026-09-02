@@ -164,7 +164,7 @@ class TestRealCompiledSQL:
 
     def test_stg_orders_columns(self):
         """stg_orders compiled SQL has expected columns."""
-        sql = (COMPILED_DIR / "staging" / "stg_orders.sql").read_text()
+        sql = (COMPILED_DIR / "staging" / "stg_orders.sql").read_text(encoding="utf-8")
         # duckdb dialect; try generic parsing
         cols = extract_columns(sql, dialect="duckdb")
         if cols is None:
@@ -184,7 +184,7 @@ class TestRealCompiledSQL:
         may not handle all compiled SQL patterns — if this fallback triggers,
         investigate whether a duckdb-specific SQL pattern regressed.
         """
-        sql = (COMPILED_DIR / "marts" / "fct_orders.sql").read_text()
+        sql = (COMPILED_DIR / "marts" / "fct_orders.sql").read_text(encoding="utf-8")
         cols = extract_columns(sql, dialect="duckdb")
         if cols is None:
             cols = extract_columns(sql, dialect="snowflake")
@@ -196,7 +196,7 @@ class TestRealCompiledSQL:
 
     def test_dim_books_columns(self):
         """dim_books compiled SQL has expected columns."""
-        sql = (COMPILED_DIR / "marts" / "dim_books.sql").read_text()
+        sql = (COMPILED_DIR / "marts" / "dim_books.sql").read_text(encoding="utf-8")
         cols = extract_columns(sql, dialect="duckdb")
         if cols is None:
             cols = extract_columns(sql, dialect="snowflake")

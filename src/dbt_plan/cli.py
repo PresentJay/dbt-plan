@@ -146,22 +146,24 @@ def _do_init(args: argparse.Namespace) -> None:
         )
         sys.exit(2)
 
-    config_path.write_text(_SAMPLE_CONFIG)
+    config_path.write_text(_SAMPLE_CONFIG, encoding="utf-8")
     print(f"Created {config_path}")
 
     # Add .dbt-plan/ to .gitignore if not already there
     gitignore = project_dir / ".gitignore"
     entry = ".dbt-plan/"
     if gitignore.exists():
-        content = gitignore.read_text()
+        content = gitignore.read_text(encoding="utf-8")
         if entry not in content:
-            with gitignore.open("a") as f:
+            with gitignore.open("a", encoding="utf-8") as f:
                 if not content.endswith("\n"):
                     f.write("\n")
                 f.write(f"\n# dbt-plan snapshots (ephemeral, do not commit)\n{entry}\n")
             print(f"Added {entry} to .gitignore")
     else:
-        gitignore.write_text(f"# dbt-plan snapshots (ephemeral, do not commit)\n{entry}\n")
+        gitignore.write_text(
+            f"# dbt-plan snapshots (ephemeral, do not commit)\n{entry}\n", encoding="utf-8"
+        )
         print(f"Created .gitignore with {entry}")
 
 
@@ -219,7 +221,7 @@ def _do_stats(args: argparse.Namespace) -> None:
         dialect = getattr(args, "dialect", "snowflake") or "snowflake"
         for sql_file in compiled_dir.rglob("*.sql"):
             sql_count += 1
-            cols = extract_columns(sql_file.read_text(), dialect=dialect)
+            cols = extract_columns(sql_file.read_text(encoding="utf-8"), dialect=dialect)
             if cols == ["*"]:
                 star_count += 1
 
@@ -360,7 +362,9 @@ def _make_table_resolver(compiled_dir, relation_index: dict[str, str], dialect: 
 
         in_progress.add(model)
         try:
-            columns = extract_columns(path.read_text(), dialect=dialect, table_columns=resolve)
+            columns = extract_columns(
+                path.read_text(encoding="utf-8"), dialect=dialect, table_columns=resolve
+            )
         except OSError:
             columns = None
         finally:
@@ -590,7 +594,9 @@ def _do_check(args: argparse.Namespace) -> int:
             )
         elif diff.base_path:
             base_cols = extract_columns(
-                diff.base_path.read_text(), dialect=dialect, table_columns=base_table_columns
+                diff.base_path.read_text(encoding="utf-8"),
+                dialect=dialect,
+                table_columns=base_table_columns,
             )
         if diff.current_sql is not None:
             current_cols = extract_columns(
@@ -598,7 +604,7 @@ def _do_check(args: argparse.Namespace) -> int:
             )
         elif diff.current_path:
             current_cols = extract_columns(
-                diff.current_path.read_text(),
+                diff.current_path.read_text(encoding="utf-8"),
                 dialect=dialect,
                 table_columns=current_table_columns,
             )
@@ -691,8 +697,10 @@ def _do_check(args: argparse.Namespace) -> int:
         if prediction.safety == Safety.WARNING and any(
             _star_macro_degraded(text)
             for text in (
-                diff.current_sql or (diff.current_path.read_text() if diff.current_path else ""),
-                diff.base_sql or (diff.base_path.read_text() if diff.base_path else ""),
+                diff.current_sql
+                or (diff.current_path.read_text(encoding="utf-8") if diff.current_path else ""),
+                diff.base_sql
+                or (diff.base_path.read_text(encoding="utf-8") if diff.base_path else ""),
             )
         ):
             prediction = _replace(
@@ -722,10 +730,10 @@ def _do_check(args: argparse.Namespace) -> int:
         ):
             base_sql_text = diff.base_sql
             if base_sql_text is None and diff.base_path:
-                base_sql_text = diff.base_path.read_text()
+                base_sql_text = diff.base_path.read_text(encoding="utf-8")
             current_sql_text = diff.current_sql
             if current_sql_text is None and diff.current_path:
-                current_sql_text = diff.current_path.read_text()
+                current_sql_text = diff.current_path.read_text(encoding="utf-8")
 
             base_casts = (
                 extract_cast_types(base_sql_text, dialect=dialect) if base_sql_text else None
@@ -927,7 +935,7 @@ def _do_ci_setup(args: argparse.Namespace) -> None:
         sys.exit(2)
 
     workflows_dir.mkdir(parents=True, exist_ok=True)
-    workflow_path.write_text(_CI_WORKFLOW)
+    workflow_path.write_text(_CI_WORKFLOW, encoding="utf-8")
     print(f"Created {workflow_path}")
     print("Push this file to enable dbt-plan on every PR.")
 
@@ -1022,7 +1030,7 @@ def _do_agent_setup(args: argparse.Namespace) -> None:
     path = project_dir / "AGENTS.md"
 
     if path.exists():
-        content = path.read_text()
+        content = path.read_text(encoding="utf-8")
         if _AGENTS_MARKER in content:
             print(
                 f"AGENTS.md already has a dbt-plan section: {path}\n"
@@ -1030,11 +1038,11 @@ def _do_agent_setup(args: argparse.Namespace) -> None:
                 file=sys.stderr,
             )
             sys.exit(2)
-        with path.open("a") as f:
+        with path.open("a", encoding="utf-8") as f:
             f.write(("" if content.endswith("\n") else "\n") + "\n" + _AGENTS_GUIDE)
         print(f"Appended dbt-plan section to {path}")
     else:
-        path.write_text(f"# AGENTS.md\n\n{_AGENTS_GUIDE}")
+        path.write_text(f"# AGENTS.md\n\n{_AGENTS_GUIDE}", encoding="utf-8")
         print(f"Created {path}")
     print("Coding agents that read AGENTS.md will pick this up automatically.")
 
@@ -1110,6 +1118,8 @@ def _do_run(args: argparse.Namespace) -> int:
             ["git", "status", "--porcelain"],
             capture_output=True,
             text=True,
+            encoding="utf-8",
+            errors="replace",
             cwd=str(project_dir),
         )
     except FileNotFoundError:
@@ -1140,6 +1150,8 @@ def _do_run(args: argparse.Namespace) -> int:
                 compile_argv,
                 capture_output=True,
                 text=True,
+                encoding="utf-8",
+                errors="replace",
                 cwd=str(project_dir),
             )
             if compile_base.returncode != 0:
@@ -1176,6 +1188,8 @@ def _do_run(args: argparse.Namespace) -> int:
         compile_argv,
         capture_output=True,
         text=True,
+        encoding="utf-8",
+        errors="replace",
         cwd=str(project_dir),
     )
     if compile_curr.returncode != 0:
