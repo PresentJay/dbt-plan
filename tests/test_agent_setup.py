@@ -155,6 +155,14 @@ class TestGuidanceContent:
         """Documenting *some* columns is what caused the problem in the first place."""
         assert "documenting *some* of them" in _AGENTS_GUIDE
 
+    def test_names_the_unknown_materialization_case(self):
+        assert "UNKNOWN materialization" in _AGENTS_GUIDE
+
+    def test_warns_against_silencing_it_with_on_schema_change(self):
+        """dbt-plan takes an explicit setting at its word, which is what makes
+        this the most effective way to turn a refusal into a false clean bill."""
+        assert "without changing what the materialization does" in _AGENTS_GUIDE
+
     def test_guide_starts_with_the_marker(self):
         """The marker must be first so idempotency detection cannot be fooled."""
         assert _AGENTS_GUIDE.startswith(_AGENTS_MARKER)
