@@ -748,7 +748,10 @@ class TestUnknownOsc:
 
 
 class TestCustomMaterialization:
-    """Any materialization not in {table, view, ephemeral, snapshot} uses incremental path."""
+    """A materialization outside {table, view, ephemeral, snapshot} follows the
+    incremental rules *when on_schema_change is set*, because setting it is an
+    assertion about how that materialization behaves. With nothing set, dbt-plan
+    has no rule to apply and says so rather than assuming "ignore"."""
 
     def test_custom_mat_ignore_safe(self):
         pred = _predict(
@@ -790,15 +793,24 @@ class TestCustomMaterialization:
         assert pred.safety == Safety.SAFE
         assert any(op.operation == "ADD COLUMN" for op in pred.operations)
 
-    def test_custom_mat_none_osc_defaults_ignore(self):
+    def test_custom_mat_none_osc_is_not_read_as_ignore(self):
+        """An absent on_schema_change asserts nothing, so it cannot mean "safe".
+
+        This used to assert SAFE with on_schema_change coerced to "ignore" —
+        `a` -> `x` is a dropped column reported clean. Setting the config is a
+        claim by the author about how their materialization behaves, and the
+        tests above still honour it; not setting it is silence, and silence is
+        not a claim. See tests/test_unknown_materialization.py.
+        """
         pred = _predict(
             materialization="custom_materialization",
             on_schema_change=None,
             base_columns=["a"],
             current_columns=["x"],
         )
-        assert pred.safety == Safety.SAFE
-        assert pred.on_schema_change == "ignore"
+        assert pred.safety == Safety.WARNING
+        assert pred.on_schema_change is None
+        assert any("UNKNOWN materialization" in op for op in _op_names(pred))
 
     def test_custom_mat_parse_failure_warning(self):
         pred = _predict(
