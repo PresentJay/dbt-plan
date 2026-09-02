@@ -90,8 +90,8 @@ class TestFullPipeline:
 
         # 3. Predict int_order_enriched (sync_all_columns + columns changed)
         unified_diff = next(d for d in diffs if d.model_name == "int_order_enriched")
-        base_cols = extract_columns(unified_diff.base_path.read_text())
-        current_cols = extract_columns(unified_diff.current_path.read_text())
+        base_cols = extract_columns(unified_diff.base_path.read_text(encoding="utf-8"))
+        current_cols = extract_columns(unified_diff.current_path.read_text(encoding="utf-8"))
         assert base_cols is not None
         assert current_cols is not None
 
@@ -188,7 +188,7 @@ class TestCLIExitCode:
         # Base manifest includes old_removed, current manifest doesn't
         import json as json_mod
 
-        base_manifest_data = json_mod.loads(manifest_path.read_text())
+        base_manifest_data = json_mod.loads(manifest_path.read_text(encoding="utf-8"))
         base_manifest_data["nodes"]["model.test.old_removed"] = {
             "name": "old_removed",
             "config": {"materialized": "table"},

@@ -37,13 +37,13 @@ class TestGeneratedYamlValid:
     def test_ci_setup_creates_file(self, tmp_path):
         """ci-setup generates a .yml file that exists and is non-empty."""
         wf_path = _run_ci_setup(tmp_path)
-        content = wf_path.read_text()
+        content = wf_path.read_text(encoding="utf-8")
         assert len(content) > 0
 
     def test_has_required_top_level_keys(self, tmp_path):
         """Generated workflow has name:, on:, jobs:, and concurrency: at top level."""
         wf_path = _run_ci_setup(tmp_path)
-        content = wf_path.read_text()
+        content = wf_path.read_text(encoding="utf-8")
         # These keys must appear at column 0 (top-level YAML keys)
         assert re.search(r"^name:", content, re.MULTILINE)
         assert re.search(r"^on:", content, re.MULTILINE)
@@ -53,7 +53,7 @@ class TestGeneratedYamlValid:
     def test_name_is_dbt_plan(self, tmp_path):
         """Workflow name is 'dbt-plan'."""
         wf_path = _run_ci_setup(tmp_path)
-        content = wf_path.read_text()
+        content = wf_path.read_text(encoding="utf-8")
         assert re.search(r"^name:\s*dbt-plan\s*$", content, re.MULTILINE)
 
 
@@ -360,10 +360,10 @@ class TestIdempotency:
         """File content is not modified when second call fails."""
         _run_ci_setup(tmp_path)
         wf_path = tmp_path / ".github" / "workflows" / "dbt-plan.yml"
-        original_content = wf_path.read_text()
+        original_content = wf_path.read_text(encoding="utf-8")
         with pytest.raises(SystemExit):
             _run_ci_setup(tmp_path)
-        assert wf_path.read_text() == original_content
+        assert wf_path.read_text(encoding="utf-8") == original_content
 
 
 # ---------------------------------------------------------------------------
@@ -375,7 +375,7 @@ class TestContentMatchesConstant:
     def test_file_content_is_exactly_ci_workflow(self, tmp_path):
         """The generated file content is exactly the _CI_WORKFLOW constant."""
         wf_path = _run_ci_setup(tmp_path)
-        assert wf_path.read_text() == _CI_WORKFLOW
+        assert wf_path.read_text(encoding="utf-8") == _CI_WORKFLOW
 
     def test_ci_workflow_constant_is_nonempty(self):
         """The _CI_WORKFLOW constant is a non-empty string."""

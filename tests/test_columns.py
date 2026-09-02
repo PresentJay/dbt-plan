@@ -180,7 +180,7 @@ class TestRealWorldFixtures:
 
     def test_window_functions(self):
         """Window functions with QUALIFY — common in incremental models."""
-        sql = (self.FIXTURES / "window_functions.sql").read_text()
+        sql = (self.FIXTURES / "window_functions.sql").read_text(encoding="utf-8")
         result = extract_columns(sql)
         assert result is not None
         assert "user_id" in result
@@ -198,7 +198,7 @@ class TestRealWorldFixtures:
         about. `final` lists its columns explicitly, so they are readable from the
         file with no warehouse involved.
         """
-        sql = (self.FIXTURES / "cte_chain.sql").read_text()
+        sql = (self.FIXTURES / "cte_chain.sql").read_text(encoding="utf-8")
         result = extract_columns(sql)
         assert result == [
             "order_id",
@@ -210,7 +210,7 @@ class TestRealWorldFixtures:
 
     def test_union_staging_pattern(self):
         """UNION ALL multi-source pattern — returns first branch columns."""
-        sql = (self.FIXTURES / "union_staging.sql").read_text()
+        sql = (self.FIXTURES / "union_staging.sql").read_text(encoding="utf-8")
         result = extract_columns(sql)
         assert result is not None
         assert "book_format" in result
@@ -220,14 +220,14 @@ class TestRealWorldFixtures:
 
     def test_explicit_columns_fixture(self):
         """Existing fixture: explicit column SELECT."""
-        sql = (self.FIXTURES / "explicit_columns.sql").read_text()
+        sql = (self.FIXTURES / "explicit_columns.sql").read_text(encoding="utf-8")
         result = extract_columns(sql)
         assert result is not None
         assert len(result) > 0
 
     def test_variant_access_fixture(self):
         """Existing fixture: Snowflake VARIANT access."""
-        sql = (self.FIXTURES / "variant_access.sql").read_text()
+        sql = (self.FIXTURES / "variant_access.sql").read_text(encoding="utf-8")
         result = extract_columns(sql)
         # VARIANT access may or may not parse depending on dialect
         assert result is None or isinstance(result, list)

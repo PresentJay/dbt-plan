@@ -27,7 +27,7 @@ def load_manifest(manifest_path: str | Path) -> dict:
     long-term memory usage for large manifests.
     """
     path = Path(manifest_path)
-    with path.open("r") as f:
+    with path.open("r", encoding="utf-8") as f:
         full = json.load(f)
     result = {
         "nodes": full.get("nodes") or {},

@@ -446,7 +446,7 @@ class TestStatsCommandDialect:
 
         In cli.py _do_stats:
             dialect = getattr(args, "dialect", "snowflake") or "snowflake"
-            cols = extract_columns(sql_file.read_text(), dialect=dialect)
+            cols = extract_columns(sql_file.read_text(encoding="utf-8"), dialect=dialect)
             if cols == ["*"]:
                 star_count += 1
         """

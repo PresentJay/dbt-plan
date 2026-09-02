@@ -456,6 +456,7 @@ class TestJqFriendlyPatterns:
             input=json_str,
             capture_output=True,
             text=True,
+            encoding="utf-8",
             check=True,
         )
         return proc.stdout.strip()

@@ -12,14 +12,14 @@ def fixture_dir():
 
 @pytest.fixture
 def explicit_columns_sql():
-    return (FIXTURES_DIR / "explicit_columns.sql").read_text()
+    return (FIXTURES_DIR / "explicit_columns.sql").read_text(encoding="utf-8")
 
 
 @pytest.fixture
 def select_star_sql():
-    return (FIXTURES_DIR / "select_star.sql").read_text()
+    return (FIXTURES_DIR / "select_star.sql").read_text(encoding="utf-8")
 
 
 @pytest.fixture
 def variant_access_sql():
-    return (FIXTURES_DIR / "variant_access.sql").read_text()
+    return (FIXTURES_DIR / "variant_access.sql").read_text(encoding="utf-8")

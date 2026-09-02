@@ -180,7 +180,7 @@ class TestSnapshotOverwrite:
         _do_snapshot(_snapshot_args(project_dir))
 
         base_dir = project_dir / ".dbt-plan" / "base"
-        m1 = json.loads((base_dir / "manifest.json").read_text())
+        m1 = json.loads((base_dir / "manifest.json").read_text(encoding="utf-8"))
         assert "model.my_project.old_model" in m1["nodes"]
 
         # Second snapshot with different manifest
@@ -191,7 +191,7 @@ class TestSnapshotOverwrite:
         _setup_target(project_dir, {"new_model": "SELECT 2"}, manifest2)
         _do_snapshot(_snapshot_args(project_dir))
 
-        m2 = json.loads((base_dir / "manifest.json").read_text())
+        m2 = json.loads((base_dir / "manifest.json").read_text(encoding="utf-8"))
         assert "model.my_project.old_model" not in m2["nodes"]
         assert "model.my_project.new_model" in m2["nodes"]
 
@@ -336,7 +336,7 @@ class TestManifestMissingDuringSnapshot:
         assert "Snapshot saved" in captured.out
         base_compiled = project_dir / ".dbt-plan" / "base" / "compiled"
         assert (base_compiled / "my_model.sql").exists()
-        assert (base_compiled / "my_model.sql").read_text() == "SELECT 1"
+        assert (base_compiled / "my_model.sql").read_text(encoding="utf-8") == "SELECT 1"
 
         # And manifest.json should NOT exist in base
         assert not (project_dir / ".dbt-plan" / "base" / "manifest.json").exists()

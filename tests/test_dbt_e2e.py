@@ -47,6 +47,7 @@ def _dbt_compile(project_dir: Path):
         cwd=project_dir,
         capture_output=True,
         text=True,
+        encoding="utf-8",
         timeout=60,
     )
     assert result.returncode == 0, f"dbt compile failed: {result.stderr}"
@@ -58,6 +59,7 @@ def _dbt_plan(args: list[str]) -> subprocess.CompletedProcess:
         _DBT_PLAN_ARGV + args,
         capture_output=True,
         text=True,
+        encoding="utf-8",
         timeout=30,
     )
 

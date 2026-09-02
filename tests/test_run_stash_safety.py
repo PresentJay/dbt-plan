@@ -87,7 +87,7 @@ class TestStashPushFailure:
 
         _run(_args(repo, "true"))
 
-        assert (repo / "model.sql").read_text() == "SELECT 1 AS a\n"
+        assert (repo / "model.sql").read_text(encoding="utf-8") == "SELECT 1 AS a\n"
 
 
 class TestUnrelatedStash:
@@ -145,7 +145,7 @@ class TestStashPopFailure:
             _run(_args(repo, "git --version"))
 
         # Either restored to the tree, or still in the stash -- never gone.
-        in_tree = original in (repo / "model.sql").read_text()
+        in_tree = original in (repo / "model.sql").read_text(encoding="utf-8")
         in_stash = bool(_git(repo, "stash", "list").stdout.strip())
         assert in_tree or in_stash
 
@@ -166,7 +166,7 @@ class TestHappyPath:
 
         _run(_args(repo, "true"))
 
-        assert (repo / "model.sql").read_text() == "SELECT 1 AS a, 2 AS b\n", (
+        assert (repo / "model.sql").read_text(encoding="utf-8") == "SELECT 1 AS a, 2 AS b\n", (
             "uncommitted work must be back in the tree"
         )
         assert _git(repo, "stash", "list").stdout.strip() == "", "stash must not be left behind"
@@ -181,4 +181,7 @@ def test_never_leaves_a_dbt_plan_stash_behind_on_success(tmp_path, cmd):
     _run(_args(repo, cmd))
 
     remaining = _git(repo, "stash", "list").stdout
-    assert "dbt-plan-run-temp" not in remaining or (repo / "model.sql").read_text() != ""
+    assert (
+        "dbt-plan-run-temp" not in remaining
+        or (repo / "model.sql").read_text(encoding="utf-8") != ""
+    )
