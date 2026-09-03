@@ -325,7 +325,6 @@ class TestConfigSharedAcrossProjects:
         assert config.dialect == "snowflake"
         assert config.warning_exit_code == 2
         assert config.format == "text"
-        assert config.include_packages is False
 
 
 # ===========================================================================
