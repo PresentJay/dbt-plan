@@ -1139,18 +1139,19 @@ class TestRun:
 
 
 class TestRunGitHandling:
-    def test_run_no_git_returns_2(self, tmp_path, capsys, monkeypatch):
+    def test_run_no_git_returns_2(self, tmp_path, capsys):
         """run returns 2 with helpful error when git is not available."""
         import argparse
+        import subprocess
 
         from dbt_plan.cli import _do_run
 
-        # dbt available but git not
-        fake_bin = tmp_path / "bin"
-        fake_bin.mkdir()
-        (fake_bin / "dbt").write_text("#!/bin/sh\necho 'dbt'")
-        (fake_bin / "dbt").chmod(0o755)
-        monkeypatch.setenv("PATH", str(fake_bin))
+        def run_command(command, **kwargs):
+            if command == ["dbt", "--version"]:
+                return subprocess.CompletedProcess(command, returncode=0)
+            if command == ["git", "status", "--porcelain"]:
+                raise FileNotFoundError
+            raise AssertionError(f"Unexpected subprocess command: {command}")
 
         args = argparse.Namespace(
             project_dir=str(tmp_path),
@@ -1161,7 +1162,8 @@ class TestRunGitHandling:
             select=None,
             compile_command=None,
         )
-        exit_code = _do_run(args)
+        with patch("subprocess.run", side_effect=run_command):
+            exit_code = _do_run(args)
         assert exit_code == 2
         err = capsys.readouterr().err
         assert "git" in err.lower()

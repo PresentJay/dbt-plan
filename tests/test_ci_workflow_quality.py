@@ -110,14 +110,14 @@ class TestRepositoryCiJobs:
         assert "os:" not in block.group(1)
         assert 'python-version: ["3.10", "3.11", "3.12", "3.13", "3.14"]' in block.group(1)
 
-    def test_windows_coverage_is_separate_and_nonblocking(self):
+    def test_windows_coverage_is_separate_and_blocking(self):
         content = _REPOSITORY_CI_WORKFLOW.read_text(encoding="utf-8")
         block = re.search(
             r"^  test-windows:\n(.*?)(?=^  \w|\Z)", content, re.MULTILINE | re.DOTALL
         )
         assert block, "test-windows job not found"
         assert "runs-on: windows-latest" in block.group(1)
-        assert "continue-on-error: true" in block.group(1)
+        assert "continue-on-error: true" not in block.group(1)
         assert 'python-version: ["3.10", "3.11", "3.12", "3.13", "3.14"]' in block.group(1)
 
 

@@ -7,7 +7,7 @@ This test module systematically checks each try/except block for:
 """
 
 import json
-import os
+from unittest.mock import patch
 
 import pytest
 import sqlglot.errors
@@ -153,20 +153,15 @@ class TestManifestExceptionHandling:
         with pytest.raises(UnicodeDecodeError):
             load_manifest(p)
 
-    @pytest.mark.skipif(
-        os.getuid() == 0 if hasattr(os, "getuid") else False,
-        reason="chmod(0o000) has no effect when running as root",
-    )
     def test_permission_denied_raises_oserror(self, tmp_path):
         """PermissionError (subclass of OSError) is caught by callers."""
         p = tmp_path / "manifest.json"
         p.write_text("{}")
-        p.chmod(0o000)
-        try:
-            with pytest.raises(PermissionError):
-                load_manifest(p)
-        finally:
-            p.chmod(0o644)
+        with (
+            patch("pathlib.Path.open", side_effect=PermissionError),
+            pytest.raises(PermissionError),
+        ):
+            load_manifest(p)
 
     def test_empty_file_raises_decode_error(self, tmp_path):
         """Empty file raises JSONDecodeError (caught by callers)."""
@@ -203,13 +198,10 @@ class TestConfigExceptionHandling:
         """PermissionError (subclass of OSError) -> silently ignored."""
         p = tmp_path / ".dbt-plan.yml"
         p.write_text("dialect: bigquery\n")
-        p.chmod(0o000)
-        try:
+        with patch("pathlib.Path.read_text", side_effect=PermissionError):
             config = Config.load(tmp_path)
-            # Should fall back to defaults since file couldn't be read
-            assert config.dialect == "snowflake"
-        finally:
-            p.chmod(0o644)
+        # Should fall back to defaults since file couldn't be read
+        assert config.dialect == "snowflake"
 
     def test_unicode_decode_error_in_config_file(self, tmp_path):
         """FIXED: Binary content in .dbt-plan.yml now handled gracefully.
@@ -227,7 +219,7 @@ class TestConfigExceptionHandling:
     def test_config_bom_stripped(self, tmp_path):
         """BOM in config file is handled (stripped after read)."""
         p = tmp_path / ".dbt-plan.yml"
-        p.write_text("\ufeffdialect: bigquery\n")
+        p.write_text("\ufeffdialect: bigquery\n", encoding="utf-8")
         config = Config.load(tmp_path)
         assert config.dialect == "bigquery"
 
