@@ -7,6 +7,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.10.1] - 2026-09-03
+
+### Fixed
+- **A dbt package that ships models no longer stops dbt-plan from running.**
+  dbt compiles every installed package into its own directory under
+  `target/compiled/`, and `_find_compiled_dir` treated more than one as
+  unresolvable and aborted. Any project depending on elementary,
+  dbt_project_evaluator, dbt_artifacts or similar could not run `snapshot` or
+  `check` at all.
+
+  The error also suggested `--project-dir`, which does not help: that flag points
+  at the dbt project, and the competing directories are inside *that project's*
+  `target/`. Passing it produced the identical message, so the only advice given
+  was a dead end.
+
+  The root project is now identified from `metadata.project_name` in the
+  manifest — the same field `build_node_index` already uses to keep package
+  models out of the index. The file side and the manifest side now agree on which
+  project is yours.
+
+  Still refuses when it genuinely cannot tell: no manifest, an unreadable one, or
+  one naming a project that is not there. The message now points at the manifest
+  rather than at a flag that changes nothing. The manifest is read only when there
+  is more than one candidate, so the ordinary single-project case does not start
+  paying to parse the largest file dbt writes.
+
 ## [0.10.0] - 2026-09-02
 
 ### Fixed

@@ -24,6 +24,24 @@ def _configure_output_streams() -> None:
             reconfigure(encoding="utf-8", errors="replace")
 
 
+def _root_project_name(target_dir: Path) -> str | None:
+    """Name of the project that produced this target/, per its own manifest.
+
+    Read only when `target/compiled/` holds more than one project directory, so
+    the ordinary case never pays for parsing the largest file dbt writes.
+
+    This is the same field `build_node_index` uses to keep package models out of
+    the index. The two sides of dbt-plan should agree on which project is yours.
+    """
+    try:
+        with (target_dir / "manifest.json").open("r", encoding="utf-8") as f:
+            metadata = json.load(f).get("metadata") or {}
+    except (OSError, json.JSONDecodeError, UnicodeDecodeError):
+        return None
+    name = metadata.get("project_name")
+    return name if isinstance(name, str) and name else None
+
+
 def _find_compiled_dir(target_dir: Path) -> Path | None:
     """Find compiled SQL models directory inside target/.
 
@@ -31,7 +49,10 @@ def _find_compiled_dir(target_dir: Path) -> Path | None:
     1. target/compiled/{project_name}/models/  (standard)
     2. target/compiled/models/  (flat, some dbt versions/configs)
 
-    If multiple project directories exist, raises ValueError.
+    dbt compiles every installed package into its own directory here, so a
+    project depending on a package that ships models has several. The root
+    project is identified from the manifest; only a genuinely undecidable case
+    raises.
     """
     compiled = target_dir / "compiled"
     if not compiled.exists():
@@ -49,10 +70,25 @@ def _find_compiled_dir(target_dir: Path) -> Path | None:
     if not candidates:
         return None
     if len(candidates) > 1:
+        # A package that ships models, almost always. The manifest names the
+        # project that owns this target directory; anything else here is a
+        # dependency and is not ours to check.
+        root_project = _root_project_name(target_dir)
+        for candidate in candidates:
+            if candidate.parent.name == root_project:
+                return candidate
+
         project_names = [c.parent.name for c in candidates]
+        # Deliberately does not suggest --project-dir: these directories are
+        # inside that project's target/, so passing it changes nothing.
         raise ValueError(
             f"Multiple dbt projects found in {compiled}: {project_names}. "
-            "Use --project-dir to specify which project to check."
+            f"Could not tell which is yours: {target_dir / 'manifest.json'} "
+            + (
+                f"names project '{root_project}', which is not among them."
+                if root_project
+                else "is missing or unreadable. Run 'dbt compile' to regenerate it."
+            )
         )
     return candidates[0]
 
