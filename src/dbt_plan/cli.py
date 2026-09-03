@@ -67,7 +67,8 @@ def _do_snapshot(args: argparse.Namespace) -> None:
         # Validate base_dir is inside project to prevent path traversal via symlinks
         resolved_base = base_dir.resolve()
         resolved_project = project_dir.resolve()
-        if not str(resolved_base).startswith(str(resolved_project) + "/"):
+        # is_relative_to includes equality; require a strict child before deleting.
+        if resolved_base == resolved_project or not resolved_base.is_relative_to(resolved_project):
             print(
                 "Error: snapshot base directory escapes project directory",
                 file=sys.stderr,

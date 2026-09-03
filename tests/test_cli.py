@@ -71,7 +71,7 @@ def _make_snapshot_args(project_dir):
 
 
 class TestSnapshotPathValidation:
-    def test_snapshot_rejects_base_dir_escaping_project(self, tmp_path):
+    def test_snapshot_rejects_base_dir_escaping_project(self, tmp_path, capsys):
         """Snapshot aborts if base_dir resolves outside project directory."""
         project_dir = tmp_path / "project"
         project_dir.mkdir()
@@ -92,6 +92,26 @@ class TestSnapshotPathValidation:
         with pytest.raises(SystemExit) as exc_info:
             _do_snapshot(args)
         assert exc_info.value.code == 2
+        assert "snapshot base directory escapes project directory" in capsys.readouterr().err
+
+    def test_snapshot_rejects_base_dir_resolving_to_project(self, tmp_path):
+        """Snapshot must not delete the project when base_dir resolves to it."""
+        project_dir = tmp_path / "project"
+        project_dir.mkdir()
+
+        compiled = project_dir / "target" / "compiled" / "proj" / "models"
+        compiled.mkdir(parents=True)
+        (compiled / "m.sql").write_text("SELECT 1")
+
+        base_dir = project_dir / ".dbt-plan" / "base"
+        base_dir.parent.mkdir(parents=True, exist_ok=True)
+        base_dir.symlink_to(project_dir, target_is_directory=True)
+
+        args = _make_snapshot_args(project_dir)
+        with pytest.raises(SystemExit) as exc_info:
+            _do_snapshot(args)
+        assert exc_info.value.code == 2
+        assert project_dir.exists()
 
     def test_snapshot_missing_manifest_warns(self, tmp_path, capsys):
         """Snapshot prints warning when manifest.json is missing from target/."""
