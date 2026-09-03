@@ -11,10 +11,13 @@ from __future__ import annotations
 
 import argparse
 import re
+from pathlib import Path
 
 import pytest
 
 from dbt_plan.cli import _CI_WORKFLOW, _do_ci_setup
+
+_REPOSITORY_CI_WORKFLOW = Path(__file__).parents[1] / ".github" / "workflows" / "ci.yml"
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -94,6 +97,28 @@ class TestWorkflowStructure:
         assert block, "permissions block not found"
         scopes = dict(re.findall(r"(\S+):\s*(\S+)", block.group(1)))
         assert scopes == {"contents": "read"}, f"expected only contents: read, got {scopes}"
+
+
+class TestRepositoryCiJobs:
+    """Keep branch-protection job names stable while adding Windows coverage."""
+
+    def test_test_job_keeps_ubuntu_matrix_contexts(self):
+        content = _REPOSITORY_CI_WORKFLOW.read_text(encoding="utf-8")
+        block = re.search(r"^  test:\n(.*?)(?=^  \w|\Z)", content, re.MULTILINE | re.DOTALL)
+        assert block, "test job not found"
+        assert "runs-on: ubuntu-latest" in block.group(1)
+        assert "os:" not in block.group(1)
+        assert 'python-version: ["3.10", "3.11", "3.12", "3.13", "3.14"]' in block.group(1)
+
+    def test_windows_coverage_is_separate_and_nonblocking(self):
+        content = _REPOSITORY_CI_WORKFLOW.read_text(encoding="utf-8")
+        block = re.search(
+            r"^  test-windows:\n(.*?)(?=^  \w|\Z)", content, re.MULTILINE | re.DOTALL
+        )
+        assert block, "test-windows job not found"
+        assert "runs-on: windows-latest" in block.group(1)
+        assert "continue-on-error: true" in block.group(1)
+        assert 'python-version: ["3.10", "3.11", "3.12", "3.13", "3.14"]' in block.group(1)
 
 
 # ---------------------------------------------------------------------------
