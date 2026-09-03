@@ -44,8 +44,6 @@ jobs:
 
   test-windows:
     runs-on: windows-latest
-    # Windows coverage is informative while platform-specific failures are triaged.
-    continue-on-error: true
     strategy:
       matrix:
         python-version: ["3.10", "3.11", "3.12", "3.13", "3.14"]
