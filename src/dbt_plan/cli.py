@@ -175,7 +175,6 @@ _SAMPLE_CONFIG = """\
 
 # Include models from dbt packages in analysis (default: false)
 # By default, only models from the root project are checked
-# include_packages: false
 
 # Command to compile dbt project (default: dbt compile)
 # Use this if you run dbt through a wrapper like uv, poetry, or a custom script
@@ -569,12 +568,8 @@ def _do_check(args: argparse.Namespace) -> int:
                 child_map[k] = v
 
     # Build O(1) lookup indexes instead of O(N) scan per model
-    node_index = build_node_index(manifest, include_packages=config.include_packages)
-    base_node_index = (
-        build_node_index(base_manifest, include_packages=config.include_packages)
-        if base_manifest
-        else {}
-    )
+    node_index = build_node_index(manifest)
+    base_node_index = build_node_index(base_manifest) if base_manifest else {}
     # `select * from {{ ref(x) }}` names a relation, not a model. These let the
     # column resolver follow that reference into the other model's compiled SQL.
     current_table_columns = _make_table_resolver(

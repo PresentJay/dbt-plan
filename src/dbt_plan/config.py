@@ -28,7 +28,6 @@ class Config:
     no_color: bool = False
     verbose: bool = False
     dialect: str = "snowflake"
-    include_packages: bool = False  # if True, also check models from dbt packages
     compile_command: str = (
         "dbt compile"  # command to compile dbt project (e.g., "uv run dbt compile")
     )
@@ -161,12 +160,18 @@ class Config:
                 else:
                     self._warn_config(project_dir, line_number, f"cannot understand {key}")
             elif key == "include_packages":
-                if value.lower() in ("true", "1", "yes"):
-                    self.include_packages = True
-                elif value.lower() in ("false", "0", "no"):
-                    self.include_packages = False
-                else:
-                    self._warn_config(project_dir, line_number, f"cannot understand {key}")
+                # Still recognised so it can be told apart from a typo, but it no
+                # longer does anything. It only ever widened the manifest index,
+                # while the compiled scan covers the root project alone -- so the
+                # models it added were never examined, and the uncompiled-model
+                # check then reported them as a broken compile. See the removal
+                # note in CHANGELOG 0.11.0.
+                self._warn_config(
+                    project_dir,
+                    line_number,
+                    "include_packages is ignored; it never checked package models "
+                    "and reported a healthy compile as incomplete",
+                )
             elif key == "compile_command":
                 if value:
                     self.compile_command = value
@@ -219,8 +224,6 @@ class Config:
         if dialect := os.environ.get("DBT_PLAN_DIALECT"):
             if dialect.isalnum():
                 self.dialect = dialect
-        if os.environ.get("DBT_PLAN_INCLUDE_PACKAGES", "").lower() in ("true", "1", "yes"):
-            self.include_packages = True
         if ignore := os.environ.get("DBT_PLAN_IGNORE_MODELS"):
             self.ignore_models = [m.strip() for m in ignore.split(",") if m.strip()]
         if ack := os.environ.get("DBT_PLAN_ACKNOWLEDGE"):

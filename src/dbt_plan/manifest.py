@@ -45,6 +45,12 @@ def build_node_index(manifest: dict, *, include_packages: bool = False) -> dict[
         include_packages: If False (default), only include models from the
             root project, skipping dbt package models. The root project is
             detected as the most common package_name in the manifest.
+
+    Nothing in the CLI passes True. The `include_packages` config key was removed
+    in 0.11.0 because the compiled scan covers the root project alone, so models
+    this let through were indexed and then never examined. The parameter is kept
+    because that is the half that worked, and making the scan follow it is an open
+    question rather than a rejected one.
     """
     # Detect root project name: prefer metadata.project_name (dbt v1.5+),
     # fall back to most common package heuristic for older manifests

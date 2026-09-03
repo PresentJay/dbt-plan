@@ -7,6 +7,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.11.0] - 2026-09-03
+
+### Removed
+- **The `include_packages` config key and `DBT_PLAN_INCLUDE_PACKAGES`.** It
+  claimed to "also check models from dbt packages" and never did. It widened the
+  manifest index to keep package models, while the compiled scan covers the root
+  project's directory alone — so those models were indexed and then never
+  examined.
+
+  It was worse than a no-op. The uncompiled-model check added in 0.7.0
+  cross-references the manifest against the compiled directory, found those
+  entries with no compiled SQL, and reported **"the compile is incomplete — fix
+  the compile and rerun"** about a compile that was fine. The advice could not be
+  followed, because there was nothing to fix.
+
+  Setting it now warns, with the line number, that it is ignored. Removing the
+  key outright would have been silent, and this way a stale config says what
+  happened rather than quietly changing meaning.
+
+  Making it work would mean scanning several project directories, which runs into
+  `diff_compiled_dirs` refusing on a duplicate file stem — dbt requires model
+  names to be unique per package, not globally, so a collision is legal. That is a
+  real design question and not worth opening for a feature whose only observable
+  effect was a wrong warning. The finding that matters — a package model dropping
+  a column one of your models reads — is already caught as a broken ref by
+  cascade analysis.
+
+  `build_node_index(include_packages=True)` is untouched. That was the half that
+  worked, it stays tested, and it is the hook if the scan is ever widened.
+
 ## [0.10.1] - 2026-09-03
 
 ### Fixed

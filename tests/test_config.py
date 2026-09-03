@@ -172,12 +172,6 @@ class TestEnvVars:
         config = Config.load(tmp_path)
         assert config.warning_exit_code == 2  # default
 
-    def test_env_include_packages(self, tmp_path, monkeypatch):
-        """DBT_PLAN_INCLUDE_PACKAGES enables package model checking."""
-        monkeypatch.setenv("DBT_PLAN_INCLUDE_PACKAGES", "true")
-        config = Config.load(tmp_path)
-        assert config.include_packages is True
-
     def test_env_compile_command(self, tmp_path, monkeypatch):
         """DBT_PLAN_COMPILE_COMMAND overrides compile command."""
         monkeypatch.setenv("DBT_PLAN_COMPILE_COMMAND", "uv run dbt compile")
@@ -189,12 +183,6 @@ class TestEnvVars:
         (tmp_path / ".dbt-plan.yml").write_text("no_color: true\n")
         config = Config.load(tmp_path)
         assert config.no_color is True
-
-    def test_file_include_packages(self, tmp_path):
-        """include_packages setting from config file."""
-        (tmp_path / ".dbt-plan.yml").write_text("include_packages: true\n")
-        config = Config.load(tmp_path)
-        assert config.include_packages is True
 
     def test_file_compile_command(self, tmp_path):
         """compile_command setting from config file."""
@@ -228,3 +216,11 @@ class TestEnvVars:
         config = Config.load(tmp_path)
         assert config.dialect == "postgres"
         assert config.format == "json"
+
+
+# `include_packages` used to be settable here, from the file and from
+# DBT_PLAN_INCLUDE_PACKAGES. It never checked package models -- it widened the
+# manifest index while the compiled scan stayed on the root project -- so it was
+# removed in 0.11.0. What replaces those two tests lives in
+# tests/test_include_packages_removed.py: the key is still recognised, warns that
+# it is ignored, and no longer appears on Config at all.
