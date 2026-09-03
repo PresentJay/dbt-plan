@@ -85,6 +85,9 @@ dbt-plan check --select model1   # 특정 모델만 체크
 | incremental | append_new_columns | `ADD COLUMN`만 | SAFE |
 | incremental | sync_all_columns | `ADD + DROP COLUMN` | 컬럼 삭제 시 DESTRUCTIVE |
 | 전체 | (모델 삭제) | MODEL REMOVED | DESTRUCTIVE |
+| 전체 | (알 수 없는 osc) | `UNKNOWN on_schema_change` | WARNING |
+| materialized_view / 커스텀 | (미설정) | `UNKNOWN materialization` | WARNING |
+| materialized_view / 커스텀 | (osc 설정됨) | incremental 규칙을 따름 | osc에 따름 |
 
 ## 지원 환경
 
