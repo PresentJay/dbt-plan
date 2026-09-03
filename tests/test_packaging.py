@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import re
 import subprocess
 import sys
@@ -289,6 +290,37 @@ class TestCLIEntryPoint:
         )
         assert result.returncode == 0, f"--help exited with {result.returncode}"
         assert "dbt-plan" in result.stdout.lower() or "dbt_plan" in result.stdout.lower()
+
+    def test_cli_help_flag_uses_utf8_when_stdout_defaults_to_cp1252(self) -> None:
+        """Windows' legacy console encoding must not crash help text containing arrows."""
+        env = {**os.environ, "PYTHONIOENCODING": "cp1252"}
+        result = subprocess.run(
+            [sys.executable, "-m", "dbt_plan.cli", "--help"],
+            capture_output=True,
+            env=env,
+            cwd=str(ROOT),
+        )
+        assert result.returncode == 0, result.stderr.decode("utf-8", errors="replace")
+        assert "dbt-plan" in result.stdout.decode("utf-8").lower()
+
+    def test_github_format_output_uses_utf8_when_stdout_defaults_to_cp1252(self) -> None:
+        """Preserve intentional GitHub Markdown icons rather than crashing or flattening them."""
+        code = """
+from dbt_plan.cli import _configure_output_streams
+from dbt_plan.formatter import CheckResult, format_github
+from dbt_plan.predictor import DDLPrediction, Safety
+_configure_output_streams()
+print(format_github(CheckResult([DDLPrediction('orders', 'table', None, Safety.DESTRUCTIVE)])))
+"""
+        env = {**os.environ, "PYTHONIOENCODING": "cp1252"}
+        result = subprocess.run(
+            [sys.executable, "-c", code],
+            capture_output=True,
+            env=env,
+            cwd=str(ROOT),
+        )
+        assert result.returncode == 0, result.stderr.decode("utf-8", errors="replace")
+        assert "🔴" in result.stdout.decode("utf-8")
 
 
 # ---------------------------------------------------------------------------

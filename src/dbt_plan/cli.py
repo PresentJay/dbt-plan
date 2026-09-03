@@ -11,6 +11,19 @@ from pathlib import Path
 from dbt_plan.formatter import CheckResult, format_github, format_json, format_text
 
 
+def _configure_output_streams() -> None:
+    """Write CLI output as UTF-8 even when Windows defaults to a legacy code page.
+
+    The GitHub formatter intentionally emits Unicode status icons and argparse's
+    help includes arrows. Leaving the streams at cp1252 makes either path crash
+    before the command can report its result.
+    """
+    for stream in (sys.stdout, sys.stderr):
+        reconfigure = getattr(stream, "reconfigure", None)
+        if reconfigure is not None:
+            reconfigure(encoding="utf-8", errors="replace")
+
+
 def _find_compiled_dir(target_dir: Path) -> Path | None:
     """Find compiled SQL models directory inside target/.
 
@@ -1221,6 +1234,7 @@ def _do_run(args: argparse.Namespace) -> int:
 
 
 def main() -> None:
+    _configure_output_streams()
     from dbt_plan import __version__
 
     parser = argparse.ArgumentParser(
