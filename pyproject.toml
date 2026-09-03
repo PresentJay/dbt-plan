@@ -1,6 +1,6 @@
 [project]
 name = "dbt-plan"
-version = "0.10.0"
+version = "0.10.1"
 description = "Static analysis tool that warns about risky DDL changes before dbt run"
 readme = "README.md"
 requires-python = ">=3.10"
