@@ -85,6 +85,8 @@ make test
 | incremental | sync_all_columns | ADD + DROP COLUMN | DESTRUCTIVE if removed |
 | any | (model removed) | MODEL REMOVED | DESTRUCTIVE |
 | any | (unknown osc) | UNKNOWN on_schema_change | WARNING |
+| materialized_view / custom | (no osc set) | UNKNOWN materialization | WARNING |
+| materialized_view / custom | (osc set) | follows incremental rules | per osc |
 
 ## Testing
 

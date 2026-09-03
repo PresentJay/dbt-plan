@@ -36,6 +36,11 @@ Safety is decided by materialization crossed with `on_schema_change`:
 - snapshot, any setting: review required — warning
 - model removed, any setting: destructive
 - unrecognized `on_schema_change`: warning
+- materialized_view, a dynamic table or a custom materialization with no
+  `on_schema_change` set: warning. dbt-plan has no rule for the DDL these emit, and
+  materialized views are driven by `on_configuration_change` rather than
+  `on_schema_change`. Setting `on_schema_change` explicitly is taken as an assertion
+  about how that materialization behaves and the incremental rules above then apply.
 
 When a column cannot be extracted, dbt-plan reports "review required" rather than "safe".
 Being noisy is acceptable; missing a destructive change is not.
