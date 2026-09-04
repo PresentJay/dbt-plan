@@ -1,4 +1,0 @@
-User-agent: *
-Allow: /
-
-Sitemap: https://presentjay.github.io/dbt-plan/sitemap.xml
