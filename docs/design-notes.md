@@ -116,7 +116,7 @@ skips the restore, including the `sys.exit()` calls that several helpers in
 |-------------|-----|
 | `dbt run` simulation | Runtime behaviour; the tool is static analysis |
 | INFORMATION_SCHEMA queries | Needs a warehouse connection |
-| Column type / `ALTER TYPE` detection | Compiled SQL only shows types where an explicit CAST exists, and "did it change" needs the warehouse's current type |
+| Type changes on columns with no explicit `CAST` | The type is whatever the warehouse assigned, so seeing a change would mean asking it. Columns cast explicitly on *both* sides are compared since 0.8.0 — that comparison is compiled SQL against compiled SQL, which needs no connection |
 | `seed` / `source` change detection | Neither produces compiled SQL to diff |
 | `pre_hook` / `post_hook` DDL analysis | Arbitrary SQL in arbitrary places; high complexity, low signal |
 | `full_refresh` judgment | A runtime flag, decided outside the files |
