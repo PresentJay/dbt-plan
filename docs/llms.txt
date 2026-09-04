@@ -78,3 +78,4 @@ expose those credentials to code from any fork.
 - [Homepage](https://presentjay.github.io/dbt-plan/)
 - [Source](https://github.com/PresentJay/dbt-plan)
 - [PyPI](https://pypi.org/project/dbt-plan/)
+- [Sitemap](https://presentjay.github.io/dbt-plan/sitemap.xml)

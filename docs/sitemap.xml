@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
+  <url>
+    <loc>https://presentjay.github.io/dbt-plan/</loc>
+    <lastmod>2026-09-04</lastmod>
+    <priority>1.0</priority>
+  </url>
+  <url>
+    <loc>https://presentjay.github.io/dbt-plan/use-cases.html</loc>
+    <lastmod>2026-09-04</lastmod>
+    <priority>0.8</priority>
+  </url>
+  <url>
+    <loc>https://presentjay.github.io/dbt-plan/ci-integration.html</loc>
+    <lastmod>2026-09-04</lastmod>
+    <priority>0.8</priority>
+  </url>
+  <url>
+    <loc>https://presentjay.github.io/dbt-plan/configuration.html</loc>
+    <lastmod>2026-09-04</lastmod>
+    <priority>0.7</priority>
+  </url>
+  <url>
+    <loc>https://presentjay.github.io/dbt-plan/design-notes.html</loc>
+    <lastmod>2026-09-04</lastmod>
+    <priority>0.6</priority>
+  </url>
+  <url>
+    <loc>https://presentjay.github.io/dbt-plan/llms.txt</loc>
+    <lastmod>2026-09-04</lastmod>
+    <priority>0.5</priority>
+  </url>
+</urlset>
