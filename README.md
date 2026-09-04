@@ -206,13 +206,9 @@ src/dbt_plan/
 
 ### How to Contribute
 
-**Good first issues:**
-- Add compiled SQL fixtures in `tests/fixtures/` for edge cases (UNION, subqueries, etc.)
-- Improve error messages for common mistakes
-
-**Medium issues:**
-- `ddl-reviewed` label override — escape hatch for intentional destructive changes
-- INFORMATION_SCHEMA integration — query warehouse for SELECT * resolution
+**Where to start:** the [open issues](https://github.com/PresentJay/dbt-plan/issues),
+particularly those labelled [good first issue](https://github.com/PresentJay/dbt-plan/issues?q=is%3Aissue+is%3Aopen+label%3A%22good+first+issue%22).
+Each one says what it is, how it was found, and what has to be decided before code.
 
 **Design decisions:** See [docs/design-notes.md](docs/design-notes.md).
 
