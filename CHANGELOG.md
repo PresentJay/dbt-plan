@@ -7,6 +7,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **A column read two hops away, through a `SELECT *` passthrough, is a broken ref
+  again.** 0.14.0's resolved cascade asked about one relation -- the model that
+  changed -- and a downstream model that reads the column from the passthrough never
+  mentions that model. The resolver said `[]`, which was true and beside the point,
+  and that answer suppressed the text search that had caught it by accident.
+
+  ```
+  stg_orders:  SELECT order_id, customer_id  ->  SELECT order_id
+  mid:         SELECT * FROM stg_orders
+  fct_twohop:  SELECT customer_id FROM mid
+  ```
+
+  Measured on dbt 1.11.7: `dbt build` fails `fct_twohop`; 0.14.0 reported nothing
+  about it. A regression introduced the same day, found by a gap audit, and fixed
+  by checking every downstream model against every model that is losing a column,
+  not only the one that changed.
+
+  That is downstream x lost-models questions, and asking each one by re-qualifying
+  the SQL put a 200-model chain at 38 seconds. Each downstream model is now parsed
+  once and answers for every relation it names -- 0.5s, where 0.14.0 was 0.5s.
+
+- **A model with an `alias:` config is found by its relation.** Compiled SQL names
+  the relation a model writes to, never the model, so the resolved reader looked for
+  a table called `stg_orders` in SQL that says `orders_clean`. It was caught by the
+  text fallback refusing rather than by design; the reader now knows every name a
+  model is known by, from the relation index it already had.
+
+
 ## [0.14.0] - 2026-09-05
 
 ### Added
