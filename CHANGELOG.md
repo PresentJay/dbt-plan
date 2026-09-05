@@ -8,6 +8,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Exposures downstream of a change that is not safe are now named, with their
+  owners.** (#44) An exposure records that something outside the project -- a
+  dashboard, a notebook, a reverse-ETL sync -- reads a model. `find_downstream`
+  walked into them and `build_node_index` dropped them, so the report never
+  mentioned the people who most needed telling:
+
+  ```
+  -- EXPOSURE  orders_dashboard (dashboard) -- owner: Data Team <data@example.com>
+  ```
+
+  An exposure declares its dependencies at model granularity, with no columns in
+  it, so this never claims a dashboard breaks. It is deliberately not a risk and
+  deliberately does not escalate the verdict: an exposure existing does not make
+  a change more dangerous, and inflating the verdict for it would train people to
+  ignore the line. For the same reason it is left off safe verdicts.
+
 - **Unit tests downstream of a dropped column are now reported.** (#43) A dbt unit
   test pins its columns down by hand, in `expect` and in every `given` input, and
   dbt checks each of those against the real relation it stands for:

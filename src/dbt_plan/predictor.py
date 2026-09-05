@@ -68,6 +68,8 @@ class DDLPrediction:
     columns_added: list[str] = field(default_factory=list)
     columns_removed: list[str] = field(default_factory=list)
     downstream_impacts: list[DownstreamImpact] = field(default_factory=list)
+    # Not a finding of its own -- see attach_downstream_exposures.
+    downstream_exposures: list = field(default_factory=list)
 
 
 def predict_ddl(
@@ -580,3 +582,49 @@ def analyze_cascade_impacts(
             updated[i] = replace(pred, safety=cascade_safety, downstream_impacts=impacts)
 
     return updated, downstream_map
+
+
+def attach_downstream_exposures(
+    predictions: list[DDLPrediction],
+    model_node_ids: dict[str, str],
+    all_downstream: dict[str, list[str]],
+    child_map: dict[str, list[str]],
+    exposure_index: dict,
+) -> list[DDLPrediction]:
+    """Name the exposures reading a model whose verdict is not safe.
+
+    An exposure records that something outside the project -- a dashboard, a
+    notebook, a reverse-ETL sync -- reads a model, and it declares that at model
+    granularity. There are no columns in one, so this can never claim a dashboard
+    breaks: only that its owner is downstream of a change that is not safe.
+
+    Deliberately not a risk and deliberately not an escalation. An exposure
+    existing does not make a change more dangerous, and inflating the verdict for
+    it would train people to ignore the line. For the same reason it is left off
+    safe verdicts: a list of dashboards under a green check is noise.
+
+    Exposures hang off every model they depend on as a direct child, so the
+    changed model plus its downstream set covers them with no extra walk.
+    """
+    if not exposure_index:
+        return predictions
+
+    updated = list(predictions)
+    for i, pred in enumerate(updated):
+        if pred.safety == Safety.SAFE:
+            continue
+        node_id = model_node_ids.get(pred.model_name)
+        if not node_id:
+            continue
+
+        found: dict[str, object] = {}
+        for owner_nid in (node_id, *all_downstream.get(node_id, [])):
+            for child in child_map.get(owner_nid) or []:
+                exposure = exposure_index.get(child)
+                if exposure is not None:
+                    found[child] = exposure
+        if found:
+            updated[i] = replace(
+                pred, downstream_exposures=[found[k] for k in sorted(found)]
+            )
+    return updated

@@ -247,3 +247,38 @@ class TestUnitTestsAreReachedByCascade:
         assert "test_stg_orders_shape" not in result.stdout
         assert "not found in manifest" not in result.stdout
         assert result.returncode == 0, result.stdout
+
+
+class TestExposuresAreNamedOnARealProject:
+    """tests/dbt_project declares one exposure, on stg_orders."""
+
+    def test_a_change_that_is_not_safe_names_the_dashboard_and_its_owner(self, dbt_project):
+        _dbt_compile(dbt_project)
+        _dbt_plan(["snapshot", "--project-dir", str(dbt_project)])
+        (dbt_project / "models" / "staging" / "stg_orders.sql").write_text(
+            _STG_ORDERS_WITHOUT_CUSTOMER_ID
+        )
+        _dbt_compile(dbt_project)
+
+        result = _dbt_plan(["check", "--project-dir", str(dbt_project), "--no-color"])
+        assert "EXPOSURE  orders_dashboard (dashboard) -- owner: Data Team" in result.stdout
+
+    def test_a_safe_change_says_nothing_about_it(self, dbt_project):
+        _dbt_compile(dbt_project)
+        _dbt_plan(["snapshot", "--project-dir", str(dbt_project)])
+        (dbt_project / "models" / "staging" / "stg_orders.sql").write_text(
+            """{{ config(materialized='view') }}
+
+SELECT
+    1 AS order_id,
+    'store_001' AS store_id,
+    '2024-01-01' AS order_date,
+    'cust_abc' AS customer_id,
+    'web' AS channel
+"""
+        )
+        _dbt_compile(dbt_project)
+
+        result = _dbt_plan(["check", "--project-dir", str(dbt_project), "--no-color"])
+        assert "SAFE" in result.stdout
+        assert "orders_dashboard" not in result.stdout
