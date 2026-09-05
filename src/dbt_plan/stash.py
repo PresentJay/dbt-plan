@@ -25,6 +25,10 @@ class StashError(RuntimeError):
     """The tree could not be stashed, so no clean baseline is possible."""
 
 
+class CheckoutError(RuntimeError):
+    """The baseline ref could not be checked out, so it cannot be compiled."""
+
+
 @dataclass
 class StashState:
     """Outcome of the borrow. `restore_failed` means the work is still stashed."""
@@ -106,3 +110,78 @@ def clean_worktree(project_dir: Path, *, has_changes: bool) -> Iterator[StashSta
     finally:
         if state.ref is not None:
             state.restore_failed = _restore(project_dir, state.ref)
+
+
+def _current_head(project_dir: Path) -> str | None:
+    """What to come back to: the branch name if on one, otherwise the commit.
+
+    `--short` matters. `git checkout refs/heads/feature` detaches at that commit
+    instead of switching to the branch, so coming back with the full ref name
+    leaves the user on a detached HEAD -- which is the thing this is for avoiding.
+    """
+    branch = _git(project_dir, "symbolic-ref", "--quiet", "--short", "HEAD")
+    if branch.returncode == 0 and branch.stdout.strip():
+        return branch.stdout.strip()
+    commit = _git(project_dir, "rev-parse", "HEAD")
+    return commit.stdout.strip() if commit.returncode == 0 else None
+
+
+def merge_base(project_dir: Path, ref: str) -> str:
+    """Where this branch left `ref`, which is the baseline "before you push" means.
+
+    Comparing against the tip of `ref` instead would fold in everything other
+    people merged while the branch was open, and report their columns as yours.
+    """
+    exists = _git(project_dir, "rev-parse", "--verify", "--quiet", f"{ref}^{{commit}}")
+    if exists.returncode != 0:
+        raise CheckoutError(
+            f"'{ref}' is not a commit in this repository.\n"
+            f"  If it is a remote branch, fetch it first: git fetch origin {ref}"
+        )
+    base = _git(project_dir, "merge-base", "HEAD", ref)
+    if base.returncode != 0 or not base.stdout.strip():
+        raise CheckoutError(
+            f"HEAD and '{ref}' have no common ancestor, so there is no branch point "
+            f"to compare against."
+        )
+    return base.stdout.strip()
+
+
+@contextmanager
+def borrowed_head(project_dir: Path, ref: str | None) -> Iterator[str | None]:
+    """Detach at `ref` for the duration of the block, then put HEAD back.
+
+    Same reasoning as `clean_worktree`, one level up: moving someone's HEAD is
+    the second most valuable thing this tool touches, and the way back has to be
+    structural rather than a line at the end of a function that can be skipped.
+
+    `ref` of None does nothing at all, which is the default `dbt-plan run` path --
+    no checkout, no risk, and the caller needs no branch for it.
+
+    Nest this *inside* `clean_worktree`. The order matters: HEAD is restored
+    before the stash is popped, so the work lands on the tree it came from.
+    """
+    if ref is None:
+        yield None
+        return
+
+    original = _current_head(project_dir)
+    if original is None:
+        raise CheckoutError("could not read HEAD, so there is nothing to come back to")
+
+    checkout = _git(project_dir, "checkout", "--detach", "--quiet", ref)
+    if checkout.returncode != 0:
+        raise CheckoutError(checkout.stderr.strip())
+
+    try:
+        yield ref
+    finally:
+        back = _git(project_dir, "checkout", "--quiet", original)
+        if back.returncode != 0:
+            print(
+                "Error: could not return HEAD to where it was:\n"
+                f"{back.stderr.strip()}\n"
+                f"  You are on a detached HEAD at {ref[:12]}.\n"
+                f"  Recover with: git checkout {original}",
+                file=sys.stderr,
+            )

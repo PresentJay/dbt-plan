@@ -123,6 +123,7 @@ dbt-plan stats             # Analyze project readiness
 dbt-plan ci-setup          # Generate GitHub Actions workflow
 dbt-plan check --format github   # GitHub markdown output
 dbt-plan check --format json     # JSON for CI pipelines
+dbt-plan run --against main           # compare with where this branch left main
 dbt-plan check --select fct_orders    # one model
 dbt-plan check --select fct_orders+   # it and everything downstream
 ```
