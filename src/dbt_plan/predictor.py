@@ -794,9 +794,20 @@ def analyze_cascade_impacts(
         # The text search caught that by accident, matching the name anywhere; the
         # resolved reader only answers about the relation it is asked about, so it
         # has to be asked about each one.
+        # A downstream model that is itself being removed cannot break. Its compiled
+        # SQL is still on disk -- dbt compile never removes it -- so without this it
+        # would be reported as reading a column that is going away, from a model that
+        # is going away with it.
+        removed_models = {
+            name
+            for name, (base, current) in model_cols.items()
+            if base is not None and current is None
+        }
         if lost_by_model:
             patterns = _column_patterns(lost_by_model)
             for ds_node in ds_nodes:
+                if ds_node.name in removed_models:
+                    continue
                 ds_mat = ds_node.materialization
                 ds_osc = ds_node.on_schema_change or "ignore"
                 broken: dict[str, None] = {}

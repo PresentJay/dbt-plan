@@ -8,6 +8,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
+- **A deleted model is reported.** (#127) `dbt compile` never removes what it wrote
+  before, so a model deleted from the source left its compiled SQL in `target/`, the
+  diff found identical bytes on both sides, and `check` said `no model changes
+  detected`. The `MODEL REMOVED -> DESTRUCTIVE` rule that exists for exactly this
+  case could never fire in the normal flow -- only after `dbt clean`.
+
+  The manifest is the authority now: a model the base manifest had and the current
+  one does not is gone, whatever `target/` still contains, and it goes through the
+  removed-model rule and the cascade like any other removal.
+
 - **A column read two hops away, through a `SELECT *` passthrough, is a broken ref
   again.** 0.14.0's resolved cascade asked about one relation -- the model that
   changed -- and a downstream model that reads the column from the passthrough never

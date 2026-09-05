@@ -991,3 +991,43 @@ class TestReadsThatNeverNameTheChangedModel:
         for name in ("fct_alias", "fct_twohop", "fct_cte"):
             assert f"ERROR creating sql table model main.{name}" in build.stdout, build.stdout
         assert "OK created sql view model main.mid" in build.stdout
+
+
+class TestADeletedModelAgainstRealDbt:
+    """dbt compile leaves the deleted model's compiled SQL behind. The manifest does not."""
+
+    @pytest.fixture
+    def leaf_project(self, tmp_path):
+        project = tmp_path / "leaf"
+        (project / "models").mkdir(parents=True)
+        (project / "dbt_project.yml").write_text(
+            "name: leaf\nversion: '1.0.0'\nprofile: leaf_profile\n"
+            'model-paths: ["models"]\ntarget-path: "target"\n'
+        )
+        (project / "profiles.yml").write_text(
+            "leaf_profile:\n  target: dev\n  outputs:\n    dev:\n"
+            '      type: duckdb\n      path: ":memory:"\n'
+        )
+        (project / "models" / "keep.sql").write_text(
+            "{{ config(materialized='table') }}\nSELECT 1 AS a\n"
+        )
+        (project / "models" / "doomed.sql").write_text(
+            "{{ config(materialized='incremental', on_schema_change='sync_all_columns') }}\n"
+            "SELECT 1 AS a, 2 AS b\n"
+        )
+        return project
+
+    def test_the_orphan_is_still_in_target_and_the_model_is_still_reported(self, leaf_project):
+        _dbt_compile(leaf_project)
+        _dbt_plan(["snapshot", "--project-dir", str(leaf_project)])
+        (leaf_project / "models" / "doomed.sql").unlink()
+        _dbt_compile(leaf_project)
+
+        # The measured cause: dbt did not clean up after itself.
+        orphan = leaf_project / "target" / "compiled" / "leaf" / "models" / "doomed.sql"
+        assert orphan.exists(), "dbt started cleaning target/; this test's premise is gone"
+
+        result = _dbt_plan(["check", "--project-dir", str(leaf_project), "--no-color"])
+        assert "DESTRUCTIVE  doomed (incremental, sync_all_columns)" in result.stdout
+        assert "MODEL REMOVED" in result.stdout
+        assert result.returncode == 1, result.stdout
