@@ -680,3 +680,82 @@ class TestStatsAgreesWithCheck:
         )
         assert "SAFE  int_star" in result.stdout
         assert "REVIEW REQUIRED (SELECT *)" not in result.stdout
+
+
+@pytest.fixture
+def renamed_paths_project(tmp_path):
+    """`model-paths` is not `models`, and there are two of them."""
+    project = tmp_path / "renamed_paths"
+    (project / "transformations").mkdir(parents=True)
+    (project / "extras").mkdir()
+    (project / "dbt_project.yml").write_text(
+        "name: renamed_paths\nversion: '1.0.0'\nprofile: renamed_profile\n"
+        'model-paths: ["transformations", "extras"]\ntarget-path: "target"\n'
+    )
+    (project / "profiles.yml").write_text(
+        "renamed_profile:\n  target: dev\n  outputs:\n    dev:\n"
+        '      type: duckdb\n      path: ":memory:"\n'
+    )
+    (project / "transformations" / "stg_orders.sql").write_text(
+        "{{ config(materialized='incremental', on_schema_change='sync_all_columns') }}\n"
+        "SELECT 1 AS order_id, 'cust' AS customer_id\n"
+    )
+    (project / "extras" / "aux_thing.sql").write_text(
+        "{{ config(materialized='incremental', on_schema_change='sync_all_columns') }}\n"
+        "SELECT 1 AS a, 2 AS b\n"
+    )
+    return project
+
+
+class TestARenamedModelPath:
+    def test_snapshot_finds_the_compile_it_used_to_deny(self, renamed_paths_project):
+        _dbt_compile(renamed_paths_project)
+        result = _dbt_plan(["snapshot", "--project-dir", str(renamed_paths_project)])
+        assert result.returncode == 0, result.stderr
+        assert "No compiled SQL found" not in result.stderr
+        base = renamed_paths_project / ".dbt-plan" / "base" / "compiled"
+        assert (base / "transformations" / "stg_orders.sql").exists()
+        assert (base / "extras" / "aux_thing.sql").exists()
+
+    def test_a_drop_in_each_path_is_reported(self, renamed_paths_project):
+        """The second path used to be skipped without a word, which is a missed finding."""
+        _dbt_compile(renamed_paths_project)
+        _dbt_plan(["snapshot", "--project-dir", str(renamed_paths_project)])
+        (renamed_paths_project / "transformations" / "stg_orders.sql").write_text(
+            "{{ config(materialized='incremental', on_schema_change='sync_all_columns') }}\n"
+            "SELECT 1 AS order_id\n"
+        )
+        (renamed_paths_project / "extras" / "aux_thing.sql").write_text(
+            "{{ config(materialized='incremental', on_schema_change='sync_all_columns') }}\n"
+            "SELECT 1 AS a\n"
+        )
+        _dbt_compile(renamed_paths_project)
+
+        result = _dbt_plan(["check", "--project-dir", str(renamed_paths_project), "--no-color"])
+        assert "DROP COLUMN  customer_id" in result.stdout, result.stdout
+        assert "DROP COLUMN  b" in result.stdout
+        assert result.returncode == 1
+
+    def test_a_snapshot_from_before_this_change_still_compares(self, renamed_paths_project):
+        """Pre-0.14 snapshots were copied from inside the model directory.
+
+        Filtering those by the model-path prefix would find nothing and report every
+        model as added -- a wall of false findings rather than an honest "re-snapshot".
+        """
+        import shutil
+
+        _dbt_compile(renamed_paths_project)
+        _dbt_plan(["snapshot", "--project-dir", str(renamed_paths_project)])
+
+        base = renamed_paths_project / ".dbt-plan" / "base" / "compiled"
+        legacy = renamed_paths_project / ".dbt-plan" / "base" / "legacy"
+        legacy.mkdir()
+        for path in ("transformations", "extras"):
+            for sql in (base / path).glob("*.sql"):
+                shutil.copy2(sql, legacy / sql.name)
+        shutil.rmtree(base)
+        legacy.rename(base)
+
+        result = _dbt_plan(["check", "--project-dir", str(renamed_paths_project), "--no-color"])
+        assert "no model changes detected" in result.stdout, result.stdout
+        assert result.returncode == 0

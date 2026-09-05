@@ -41,7 +41,7 @@ class TestPackagesNoLongerBlock:
         _sql(target / "compiled" / "elementary" / "models" / "e.sql")
         _manifest(target, "my_project")
 
-        assert _find_compiled_dir(target) == target / "compiled" / "my_project" / "models"
+        assert _find_compiled_dir(target) == (target / "compiled" / "my_project", ("models",))
 
     def test_it_works_regardless_of_alphabetical_order(self, tmp_path):
         """`elementary` sorts before `my_project`; picking the first would be luck."""
@@ -50,7 +50,7 @@ class TestPackagesNoLongerBlock:
         _sql(target / "compiled" / "zzz_project" / "models" / "z.sql")
         _manifest(target, "zzz_project")
 
-        assert _find_compiled_dir(target) == target / "compiled" / "zzz_project" / "models"
+        assert _find_compiled_dir(target) == (target / "compiled" / "zzz_project", ("models",))
 
     def test_several_packages_are_fine(self, tmp_path):
         target = tmp_path / "target"
@@ -58,7 +58,7 @@ class TestPackagesNoLongerBlock:
             _sql(target / "compiled" / name / "models" / "m.sql")
         _manifest(target, "my_project")
 
-        assert _find_compiled_dir(target) == target / "compiled" / "my_project" / "models"
+        assert _find_compiled_dir(target) == (target / "compiled" / "my_project", ("models",))
 
 
 class TestItStillRefusesWhenItCannotTell:
@@ -112,13 +112,13 @@ class TestTheOrdinaryCaseIsUntouched:
         target = tmp_path / "target"
         _sql(target / "compiled" / "my_project" / "models" / "m.sql")
 
-        assert _find_compiled_dir(target) == target / "compiled" / "my_project" / "models"
+        assert _find_compiled_dir(target) == (target / "compiled" / "my_project", ("models",))
 
     def test_flat_layout_is_unaffected(self, tmp_path):
         target = tmp_path / "target"
         _sql(target / "compiled" / "models" / "m.sql")
 
-        assert _find_compiled_dir(target) == target / "compiled" / "models"
+        assert _find_compiled_dir(target) == (target / "compiled", ("models",))
 
 
 class TestEndToEnd:
