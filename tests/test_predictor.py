@@ -1,5 +1,7 @@
 """Tests for predict_ddl — DDL prediction rules."""
 
+import pytest
+
 from dbt_plan.predictor import Safety, predict_ddl
 
 
@@ -941,3 +943,47 @@ class TestAnalyzeCascadeImpacts:
 
         assert len(updated[0].downstream_impacts) == 1
         assert updated[0].downstream_impacts[0].risk == "broken_ref"
+
+
+class TestSnapshotsCarryTheirColumnDiff:
+    """The verdict stays review -- schema changes on a snapshot are not auto-managed.
+
+    But the diff was computed and then thrown away, so a reviewer was told "review
+    required" without being told what to review, on a change dbt-plan had already
+    worked out.
+    """
+
+    def test_a_dropped_column_is_named(self):
+        prediction = predict_ddl("s", "snapshot", None, ["a", "b"], ["a"])
+        assert prediction.safety == Safety.WARNING
+        assert [(op.operation, op.column) for op in prediction.operations] == [
+            ("REVIEW REQUIRED (snapshot)", None),
+            ("DROP COLUMN", "b"),
+        ]
+        assert prediction.columns_removed == ["b"]
+
+    def test_an_added_column_is_named(self):
+        prediction = predict_ddl("s", "snapshot", None, ["a"], ["a", "b"])
+        assert prediction.columns_added == ["b"]
+        assert ("ADD COLUMN", "b") in [(op.operation, op.column) for op in prediction.operations]
+
+    def test_an_unchanged_column_set_still_warns_with_nothing_attached(self):
+        """A `where` clause edit. The verdict question is deliberately left alone."""
+        prediction = predict_ddl("s", "snapshot", None, ["a", "b"], ["a", "b"])
+        assert prediction.safety == Safety.WARNING
+        assert [op.operation for op in prediction.operations] == ["REVIEW REQUIRED (snapshot)"]
+
+    @pytest.mark.parametrize(
+        "base,current",
+        [(["*"], ["a"]), (["a"], ["*"]), (None, ["a"]), (["a"], None), (["* except(b)"], ["a"])],
+    )
+    def test_a_star_is_never_differenced_into_a_column_name(self, base, current):
+        """`["*"]` stands for columns it could not enumerate. `DROP COLUMN *` is not a finding."""
+        prediction = predict_ddl("s", "snapshot", None, base, current)
+        assert [op.operation for op in prediction.operations] == ["REVIEW REQUIRED (snapshot)"]
+
+    def test_the_same_guard_covers_an_unknown_materialization(self):
+        prediction = predict_ddl("m", "some_custom_thing", None, ["*"], ["a"])
+        assert [op.operation for op in prediction.operations] == [
+            "UNKNOWN materialization: some_custom_thing"
+        ]

@@ -79,6 +79,23 @@ class DDLPrediction:
     downstream_exposures: list = field(default_factory=list)
 
 
+def _column_diff(
+    base_columns: list[str] | None, current_columns: list[str] | None
+) -> tuple[list[str], list[str]]:
+    """(added, removed), or two empty lists when either side is not a column set.
+
+    A `["*"]` or `["* except(...)"]` sentinel stands for columns dbt-plan could not
+    enumerate. Differencing it yields entries like `DROP COLUMN *`, which reads as
+    a finding and is not one.
+    """
+    if not base_columns or not current_columns:
+        return [], []
+    if base_columns[0].startswith("*") or current_columns[0].startswith("*"):
+        return [], []
+    base_set, current_set = set(base_columns), set(current_columns)
+    return sorted(current_set - base_set), sorted(base_set - current_set)
+
+
 def predict_ddl(
     model_name: str,
     materialization: str,
@@ -148,14 +165,23 @@ def predict_ddl(
         )
 
     if materialization == "snapshot":
-        # dbt snapshots use CREATE TABLE IF NOT EXISTS + MERGE
-        # Schema changes are not auto-managed, so warn for review
+        # dbt snapshots use CREATE TABLE IF NOT EXISTS + MERGE. Schema changes are
+        # not auto-managed, so the verdict stays review -- but the column diff is
+        # already computed, and "review required" with nothing attached does not
+        # tell a reviewer what to go and look at.
+        snapshot_added, snapshot_removed = _column_diff(base_columns, current_columns)
         return DDLPrediction(
             model_name=model_name,
             materialization=materialization,
             on_schema_change=on_schema_change,
             safety=Safety.WARNING,
-            operations=[DDLOperation("REVIEW REQUIRED (snapshot)")],
+            operations=[
+                DDLOperation("REVIEW REQUIRED (snapshot)"),
+                *[DDLOperation("ADD COLUMN", col) for col in snapshot_added],
+                *[DDLOperation("DROP COLUMN", col) for col in snapshot_removed],
+            ],
+            columns_added=snapshot_added,
+            columns_removed=snapshot_removed,
         )
 
     if materialization != "incremental" and on_schema_change is None:
@@ -179,10 +205,7 @@ def predict_ddl(
         else:
             reason = f"UNKNOWN materialization: {materialization}"
 
-        base_set = set(base_columns or [])
-        current_set = set(current_columns or [])
-        unknown_added = sorted(current_set - base_set)
-        unknown_removed = sorted(base_set - current_set)
+        unknown_added, unknown_removed = _column_diff(base_columns, current_columns)
         return DDLPrediction(
             model_name=model_name,
             materialization=materialization,

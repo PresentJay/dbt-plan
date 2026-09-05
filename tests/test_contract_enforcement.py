@@ -15,6 +15,8 @@ dbt-plan 0.12.0 read no contract information at all and reported
 
 from __future__ import annotations
 
+import argparse
+
 import pytest
 
 from dbt_plan.manifest import ModelNode, build_node_index
@@ -151,3 +153,81 @@ class TestApplyContract:
     def test_the_original_operations_are_kept_underneath(self):
         updated = apply_contract(_prediction(), _node(), ["order_id"])
         assert DDLOperation("CREATE OR REPLACE TABLE") in updated.operations
+
+
+class TestTheManifestColumnsAreTrustedUnderAContract:
+    """#21 stopped a verdict built from manifest columns being reported SAFE.
+
+    Its reasoning was that `schema.yml` conventionally documents only the columns
+    you test, so the same partial list gets substituted on both sides and the diff
+    comes out zero whether or not the SQL changed. An enforced contract is exactly
+    the case where that does not hold: dbt requires every column to be declared and
+    fails the build otherwise, so the list is the shape dbt checks the SQL against.
+    """
+
+    def _check(self, tmp_path, *, enforced):
+        import json
+
+        from dbt_plan.cli import _do_check
+
+        project = tmp_path / "project"
+        base = project / ".dbt-plan" / "base" / "compiled"
+        current = project / "target" / "compiled" / "p" / "models"
+        base.mkdir(parents=True)
+        current.mkdir(parents=True)
+        # `select *` off a relation with no compiled SQL: the manifest columns are
+        # the only thing that can answer, on both sides.
+        (base / "fct_orders.sql").write_text("SELECT * FROM raw.orders", encoding="utf-8")
+        (current / "fct_orders.sql").write_text(
+            "SELECT * FROM raw.orders WHERE 1 = 1", encoding="utf-8"
+        )
+        manifest = {
+            "metadata": {"project_name": "p"},
+            "nodes": {
+                "model.p.fct_orders": {
+                    "name": "fct_orders",
+                    "path": "fct_orders.sql",
+                    "config": {
+                        "materialized": "incremental",
+                        "on_schema_change": "sync_all_columns",
+                        "contract": {"enforced": enforced},
+                    },
+                    "unrendered_config": {
+                        "materialized": "incremental",
+                        "on_schema_change": "sync_all_columns",
+                    },
+                    "columns": {"order_id": {"data_type": "integer"}},
+                }
+            },
+            "child_map": {},
+        }
+        (project / "target" / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
+        (project / ".dbt-plan" / "base" / "manifest.json").write_text(
+            json.dumps(manifest), encoding="utf-8"
+        )
+
+        args = argparse.Namespace(
+            project_dir=str(project),
+            target_dir="target",
+            base_dir=".dbt-plan/base",
+            manifest=None,
+            format="text",
+            no_color=True,
+            verbose=False,
+            dialect=None,
+            select=None,
+            acknowledge=None,
+        )
+        return _do_check(args)
+
+    def test_without_a_contract_the_clean_bill_is_still_escalated(self, tmp_path, capsys):
+        assert self._check(tmp_path, enforced=False) == 2
+        assert "REVIEW REQUIRED (columns came from the manifest, not the SQL)" in (
+            capsys.readouterr().out
+        )
+
+    def test_with_one_the_declared_columns_are_the_answer(self, tmp_path, capsys):
+        assert self._check(tmp_path, enforced=True) == 0
+        out = capsys.readouterr().out
+        assert "columns came from the manifest" not in out
+        assert "SAFE" in out

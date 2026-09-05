@@ -166,7 +166,8 @@ _SAMPLE_CONFIG = """\
 # Output format: text, github, json (default: text)
 # format: text
 
-# SQL dialect for parsing (default: snowflake)
+# SQL dialect for parsing. Left unset, dbt-plan reads the adapter that produced
+# your manifest, so this is only needed to override that.
 # Supports any sqlglot dialect: snowflake, bigquery, postgres, mysql, etc.
 # dialect: snowflake
 
@@ -221,6 +222,7 @@ def _do_stats(args: argparse.Namespace) -> None:
     from collections import Counter
 
     from dbt_plan.columns import extract_columns
+    from dbt_plan.config import Config
     from dbt_plan.diff import iter_model_sql
     from dbt_plan.manifest import build_node_index, load_manifest
     from dbt_plan.predictor import has_ddl_rule
@@ -278,7 +280,9 @@ def _do_stats(args: argparse.Namespace) -> None:
     unreadable_with_docs = 0
     sql_count = 0
     if compiled_dir:
-        dialect = getattr(args, "dialect", "snowflake") or "snowflake"
+        dialect = getattr(args, "dialect", None) or Config.load(project_dir).resolve_dialect(
+            (manifest.get("metadata") or {}).get("adapter_type")
+        )
         resolver = _make_table_resolver(
             compiled_dir, _build_relation_index(manifest, node_index), dialect
         )
@@ -459,6 +463,59 @@ def _make_table_resolver(compiled_dir, relation_index: dict[str, str], dialect: 
     return resolve
 
 
+def _expand_selection(
+    select_models: str, child_map: dict[str, list[str]], node_index: dict
+) -> tuple[set[str], list[str]]:
+    """Expand `--select` terms into the set of model names to check.
+
+    Supports the three graph operators dbt-plan already holds the graph for:
+
+        fct_orders     that model
+        fct_orders+    it and everything downstream
+        +fct_orders    it and everything upstream
+        +fct_orders+   both
+
+    `fct_orders+` is the one that earns its keep locally: "this model and what it
+    breaks" is the question the report answers anyway.
+
+    dbt's `tag:` and `path:` selectors are not supported. A term using one is
+    returned as unsupported rather than quietly matching nothing -- a `--select`
+    that matches less than the author meant hides findings, which is the failure
+    worth being loud about.
+    """
+    from dbt_plan.manifest import find_downstream, model_key
+
+    selected: set[str] = set()
+    unsupported: list[str] = []
+    parent_map: dict[str, list[str]] | None = None
+
+    for raw in (term.strip() for term in select_models.split(",")):
+        if not raw:
+            continue
+        if ":" in raw or "*" in raw:
+            unsupported.append(raw)
+            continue
+        want_upstream = raw.startswith("+")
+        want_downstream = raw.endswith("+")
+        name = raw.strip("+")
+        if not name:
+            continue
+        selected.add(name)
+        node = node_index.get(name)
+        if node is None or not (want_upstream or want_downstream):
+            continue
+        if want_downstream:
+            selected.update(model_key(nid) for nid in find_downstream(node.node_id, child_map))
+        if want_upstream:
+            if parent_map is None:
+                parent_map = {}
+                for parent, children in child_map.items():
+                    for child in children:
+                        parent_map.setdefault(child, []).append(parent)
+            selected.update(model_key(nid) for nid in find_downstream(node.node_id, parent_map))
+    return selected, unsupported
+
+
 def _do_check(args: argparse.Namespace) -> int:
     """Analyze compiled SQL changes and warn about DDL risks.
 
@@ -498,7 +555,7 @@ def _do_check(args: argparse.Namespace) -> int:
         fmt = config.format
     no_color = getattr(args, "no_color", False) or config.no_color
     verbose = getattr(args, "verbose", False) or config.verbose
-    dialect = getattr(args, "dialect", None) or config.dialect
+    cli_dialect = getattr(args, "dialect", None)
     if ack_flag := getattr(args, "acknowledge", None):
         config.acknowledge_models = [m.strip() for m in ack_flag.split(",") if m.strip()]
 
@@ -506,7 +563,7 @@ def _do_check(args: argparse.Namespace) -> int:
         if verbose:
             print(f"  [verbose] {msg}", file=sys.stderr)
 
-    _log(f"Config: dialect={dialect}, ignore={config.ignore_models}")
+    _log(f"Config: ignore={config.ignore_models}")
 
     target_dir = project_dir / args.target_dir
     base_dir = project_dir / Path(args.base_dir)
@@ -558,21 +615,6 @@ def _do_check(args: argparse.Namespace) -> int:
         print(f"Error: {e}", file=sys.stderr)
         return 2
     _log(f"Found {len(model_diffs)} changed model(s)")
-    # Filter: --select (positive filter, like dbt --select)
-    select_models = getattr(args, "select", None)
-    if select_models:
-        select_set = {s.strip() for s in select_models.split(",") if s.strip()}
-        before_select = len(model_diffs)
-        model_diffs = [d for d in model_diffs if d.model_name in select_set]
-        _log(f"Selected {len(model_diffs)} model(s) matching: {select_set}")
-        if before_select > 0 and not model_diffs:
-            unmatched = select_set - {d.model_name for d in model_diffs}
-            print(
-                f"Warning: --select matched no changed models. "
-                f"Filter: {', '.join(sorted(unmatched))}",
-                file=sys.stderr,
-            )
-
     # Filter ignored models from config
     if config.ignore_models:
         before = len(model_diffs)
@@ -598,6 +640,14 @@ def _do_check(args: argparse.Namespace) -> int:
         except (json.JSONDecodeError, OSError, UnicodeDecodeError):
             pass  # base manifest is best-effort
 
+    # The manifest names the adapter that produced the project, so it decides the
+    # dialect when nobody else did -- a BigQuery project used to be parsed as
+    # Snowflake with no flags passed.
+    dialect = cli_dialect or config.resolve_dialect(
+        (manifest.get("metadata") or {}).get("adapter_type")
+    )
+    _log(f"Dialect: {dialect}")
+
     child_map = manifest.get("child_map") or {}
     if base_manifest:
         # Merge base child_map for removed models
@@ -608,6 +658,27 @@ def _do_check(args: argparse.Namespace) -> int:
     # Build O(1) lookup indexes instead of O(N) scan per model
     node_index = build_node_index(manifest)
     base_node_index = build_node_index(base_manifest) if base_manifest else {}
+
+    # Filter: --select. After the manifest, because `fct_orders+` needs the graph.
+    select_models = getattr(args, "select", None)
+    if select_models:
+        select_set, unsupported = _expand_selection(
+            select_models, child_map, {**base_node_index, **node_index}
+        )
+        if unsupported:
+            print(
+                f"Warning: --select does not support {', '.join(unsupported)}. "
+                f"Only a model name, with an optional leading or trailing '+'.",
+                file=sys.stderr,
+            )
+        before_select = len(model_diffs)
+        model_diffs = [d for d in model_diffs if d.model_name in select_set]
+        _log(f"Selected {len(model_diffs)} of {before_select} changed model(s)")
+        if before_select > 0 and not model_diffs:
+            print(
+                f"Warning: --select matched no changed models. Filter: {select_models}",
+                file=sys.stderr,
+            )
     # `select * from {{ ref(x) }}` names a relation, not a model. These let the
     # column resolver follow that reference into the other model's compiled SQL.
     current_table_columns = _make_table_resolver(
@@ -854,8 +925,14 @@ def _do_check(args: argparse.Namespace) -> int:
         # Only SAFE is escalated; a real finding still stands on its own. table
         # and view are rebuilt by CREATE OR REPLACE whatever the columns are, so
         # escalating those would be noise with nothing behind it.
+        #
+        # An enforced contract is the exception, and the reason is the same one
+        # read the other way: dbt requires every column to be declared and fails
+        # the build otherwise, so the list is not a partial stand-in for the SQL,
+        # it is the shape dbt itself checks the SQL against.
         if (
             used_manifest_columns
+            and not node.contract_enforced
             and prediction.safety == Safety.SAFE
             and node.materialization not in ("table", "view", "ephemeral")
         ):
@@ -1401,7 +1478,10 @@ def main() -> None:
         "-s",
         "--select",
         default=None,
-        help="Only check specific models (comma-separated, like dbt --select)",
+        help=(
+            "Only check these models. Comma-separated, with dbt's graph operators: "
+            "`fct_orders`, `fct_orders+` (and downstream), `+fct_orders` (and upstream)."
+        ),
     )
     check.add_argument(
         "--acknowledge",
@@ -1423,7 +1503,10 @@ def main() -> None:
     check.add_argument(
         "--dialect",
         default=None,
-        help="SQL dialect for parsing (default: snowflake). Supports any sqlglot dialect.",
+        help=(
+            "SQL dialect for parsing. Defaults to the manifest's adapter_type, "
+            "then snowflake. Supports any sqlglot dialect."
+        ),
     )
 
     # init
@@ -1446,7 +1529,10 @@ def main() -> None:
     stats_cmd.add_argument(
         "--dialect",
         default=None,
-        help="SQL dialect for parsing (default: snowflake). Supports any sqlglot dialect.",
+        help=(
+            "SQL dialect for parsing. Defaults to the manifest's adapter_type, "
+            "then snowflake. Supports any sqlglot dialect."
+        ),
     )
 
     # ci-setup
@@ -1495,7 +1581,7 @@ def main() -> None:
     run_cmd.add_argument(
         "--dialect",
         default=None,
-        help="SQL dialect for parsing (default: snowflake)",
+        help="SQL dialect for parsing (default: the manifest's adapter_type)",
     )
     run_cmd.add_argument(
         "--compile-command",

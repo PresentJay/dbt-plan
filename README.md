@@ -123,7 +123,8 @@ dbt-plan stats             # Analyze project readiness
 dbt-plan ci-setup          # Generate GitHub Actions workflow
 dbt-plan check --format github   # GitHub markdown output
 dbt-plan check --format json     # JSON for CI pipelines
-dbt-plan check --select model1   # Check specific model only
+dbt-plan check --select fct_orders    # one model
+dbt-plan check --select fct_orders+   # it and everything downstream
 ```
 
 
@@ -230,7 +231,7 @@ credentials to code from any fork.
 | `compile-command` | `dbt compile` | Runs twice, once per revision. |
 | `base-ref` | the PR base | The revision to compare against. |
 | `project-dir` | `.` | dbt project directory. |
-| `dialect` | `snowflake` | sqlglot dialect for parsing compiled SQL. |
+| `dialect` | the manifest's `adapter_type`, else `snowflake` | sqlglot dialect for parsing compiled SQL. Set this only to override what your project already says. |
 | `version` | latest | Pin a dbt-plan release. |
 | `fail-on` | `destructive` | Or `warning`, or `never`. |
 | `summary` | `true` | Write the report to the job step summary. |
@@ -294,7 +295,7 @@ Each one says what it is, how it was found, and what has to be decided before co
 ## Supported
 
 - dbt-core 1.7+, and the dbt Fusion engine (verified against `2.0.0-preview.218`)
-- Any warehouse: Snowflake, BigQuery, Redshift, Postgres, DuckDB, etc. (`--dialect`)
+- Any warehouse: Snowflake, BigQuery, Redshift, Postgres, DuckDB, etc. — read from the manifest, no flag needed
 - Python 3.10+
 - CTE, UNION ALL, QUALIFY, window functions, VARIANT access
 
