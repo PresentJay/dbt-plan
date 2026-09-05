@@ -69,6 +69,16 @@ class TestStaleSources:
         _touch(project / "dbt_project.yml", offset=30)
         assert _stale_sources(project, manifest, ("models",)) == ["dbt_project.yml"]
 
+    def test_paths_are_posix_on_every_platform(self, tmp_path):
+        """Read next to the manifest's own `original_file_path`, which is posix."""
+        project, manifest = _project(tmp_path, source_dirs=("models",))
+        nested = project / "models" / "staging"
+        nested.mkdir()
+        (nested / "stg.sql").write_text("SELECT 1", encoding="utf-8")
+        _touch(nested / "stg.sql", offset=30)
+
+        assert _stale_sources(project, manifest, ("models",)) == ["models/staging/stg.sql"]
+
     def test_a_directory_that_does_not_exist_is_skipped(self, tmp_path):
         project, manifest = _project(tmp_path)
         assert _stale_sources(project, manifest, ("models", "no_such_dir")) == []

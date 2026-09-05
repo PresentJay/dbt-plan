@@ -111,7 +111,9 @@ def _stale_sources(
         for path in paths:
             try:
                 if path.stat().st_mtime > cutoff:
-                    newer.append(str(path.relative_to(project_dir)))
+                    # Forward slashes on every platform: this is read next to the
+                    # manifest's own `original_file_path`, which is always posix.
+                    newer.append(path.relative_to(project_dir).as_posix())
             except OSError:
                 continue
             if len(newer) >= limit:
