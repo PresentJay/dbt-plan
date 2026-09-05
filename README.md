@@ -88,6 +88,23 @@ The guidance leads with what an agent most often gets wrong: adding a model to
 `ignore_models`, or downgrading `on_schema_change` from `sync_all_columns` to `ignore`,
 silences a real finding without making the change safe.
 
+Or give it the check as an MCP tool:
+
+```bash
+pip install 'dbt-plan[mcp]'
+dbt-plan-mcp                # stdio MCP server exposing `plan` and `snapshot`
+```
+
+`plan` returns the verdict, the per-model operations, and — separately — a `refusals`
+list naming everything dbt-plan declined to judge. That separation is the point: a person
+reading "safe" may still glance at the diff, an agent reading it proceeds, so a
+non-empty `refusals` must never be collapsed into the verdict.
+
+The server is a separate package from the analysis core. The core is offline and
+synchronous by design and `tests/test_invariants.py` fails the build on an `asyncio` or
+network import anywhere inside it; an MCP server is both, so keeping them apart is what
+keeps that guarantee provable.
+
 ### More commands
 
 ```bash

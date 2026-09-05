@@ -170,6 +170,22 @@ class TestSdistSurface:
     them. The sdist contents are a deliberate list, not a default.
     """
 
+    @requires_sdist
+    def test_sdist_ships_both_packages(self) -> None:
+        """Checks the built artifact, not the declaration.
+
+        Adding "/src/dbt_plan_mcp" to the include list is not enough on its own:
+        hatchling selects files through the VCS, so a package that exists on disk
+        but is untracked is silently left out. That combination -- declaration
+        present, files absent -- ships an extra whose dependencies install and
+        whose module then cannot be imported.
+        """
+        names = _sdist_filenames()
+        assert "src/dbt_plan/cli.py" in names
+        assert "src/dbt_plan_mcp/server.py" in names, (
+            "the mcp extra would install its dependencies and then import nothing"
+        )
+
     def test_sdist_include_list_is_declared(self) -> None:
         pyproject = _read_pyproject()
         assert "[tool.hatch.build.targets.sdist]" in pyproject, (
@@ -413,5 +429,40 @@ class TestBuildSystem:
         assert 'build-backend = "hatchling.build"' in pyproject
 
     def test_wheel_packages_config(self) -> None:
+        """Both packages ship. dbt_plan_mcp is separate on purpose.
+
+        The analysis core promises to be offline and synchronous, and
+        tests/test_invariants.py enforces that by failing on an asyncio or network
+        import anywhere under src/dbt_plan/. An MCP server is both, so it lives in
+        its own package -- which is what keeps the guarantee provable instead of
+        depending on nobody adding the wrong import.
+        """
         pyproject = _read_pyproject()
-        assert 'packages = ["src/dbt_plan"]' in pyproject
+        assert 'packages = ["src/dbt_plan", "src/dbt_plan_mcp"]' in pyproject
+
+
+class TestMcpRegistryManifest:
+    """server.json carries a version by hand, which is exactly how things drift here.
+
+    A stale version publishes a registry entry pointing at a release that is not the
+    current one, so an agent installs an older dbt-plan than the manifest advertises.
+    """
+
+    def test_server_json_version_matches_the_package(self) -> None:
+        import json
+
+        manifest = json.loads((ROOT / "server.json").read_text(encoding="utf-8"))
+        version = _pyproject_version()
+
+        assert manifest["version"] == version
+        assert manifest["packages"][0]["version"] == version
+
+    def test_it_points_at_the_pypi_package_this_repo_publishes(self) -> None:
+        import json
+
+        manifest = json.loads((ROOT / "server.json").read_text(encoding="utf-8"))
+        package = manifest["packages"][0]
+
+        assert package["registryType"] == "pypi"
+        assert package["identifier"] == "dbt-plan"
+        assert package["transport"]["type"] == "stdio"
