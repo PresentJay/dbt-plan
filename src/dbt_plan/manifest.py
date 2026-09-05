@@ -182,6 +182,9 @@ class ModelNode:
     # declared, so `columns` above stops being documentation and becomes the shape
     # dbt itself checks the SQL against.
     contract_enforced: bool = False
+    # column name -> declared data_type, for the columns that declare one. Only
+    # meaningful under an enforced contract, where dbt checks the SQL against it.
+    column_types: dict[str, str] = field(default_factory=dict)
 
 
 def load_manifest(manifest_path: str | Path) -> dict:
@@ -415,6 +418,11 @@ def build_node_index(manifest: dict, *, include_packages: bool = False) -> dict[
             # Extract column names from manifest (used as fallback for SELECT *)
             columns=tuple(c.lower() for c in (node.get("columns") or {})),
             contract_enforced=bool((config.get("contract") or {}).get("enforced")),
+            column_types={
+                name.lower(): str(spec["data_type"])
+                for name, spec in (node.get("columns") or {}).items()
+                if isinstance(spec, dict) and spec.get("data_type")
+            },
         )
         for alias in (key, model_key(node_id)):
             index.setdefault(alias, entry)

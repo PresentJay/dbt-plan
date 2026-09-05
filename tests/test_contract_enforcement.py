@@ -16,6 +16,7 @@ dbt-plan 0.12.0 read no contract information at all and reported
 from __future__ import annotations
 
 import argparse
+from dataclasses import replace
 
 import pytest
 
@@ -231,3 +232,98 @@ class TestTheManifestColumnsAreTrustedUnderAContract:
         out = capsys.readouterr().out
         assert "columns came from the manifest" not in out
         assert "SAFE" in out
+
+
+class TestTypeFamilies:
+    """Coarse on purpose, and the line is where dbt's own behaviour puts it.
+
+    Measured against dbt 1.11.7 on duckdb, with a contract declaring `varchar`:
+
+        CAST('c' AS TEXT)      -> builds
+        CAST(5 AS INTEGER)     -> | customer_id | INTEGER | VARCHAR | data type mismatch |
+
+    So `varchar` and `text` must not be a finding and `varchar` and `integer` must.
+    Comparing more finely than that means a per-adapter type table, and a wrong
+    answer about a type is worse than no answer.
+    """
+
+    @pytest.mark.parametrize(
+        "declared,dialect,family",
+        [
+            ("varchar", "snowflake", "text"),
+            ("text", "snowflake", "text"),
+            ("string", "snowflake", "text"),
+            ("string", "bigquery", "text"),
+            ("integer", "snowflake", "number"),
+            ("bigint", "snowflake", "number"),
+            ("numeric(18,2)", "snowflake", "number"),
+            ("int64", "bigquery", "number"),
+            ("date", "snowflake", "date/time"),
+            ("timestamp_ntz", "snowflake", "date/time"),
+            ("boolean", "snowflake", "boolean"),
+        ],
+    )
+    def test_spellings_that_mean_the_same_thing_land_together(self, declared, dialect, family):
+        from dbt_plan.columns import type_family
+
+        assert type_family(declared, dialect=dialect) == family
+
+    @pytest.mark.parametrize("declared", ["variant", "array<int>", "not a type at all", ""])
+    def test_a_type_with_no_obvious_family_is_not_compared(self, declared):
+        """None means "say nothing", which is the only safe answer for a struct."""
+        from dbt_plan.columns import type_family
+
+        assert type_family(declared, dialect="snowflake") is None
+
+
+class TestContractTypeMismatch:
+    def _node(self, types):
+        return ModelNode(
+            node_id="model.p.fct_contract",
+            name="fct_contract",
+            materialization="table",
+            on_schema_change=None,
+            columns=tuple(types),
+            contract_enforced=True,
+            column_types=types,
+        )
+
+    def _apply(self, types, casts):
+        return apply_contract(_prediction(), self._node(types), list(types), casts, "duckdb")
+
+    def test_a_different_family_is_a_violation(self):
+        updated = self._apply({"customer_id": "varchar"}, {"customer_id": "INT"})
+        assert _operations(updated)[0] == (
+            "CONTRACT VIOLATION: customer_id declared varchar, cast as INT -- data type mismatch"
+        )
+        assert updated.safety == Safety.WARNING
+
+    @pytest.mark.parametrize(
+        "declared,cast",
+        [
+            ("varchar", "TEXT"),  # the same type on duckdb and Snowflake
+            ("varchar", "VARCHAR(50)"),  # a length is not a different type
+            ("int", "BIGINT"),  # a widening inside a family, deliberately not reported
+            ("timestamp", "DATE"),  # both temporal
+        ],
+    )
+    def test_the_same_family_is_not(self, declared, cast):
+        updated = self._apply({"c": declared}, {"c": cast})
+        assert "data type mismatch" not in " ".join(_operations(updated))
+
+    def test_a_column_with_no_explicit_cast_says_nothing(self):
+        """Its type is whatever the warehouse infers, which dbt-plan does not ask."""
+        updated = self._apply({"customer_id": "varchar"}, {})
+        assert "data type mismatch" not in " ".join(_operations(updated))
+
+    def test_a_type_neither_side_can_be_placed_is_not_compared(self):
+        updated = self._apply({"payload": "variant"}, {"payload": "INT"})
+        assert "data type mismatch" not in " ".join(_operations(updated))
+
+    def test_types_are_not_read_without_an_enforced_contract(self):
+        node = self._node({"customer_id": "varchar"})
+        unenforced = replace(node, contract_enforced=False)
+        prediction = _prediction()
+        assert apply_contract(prediction, unenforced, ["customer_id"], {"customer_id": "INT"}) is (
+            prediction
+        )

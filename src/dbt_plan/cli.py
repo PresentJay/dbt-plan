@@ -986,7 +986,15 @@ def _do_check(args: argparse.Namespace) -> int:
         # An enforced contract is checked against the SQL, not against the base
         # revision, so a removed model has nothing left to check.
         if diff.status != "removed":
-            prediction = apply_contract(prediction, node, current_cols)
+            # Casts are read only under a contract: everywhere else the declared
+            # type is documentation, and this is the one place dbt enforces it.
+            contract_casts = None
+            if node.contract_enforced and node.column_types:
+                sql = diff.current_sql
+                if sql is None and diff.current_path:
+                    sql = diff.current_path.read_text(encoding="utf-8")
+                contract_casts = extract_cast_types(sql, dialect=dialect) if sql else None
+            prediction = apply_contract(prediction, node, current_cols, contract_casts, dialect)
 
         # Detect materialization or on_schema_change config changes
         if base_node and diff.status == "modified":

@@ -875,3 +875,47 @@ class TestCascadeResolvesRatherThanMatches:
         guilty = _dbt_build(ambiguous_project, "+fct_guilty")
         assert guilty.returncode != 0
         assert 'column "customer_id" not found' in guilty.stdout.lower()
+
+
+class TestAContractTypeMismatch:
+    """dbt's own answer, on both sides of the line this check draws."""
+
+    def _with_cast(self, project, cast):
+        (project / "models" / "fct_contract.sql").write_text(
+            "{{ config(materialized='table', contract={'enforced': True}) }}\n"
+            f"SELECT 1 AS order_id, {cast} AS customer_id\n"
+        )
+
+    def test_a_different_family_is_reported_and_dbt_refuses_it(self, contract_project):
+        self._with_cast(contract_project, "CAST('c' AS VARCHAR)")
+        _dbt_compile(contract_project)
+        _dbt_plan(["snapshot", "--project-dir", str(contract_project)])
+
+        self._with_cast(contract_project, "CAST(5 AS INTEGER)")
+        _dbt_compile(contract_project)
+
+        result = _dbt_plan(
+            ["check", "--project-dir", str(contract_project), "--dialect", "duckdb", "--no-color"]
+        )
+        assert "declared varchar, cast as INT -- data type mismatch" in result.stdout
+        assert result.returncode == 2, result.stdout
+
+        build = _dbt_build(contract_project, "fct_contract")
+        assert build.returncode != 0
+        assert "data type mismatch" in build.stdout
+
+    def test_the_same_family_is_not_reported_and_dbt_builds_it(self, contract_project):
+        """`varchar` and `TEXT` are the same type here. A finding would be a false one."""
+        self._with_cast(contract_project, "CAST('c' AS VARCHAR)")
+        _dbt_compile(contract_project)
+        _dbt_plan(["snapshot", "--project-dir", str(contract_project)])
+
+        self._with_cast(contract_project, "CAST('c' AS TEXT)")
+        _dbt_compile(contract_project)
+
+        result = _dbt_plan(
+            ["check", "--project-dir", str(contract_project), "--dialect", "duckdb", "--no-color"]
+        )
+        assert "data type mismatch" not in result.stdout, result.stdout
+
+        assert _dbt_build(contract_project, "fct_contract").returncode == 0

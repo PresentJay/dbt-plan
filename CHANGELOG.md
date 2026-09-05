@@ -7,6 +7,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **A contract's declared `data_type` is now compared with the SQL's cast.** (#103)
+  0.13.0 shipped contract checking by column name and said types were out of reach,
+  because deciding that `varchar` and `TEXT` differ needs a per-adapter type table.
+
+  They are compared by **family** instead -- text against number against date/time
+  against boolean -- which is the line dbt's own behaviour draws. Measured against
+  dbt 1.11.7 with a contract declaring `varchar`:
+
+  ```
+  CAST('c' AS TEXT)    -> builds
+  CAST(5 AS INTEGER)   -> | customer_id | INTEGER | VARCHAR | data type mismatch |
+  ```
+
+  ```
+  CONTRACT VIOLATION: customer_id declared varchar, cast as INT -- data type mismatch
+  ```
+
+  Deliberately not reported: a widening inside a family (`int` to `bigint`), a type
+  neither side can be placed in one (`variant`, a struct), and a column with no
+  explicit cast -- its type is whatever the warehouse infers, which dbt-plan does
+  not ask. Casts are read only under an enforced contract, since that is the one
+  place dbt checks the declaration against the SQL.
+
+
 ### Changed
 - **Cascade detection resolves the reference instead of searching for the name.**
   `docs/use-cases.md` apologised for this one -- "a column named `id` will match a

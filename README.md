@@ -142,7 +142,7 @@ dbt-plan is a **static analysis warning tool**, not a runtime simulator.
 | Cascade: broken refs, build failures, inherited column loss | `seed` / `source` change detection |
 | Config change detection (materialization, osc) | `pre_hook` / `post_hook` DDL analysis |
 | Unit test fixtures and exposure owners downstream | `seed` / `source` fixtures dbt-plan cannot read |
-| Enforced-contract violations, by column name | Contract `data_type` comparison |
+| Enforced-contract violations: names, and types by family | Contract types compared more finely than family |
 | Explicit `CAST` type changes | Type changes on uncast columns |
 | `SELECT *` resolved through CTEs and `ref()` | `SELECT *` over a source or a raw table |
 | CI exit codes + structured output | `full_refresh` mode judgment |
@@ -184,6 +184,12 @@ Ideas that look useful but contradict what this tool is:
 | materialized_view / custom | (not set by you) | `UNKNOWN materialization` | WARNING |
 | materialized_view / custom | (you set one) | follows the incremental rules | per osc |
 | any | (`contract: {enforced: true}`) | `CONTRACT VIOLATION` | WARNING |
+
+Under a contract, a column's declared `data_type` is compared with its explicit `CAST`,
+by family -- text against number against date/time against boolean. `varchar` and `text`
+are the same family and not a finding; `varchar` and `integer` are a build failure.
+Comparing more finely means a per-adapter type table, and a wrong answer about a type is
+worse than no answer.
 
 "Not set by you" means the author wrote no `on_schema_change`, in the model or in
 `dbt_project.yml`. dbt resolves one for every model regardless, so the resolved value

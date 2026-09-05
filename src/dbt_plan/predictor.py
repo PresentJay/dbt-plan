@@ -896,35 +896,61 @@ def attach_downstream_exposures(
     return updated
 
 
+def _contract_type_mismatches(node, current_casts: dict[str, str], dialect: str) -> list[str]:
+    """Columns whose explicit cast is a different family from the declared type."""
+    from dbt_plan.columns import type_family
+
+    mismatches = []
+    for column, declared in sorted(getattr(node, "column_types", {}).items()):
+        cast = current_casts.get(column)
+        if not cast:
+            continue  # no explicit cast: the type is the warehouse's answer, not ours
+        want, got = type_family(declared, dialect=dialect), type_family(cast, dialect=dialect)
+        if want and got and want != got:
+            mismatches.append(
+                f"{column} declared {declared}, cast as {cast} -- data type mismatch"
+            )
+    return mismatches
+
+
 def apply_contract(
     prediction: DDLPrediction,
     node,
     current_columns: list[str] | None,
+    current_casts: dict[str, str] | None = None,
+    dialect: str = "snowflake",
 ) -> DDLPrediction:
     """Report a change that an enforced contract will reject.
 
-    A contract is the author stating what the model's shape is, which is exactly
-    the kind of claim dbt-plan can check against the SQL without running anything.
-    dbt checks the same thing at build time and refuses to create the relation:
+        A contract is the author stating what the model's shape is, which is exactly
+        the kind of claim dbt-plan can check against the SQL without running anything.
+        dbt checks the same thing at build time and refuses to create the relation:
 
-        This model has an enforced contract that failed.
-        | column_name | definition_type | contract_type | mismatch_reason       |
-        | customer_id |                 | VARCHAR       | missing in definition |
+            This model has an enforced contract that failed.
+            | column_name | definition_type | contract_type | mismatch_reason       |
+            | customer_id |                 | VARCHAR       | missing in definition |
 
-    Under an enforced contract the ordinary safety rules invert. Everywhere else
-    an added column is safe and a `table` is `CREATE OR REPLACE`; here both are a
-    build failure, because dbt requires every column to be declared:
+        Under an enforced contract the ordinary safety rules invert. Everywhere else
+        an added column is safe and a `table` is `CREATE OR REPLACE`; here both are a
+        build failure, because dbt requires every column to be declared:
 
-        | note        | VARCHAR         |               | missing in contract |
+            | note        | VARCHAR         |               | missing in contract |
 
-    Names only, not types. dbt compares its declared `data_type` against what the
-    warehouse reports; dbt-plan sees only what the SQL casts explicitly, and
-    deciding that `varchar` and `TEXT` are the same claim needs a per-adapter type
-    table that does not exist here. A wrong answer on types would be worse than no
-    answer, and the two measured failures above are both name mismatches.
+    Types are compared too, but only by family:
 
-    Never destructive: nothing is dropped, the run stops. Same class as
-    `incremental` + `on_schema_change: fail`.
+            | customer_id | INTEGER         | VARCHAR       | data type mismatch |
+
+        dbt compares its declared `data_type` against what the warehouse reports, and
+        dbt-plan sees only what the SQL casts explicitly. Deciding that `varchar` and
+        `TEXT` are different would need a per-adapter type table -- measured, a contract
+        declaring `varchar` accepts a `TEXT` cast and rejects an `INTEGER` one -- so the
+        comparison is text against number against date/time against boolean, which is
+        the line no adapter disagrees with. A widening inside a family (`int` to
+        `bigint`) is deliberately not reported; a column with no explicit cast says
+        nothing about its type and is not reported either.
+
+        Never destructive: nothing is dropped, the run stops. Same class as
+        `incremental` + `on_schema_change: fail`.
     """
     if not getattr(node, "contract_enforced", False):
         return prediction
@@ -957,6 +983,7 @@ def apply_contract(
     violations = [
         *(f"{col} missing in definition" for col in sorted(declared - produced)),
         *(f"{col} missing in contract" for col in sorted(produced - declared)),
+        *_contract_type_mismatches(node, current_casts or {}, dialect),
     ]
     if not violations:
         return prediction

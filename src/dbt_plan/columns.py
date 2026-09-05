@@ -326,3 +326,36 @@ def columns_read_from(
             if column.table in aliases and not isinstance(column.this, exp.Star)
         }
     )
+
+
+# Coarse on purpose. sqlglot parses `varchar` and `text` to different types, and on
+# Snowflake or duckdb they are the same one -- comparing more finely than this means
+# a per-adapter table, and a wrong answer about a type is worse than no answer.
+# Measured against dbt 1.11.7: a contract declaring `varchar` accepts a `TEXT` cast
+# and rejects an `INTEGER` one. These families are the line no adapter disagrees with.
+_TYPE_FAMILIES = (
+    ("text", "TEXT_TYPES"),
+    ("number", "NUMERIC_TYPES"),
+    ("date/time", "TEMPORAL_TYPES"),
+)
+
+
+def type_family(declared: str, *, dialect: str = "snowflake") -> str | None:
+    """The broad family a declared SQL type belongs to, or None if it has no obvious one.
+
+    `varchar`, `text` and `string` are all "text". `int`, `bigint` and `numeric` are
+    all "number", so a widening within a family is deliberately not reported -- see
+    the module comment above for why that line is where it is.
+    """
+    try:
+        parsed = sqlglot.parse_one(declared, into=exp.DataType, read=dialect)
+    except (sqlglot.errors.ParseError, sqlglot.errors.TokenError, ValueError, RecursionError):
+        return None
+
+    kind = parsed.this
+    if kind == exp.DataType.Type.BOOLEAN:
+        return "boolean"
+    for name, attribute in _TYPE_FAMILIES:
+        if kind in getattr(exp.DataType, attribute):
+            return name
+    return None
