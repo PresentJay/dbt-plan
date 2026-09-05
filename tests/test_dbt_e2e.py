@@ -919,3 +919,75 @@ class TestAContractTypeMismatch:
         assert "data type mismatch" not in result.stdout, result.stdout
 
         assert _dbt_build(contract_project, "fct_contract").returncode == 0
+
+
+@pytest.fixture
+def two_hop_project(tmp_path):
+    """Three ways a downstream model can read a column without naming its source.
+
+    stg_orders writes to `orders_clean` (an alias), `mid` passes it through with a
+    star, and the three fct_ models read customer_id directly, two hops away, and
+    through the style-guide import-CTE pattern. dbt build fails all three.
+    """
+    project = tmp_path / "two_hop"
+    (project / "models").mkdir(parents=True)
+    (project / "dbt_project.yml").write_text(
+        "name: two_hop\nversion: '1.0.0'\nprofile: two_hop_profile\n"
+        'model-paths: ["models"]\ntarget-path: "target"\n'
+    )
+    (project / "profiles.yml").write_text(
+        "two_hop_profile:\n  target: dev\n  outputs:\n    dev:\n"
+        '      type: duckdb\n      path: ":memory:"\n'
+    )
+    m = project / "models"
+    (m / "stg_orders.sql").write_text(
+        "{{ config(materialized='view', alias='orders_clean') }}\n"
+        "SELECT 1 AS order_id, 'c' AS customer_id, 'open' AS status\n"
+    )
+    (m / "mid.sql").write_text(
+        "{{ config(materialized='view') }}\nSELECT * FROM {{ ref('stg_orders') }}\n"
+    )
+    (m / "fct_alias.sql").write_text(
+        "{{ config(materialized='table') }}\nSELECT customer_id FROM {{ ref('stg_orders') }}\n"
+    )
+    (m / "fct_twohop.sql").write_text(
+        "{{ config(materialized='table') }}\nSELECT customer_id FROM {{ ref('mid') }}\n"
+    )
+    (m / "fct_cte.sql").write_text(
+        "{{ config(materialized='table') }}\n"
+        "WITH orders AS (SELECT * FROM {{ ref('stg_orders') }})\n"
+        "SELECT customer_id FROM orders\n"
+    )
+    return project
+
+
+class TestReadsThatNeverNameTheChangedModel:
+    def _drop_customer_id(self, project):
+        (project / "models" / "stg_orders.sql").write_text(
+            "{{ config(materialized='view', alias='orders_clean') }}\n"
+            "SELECT 1 AS order_id, 'open' AS status\n"
+        )
+
+    def test_all_three_readers_are_reported(self, two_hop_project):
+        _dbt_compile(two_hop_project)
+        _dbt_plan(["snapshot", "--project-dir", str(two_hop_project)])
+        self._drop_customer_id(two_hop_project)
+        _dbt_compile(two_hop_project)
+
+        result = _dbt_plan(["check", "--project-dir", str(two_hop_project), "--no-color"])
+        findings = [ln for ln in result.stdout.splitlines() if "BROKEN_REF" in ln]
+        assert len(findings) == 3, result.stdout
+        for name in ("fct_alias", "fct_twohop", "fct_cte"):
+            assert any(name in ln and "customer_id" in ln for ln in findings), result.stdout
+        # The passthrough loses the column without failing; it is not a broken ref.
+        assert not any("mid:" in ln for ln in findings)
+        assert result.returncode == 1
+
+    def test_dbt_agrees_all_three_fail_and_the_passthrough_does_not(self, two_hop_project):
+        _dbt_compile(two_hop_project)
+        self._drop_customer_id(two_hop_project)
+        build = _dbt_build(two_hop_project, "+fct_alias +fct_twohop +fct_cte")
+        assert build.returncode != 0
+        for name in ("fct_alias", "fct_twohop", "fct_cte"):
+            assert f"ERROR creating sql table model main.{name}" in build.stdout, build.stdout
+        assert "OK created sql view model main.mid" in build.stdout
