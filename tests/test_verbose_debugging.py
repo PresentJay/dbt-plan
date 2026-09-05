@@ -170,14 +170,15 @@ class TestKeyDebuggingInfo:
     """Verbose mode shows essential debugging information."""
 
     def test_config_summary(self, tmp_path, capsys):
-        """Verbose shows 'Config: dialect=..., ignore=...'."""
+        """Verbose names the dialect it settled on and the ignore list."""
         project_dir = _destructive_scenario(tmp_path)
         args = _make_args(project_dir, verbose=True, dialect="bigquery")
 
         _do_check(args)
 
         stderr = capsys.readouterr().err
-        assert "Config: dialect=bigquery, ignore=" in stderr
+        assert "Dialect: bigquery" in stderr
+        assert "Config: ignore=" in stderr
 
     def test_per_model_info(self, tmp_path, capsys):
         """Verbose shows 'MODIFIED model_name: materialization, on_schema_change=...'."""
@@ -573,7 +574,7 @@ class TestVerboseEdgeCases:
         captured = capsys.readouterr()
         assert exit_code == 0
         # Config line should still be logged
-        assert "Config: dialect=" in captured.err
+        assert "Dialect: " in captured.err
         # Should show 0 changes
         assert "Found 0 changed model(s)" in captured.err
 
@@ -648,15 +649,15 @@ class TestVerboseEdgeCases:
         stderr = capsys.readouterr().err
         assert "Base manifest: 1 model(s) indexed" in stderr
 
-    def test_verbose_default_dialect_snowflake(self, tmp_path, capsys):
-        """Default dialect is snowflake when not specified."""
+    def test_verbose_dialect_falls_back_when_the_manifest_names_no_adapter(self, tmp_path, capsys):
+        """These fixtures have no `metadata.adapter_type`, so the default stands."""
         project_dir = _destructive_scenario(tmp_path)
         args = _make_args(project_dir, verbose=True, dialect=None)
 
         _do_check(args)
 
         stderr = capsys.readouterr().err
-        assert "Config: dialect=snowflake" in stderr
+        assert "Dialect: snowflake" in stderr
 
     def test_verbose_select_filter(self, tmp_path, capsys):
         """Verbose shows selected model count when --select is used."""
@@ -684,5 +685,5 @@ class TestVerboseEdgeCases:
         _do_check(args)
 
         stderr = capsys.readouterr().err
-        assert "Selected 1 model(s) matching:" in stderr
+        assert "Selected 1 of 2 changed model(s)" in stderr
         assert "model_a" in stderr

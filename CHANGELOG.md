@@ -7,6 +7,50 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **`--select` understands dbt's graph operators.** (#31) It was an exact
+  set-membership test, so `fct_orders+` matched nothing and the run reported "no
+  changed models" for a filter its author believed was broader.
+
+  ```bash
+  dbt-plan check --select fct_orders    # one model
+  dbt-plan check --select fct_orders+   # it and everything downstream
+  dbt-plan check --select +fct_orders   # it and everything upstream
+  ```
+
+  Only these three, because they are the ones dbt-plan already holds the graph
+  for. `tag:` and `path:` are reported on stderr rather than quietly matching
+  nothing -- a `--select` narrower than intended hides findings, which is the
+  failure worth being loud about.
+
+### Changed
+- **The dialect is read from the manifest.** (#27) `--dialect` defaulted to
+  `snowflake`, and `metadata.adapter_type` had been sitting in the file dbt-plan
+  parses on every run. A BigQuery or Postgres project with no flag passed was
+  parsed as Snowflake. Precedence is unchanged where anyone spoke:
+  `--dialect` > `DBT_PLAN_DIALECT` > `.dbt-plan.yml` > the manifest > `snowflake`.
+  An adapter sqlglot has no dialect for falls back rather than failing.
+
+  `dbt-plan stats` was reading neither the config file nor the environment for
+  this; it now resolves it the same way `check` does.
+
+- **An enforced contract makes the manifest columns trustworthy.** (#28) 0.10.0
+  stopped a `SAFE` verdict built from manifest columns being reported as safe,
+  because `schema.yml` conventionally documents only the columns you test -- the
+  same partial list lands on both sides of the diff and cancels out. A contract is
+  the case where that reasoning does not hold: dbt requires every column to be
+  declared and fails the build otherwise. Those models are now analysed rather
+  than escalated to review.
+
+- **Snapshots say what changed.** (#30) Every snapshot got
+  `REVIEW REQUIRED (snapshot)` and nothing else, though the column diff had
+  already been computed and thrown away. The verdict is deliberately unchanged --
+  snapshot schema changes are not auto-managed, and the `dbt_valid_from` columns
+  are invisible to a compiled-SQL diff -- but the report now names the columns.
+  Along the way, a `SELECT *` on either side is no longer differenced into
+  `DROP COLUMN *`, which affected the unknown-materialization report too.
+
+
 ### Fixed
 - **The guard against materializations dbt-plan has no rule for now actually fires.**
   (#91) This closes a false all-clear that has been live since 0.11.0 added the

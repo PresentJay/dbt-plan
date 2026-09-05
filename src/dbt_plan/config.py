@@ -14,6 +14,32 @@ from pathlib import Path
 # This avoids adding runtime dependencies per project rules
 
 
+DEFAULT_DIALECT = "snowflake"
+
+# dbt adapter names are mostly sqlglot dialect names already, so only the ones
+# that genuinely differ are listed. Anything sqlglot does not know falls back to
+# the default rather than raising -- vertica and firebolt have no dialect, and a
+# project using them should still get a report.
+_ADAPTER_ALIASES = {
+    "sqlserver": "tsql",
+    "synapse": "tsql",
+    "glue": "spark",
+    "spark_session": "spark",
+}
+
+
+def sqlglot_dialect_for_adapter(adapter_type: str | None) -> str | None:
+    """The sqlglot dialect matching a dbt adapter, or None if there is not one."""
+    name = (adapter_type or "").strip().lower()
+    if not name:
+        return None
+    name = _ADAPTER_ALIASES.get(name, name)
+
+    from sqlglot.dialects import Dialects
+
+    return name if name in {d.value for d in Dialects} else None
+
+
 @dataclass
 class Config:
     """Resolved dbt-plan configuration."""
@@ -27,10 +53,25 @@ class Config:
     format: str = "text"
     no_color: bool = False
     verbose: bool = False
-    dialect: str = "snowflake"
+    dialect: str = DEFAULT_DIALECT
+    # Whether a human chose that dialect. "snowflake" is both the fallback and a
+    # real answer, so without this the manifest could never override the default.
+    dialect_explicit: bool = False
     compile_command: str = (
         "dbt compile"  # command to compile dbt project (e.g., "uv run dbt compile")
     )
+
+    def resolve_dialect(self, adapter_type: str | None) -> str:
+        """The dialect to parse with, once the project itself has had its say.
+
+        Precedence matches everything else here -- CLI, env, file, project,
+        default -- and `self.dialect` already carries the env and file layers.
+        The manifest's `adapter_type` only speaks when no human did, which is why
+        a BigQuery project used to be parsed as Snowflake with no flags passed.
+        """
+        if self.dialect_explicit:
+            return self.dialect
+        return sqlglot_dialect_for_adapter(adapter_type) or self.dialect
 
     @classmethod
     def load(cls, project_dir: str | Path = ".") -> Config:
@@ -156,6 +197,7 @@ class Config:
                     self._warn_config(project_dir, line_number, f"cannot understand {key}")
             elif key == "dialect":
                 # Only allow alphanumeric dialect names (sqlglot dialect identifiers)
+                self.dialect_explicit = True
                 if value.isalnum():
                     self.dialect = self._unquote_scalar(value)
                 else:
@@ -225,6 +267,7 @@ class Config:
         if dialect := os.environ.get("DBT_PLAN_DIALECT"):
             if dialect.isalnum():
                 self.dialect = dialect
+                self.dialect_explicit = True
         if ignore := os.environ.get("DBT_PLAN_IGNORE_MODELS"):
             self.ignore_models = [m.strip() for m in ignore.split(",") if m.strip()]
         if ack := os.environ.get("DBT_PLAN_ACKNOWLEDGE"):
