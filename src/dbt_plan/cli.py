@@ -529,6 +529,7 @@ def _make_reference_reader(
     node_index: dict,
     table_columns,
     dialect: str,
+    relation_index: dict[str, str] | None = None,
 ):
     """(downstream model, changed model) → the columns the first reads from the second.
 
@@ -542,13 +543,25 @@ def _make_reference_reader(
     side; against the current schema the reference is already unresolvable, which
     would refuse and hand the true finding back to the text search.
 
+    A model with an `alias:` config writes to a relation that is not its name, and
+    compiled SQL contains only the relation. So every name a model is known by --
+    from the relation index, which already maps relations to model keys -- goes into
+    the schema and into the question. Matching on the model name alone answered
+    "does not read it" for a model that read nothing else.
+
     Both the schema and each answer are built once and cached, because a change
     touching many models asks about the same downstream SQL repeatedly.
     """
-    from dbt_plan.columns import columns_read_from
+    from dbt_plan.columns import columns_read_by_relation
 
     schema: dict[str, dict[str, str]] = {}
-    answers: dict[tuple[str, str], list[str] | None] = {}
+    # One parse per downstream model, cached, answering for every relation it names.
+    parsed: dict[str, dict[str, list[str]] | None] = {}
+
+    names_for: dict[str, set[str]] = {name: {name.lower()} for name in node_index}
+    for relation, key in (relation_index or {}).items():
+        if key in names_for:
+            names_for[key].add(relation.rsplit(".", 1)[-1].lower())
 
     def build_schema() -> dict[str, dict[str, str]]:
         if schema:
@@ -557,24 +570,41 @@ def _make_reference_reader(
             columns = table_columns(name.lower())
             if columns:
                 # sqlglot only needs the names; the types are never compared here.
-                schema[name] = dict.fromkeys(columns, "UNKNOWN")
+                for known_as in names_for.get(name, {name}):
+                    schema[known_as] = dict.fromkeys(columns, "UNKNOWN")
         return schema
 
-    def read(downstream: str, changed: str) -> list[str] | None:
-        key = (downstream, changed)
-        if key in answers:
-            return answers[key]
+    def reads_of(downstream: str) -> dict[str, list[str]] | None:
+        if downstream in parsed:
+            return parsed[downstream]
         path = compiled_sql_index.get(downstream)
         answer = None
-        if path is not None and changed in build_schema():
+        if path is not None:
             try:
-                answer = columns_read_from(
-                    path.read_text(encoding="utf-8"), changed, schema, dialect=dialect
+                answer = columns_read_by_relation(
+                    path.read_text(encoding="utf-8"), build_schema(), dialect=dialect
                 )
             except (OSError, UnicodeDecodeError):
                 answer = None
-        answers[key] = answer
+        parsed[downstream] = answer
         return answer
+
+    def read(downstream: str, changed: str) -> list[str] | None:
+        # Only answer when the changed model's columns are in the schema: without
+        # them a bare column could be attributed elsewhere, and `[]` would read as
+        # "does not use it" -- a false all-clear rather than a false warning.
+        if changed.lower() not in build_schema():
+            return None
+        by_relation = reads_of(downstream)
+        if by_relation is None:
+            return None
+        return sorted(
+            {
+                col
+                for name in names_for.get(changed, {changed})
+                for col in by_relation.get(name, [])
+            }
+        )
 
     return read
 
@@ -1168,7 +1198,11 @@ def _do_check(args: argparse.Namespace) -> int:
         base_columns_of=base_table_columns,
         current_columns_of=current_table_columns,
         columns_read_of=_make_reference_reader(
-            compiled_sql_index, node_index, base_table_columns, dialect
+            compiled_sql_index,
+            node_index,
+            base_table_columns,
+            dialect,
+            _build_relation_index(base_manifest or manifest, base_node_index or node_index),
         ),
     )
     predictions = attach_downstream_exposures(
