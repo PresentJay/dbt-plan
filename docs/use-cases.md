@@ -278,13 +278,19 @@ the tool working as intended; see [design notes](design-notes.md).
 **It says nothing about data.** A change can be perfectly safe by DDL and still
 be catastrophically wrong. dbt-plan will pass it.
 
-**It cannot tell whether `target/` is current.** If `dbt compile` fails, the
-compiled SQL dbt-plan reads is whatever was there before, and an empty diff reads
-as "nothing changed". Measured on jaffle_shop: drop a column, break the parse,
-`dbt compile` exits 2, and `dbt-plan check` reports `no model changes detected` and
-exits 0. Chain the two commands -- `dbt compile && dbt-plan check` -- or use
-`dbt-plan run`, which compiles and stops on a failure. Tracked in
-[#106](https://github.com/PresentJay/dbt-plan/issues/106).
+**It reads `target/`, so a failed compile is a stale answer.** If `dbt compile`
+fails, the compiled SQL is whatever was there before and the diff comes out empty.
+dbt-plan now says so rather than reporting a clean run:
+
+```
+WARNING: target/ may be out of date -- models/staging/stg_orders.sql is newer than
+the manifest. Recompile, or this report describes code you no longer have.
+```
+
+That is a source mtime against the manifest's, so it catches an edit that was never
+compiled and it does not catch a file **deleted** since the compile -- a deletion
+leaves no mtime behind. Chain the commands (`dbt compile && dbt-plan check`) or use
+`dbt-plan run`, which compiles and stops on a failure.
 
 For a genuine false positive you have accepted, `--acknowledge` keeps it in the
 report while letting the build through; `ignore_models` hides it entirely.

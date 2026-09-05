@@ -108,7 +108,14 @@ class TestLoadManifest:
         }
         manifest_path.write_text(json.dumps(data))
         result = load_manifest(str(manifest_path))
-        assert set(result.keys()) == {"nodes", "child_map", "metadata", "unit_tests", "exposures"}
+        assert set(result.keys()) == {
+            "nodes",
+            "child_map",
+            "metadata",
+            "unit_tests",
+            "exposures",
+            "source_dirs",
+        }
         assert "macros" not in result
         assert "sources" not in result
         assert "docs" not in result

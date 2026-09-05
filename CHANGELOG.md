@@ -7,6 +7,41 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **A failed `dbt compile` is no longer reported as a clean run.** (#106) dbt-plan
+  reads `target/`, and nothing in `target/` says whether it is current. Measured on
+  jaffle_shop:
+
+  ```
+  $ dbt compile          # exit 2, nothing recompiled
+  $ dbt-plan check
+  dbt-plan -- no model changes detected
+  exit=0
+  ```
+
+  The column really was gone. Not a rule getting the wrong answer -- every rule
+  answering about code the user no longer had.
+
+  A source file newer than the manifest that claims to describe it is the signal,
+  and it costs one `stat` per file. The directories to look in come from the
+  manifest's own `original_file_path` values, so `macro-paths` and `test-paths` are
+  covered wherever they are, and package files are left out -- their mtimes move
+  when `dbt deps` runs, not when anyone edits.
+
+  ```
+  WARNING: target/ may be out of date -- models/staging/stg_orders.sql is newer than
+  the manifest. Recompile, or this report describes code you no longer have.
+  ```
+
+  It survives an otherwise empty report, because an empty diff is exactly what a
+  failed compile produces, and it drives the exit code for the same reason. `--format
+  json` gains a `stale_sources` key.
+
+  One direction only: a `git checkout` moves mtimes without changing content, and
+  reports a `target/` that really is stale. A file **deleted** since the compile is
+  not caught -- a deletion leaves no mtime behind.
+
+
 ### Added
 - **`dbt-plan run --against main`.** (#114) The baseline was HEAD of the current
   branch, so a change you had already committed was not in the comparison:
