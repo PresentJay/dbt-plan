@@ -178,9 +178,14 @@ Ideas that look useful but contradict what this tool is:
 | incremental | sync_all_columns | `ADD + DROP COLUMN` | DESTRUCTIVE if columns removed |
 | any | (model removed) | `MODEL REMOVED` | DESTRUCTIVE |
 | any | (unknown osc) | `UNKNOWN on_schema_change` | WARNING |
-| materialized_view / custom | (none set) | `UNKNOWN materialization` | WARNING |
-| materialized_view / custom | (osc set) | follows the incremental rules | per osc |
+| materialized_view / custom | (not set by you) | `UNKNOWN materialization` | WARNING |
+| materialized_view / custom | (you set one) | follows the incremental rules | per osc |
 | any | (`contract: {enforced: true}`) | `CONTRACT VIOLATION` | WARNING |
+
+"Not set by you" means the author wrote no `on_schema_change`, in the model or in
+`dbt_project.yml`. dbt resolves one for every model regardless, so the resolved value
+asserts nothing; an explicit setting is a claim about how that materialization behaves
+and is honoured. dbt-plan reads `unrendered_config` to tell them apart.
 
 An enforced contract inverts the rules above: dbt requires every column to be declared,
 so a column added to the SQL fails the build just as a removed one does. Names only —

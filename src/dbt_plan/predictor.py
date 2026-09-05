@@ -606,6 +606,26 @@ def _data_test_impacts(
     return impacts
 
 
+def has_ddl_rule(materialization: str, on_schema_change: str | None) -> bool:
+    """Whether predict_ddl has a rule for this pair, or only ever defers to review.
+
+    Derived by asking predict_ddl about a canned single-column removal rather than
+    restating the rules table, so the two cannot drift apart. `dbt-plan stats` used
+    to restate it, got `append_new_columns` wrong, and never learned that a
+    materialization with no `on_schema_change` had become a warning.
+    """
+    prediction = predict_ddl(
+        model_name="",
+        materialization=materialization,
+        on_schema_change=on_schema_change,
+        base_columns=["a", "b"],
+        current_columns=["a"],
+    )
+    return not any(
+        op.operation.startswith(("REVIEW REQUIRED", "UNKNOWN")) for op in prediction.operations
+    )
+
+
 def analyze_cascade_impacts(
     predictions: list[DDLPrediction],
     model_node_ids: dict[str, str],

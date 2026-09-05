@@ -72,6 +72,8 @@ make test
 - SELECT \* → ["*"] 반환 (manifest column fallback 지원)
 - Multi-dialect 지원 via --dialect (기본값: snowflake)
 - `enabled: false` 모델은 인덱싱에서 제외
+- `on_schema_change`은 `unrendered_config`에서만 읽는다 — dbt가 모든 모델에 기본값을 채우므로
+  resolved config는 사용자의 주장이 아니다
 
 ## DDL Prediction Rules
 
@@ -87,6 +89,7 @@ make test
 | incremental | sync_all_columns | ADD + DROP COLUMN | DESTRUCTIVE if removed |
 | any | (model removed) | MODEL REMOVED | DESTRUCTIVE |
 | any | (unknown osc) | UNKNOWN on_schema_change | WARNING |
+| materialized_view/custom | (사용자가 안 씀) | UNKNOWN materialization | WARNING |
 | any | (contract enforced) | CONTRACT VIOLATION (이름 불일치, 추가/삭제 양쪽) | WARNING |
 | materialized_view / custom | (no osc set) | UNKNOWN materialization | WARNING |
 | materialized_view / custom | (osc set) | follows incremental rules | per osc |

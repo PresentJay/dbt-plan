@@ -596,3 +596,87 @@ class TestVersionedModelsAreAnalysed:
         result = _dbt_plan(["check", "--project-dir", str(versioned_project), "--no-color"])
         assert result.returncode == 0, result.stdout
         assert "no model changes detected" in result.stdout
+
+
+@pytest.fixture
+def unruled_project(tmp_path):
+    """A materialized view and a `SELECT *` that resolves through `ref()`.
+
+    Both are cases where the resolved manifest looks ordinary and is not: dbt fills
+    in `on_schema_change: ignore` for the first, and the second reads as `*` until
+    the DAG is followed.
+    """
+    project = tmp_path / "unruled_project"
+    (project / "models").mkdir(parents=True)
+    (project / "dbt_project.yml").write_text(
+        "name: unruled_project\nversion: '1.0.0'\nprofile: unruled_profile\n"
+        'model-paths: ["models"]\ntarget-path: "target"\n'
+    )
+    (project / "profiles.yml").write_text(
+        "unruled_profile:\n  target: dev\n  outputs:\n    dev:\n"
+        '      type: duckdb\n      path: ":memory:"\n'
+    )
+    (project / "models" / "stg_base.sql").write_text(
+        "{{ config(materialized='view') }}\nSELECT 1 AS order_id, 10.0 AS amount\n"
+    )
+    (project / "models" / "mv_thing.sql").write_text(
+        "{{ config(materialized='materialized_view') }}\n"
+        "SELECT order_id FROM {{ ref('stg_base') }}\n"
+    )
+    (project / "models" / "int_star.sql").write_text(
+        "{{ config(materialized='incremental', on_schema_change='sync_all_columns') }}\n"
+        "SELECT * FROM {{ ref('stg_base') }}\n"
+    )
+    return project
+
+
+class TestAMaterializationWithNoRule:
+    def test_a_materialized_view_losing_a_column_is_not_reported_safe(self, unruled_project):
+        """dbt resolves `on_schema_change: ignore` for it, which asserts nothing."""
+        _dbt_compile(unruled_project)
+        _dbt_plan(["snapshot", "--project-dir", str(unruled_project)])
+        (unruled_project / "models" / "mv_thing.sql").write_text(
+            "{{ config(materialized='materialized_view') }}\n"
+            "SELECT 1 AS other_col FROM {{ ref('stg_base') }}\n"
+        )
+        _dbt_compile(unruled_project)
+
+        result = _dbt_plan(
+            ["check", "--project-dir", str(unruled_project), "--dialect", "duckdb", "--no-color"]
+        )
+        assert "NO DDL" not in result.stdout, result.stdout
+        assert "REVIEW REQUIRED (materialized_view is driven by" in result.stdout
+        assert "DROP COLUMN  order_id" in result.stdout
+        assert result.returncode == 2, result.stdout
+
+
+class TestStatsAgreesWithCheck:
+    def test_a_star_check_can_read_is_not_counted_as_unreadable(self, unruled_project):
+        """`stats` used to run the extraction without the resolver `check` passes."""
+        _dbt_compile(unruled_project)
+
+        stats = _dbt_plan(["stats", "--project-dir", str(unruled_project), "--dialect", "duckdb"])
+        assert "SELECT * usage: 1/3 models (33%)" in stats.stdout
+        assert "Columns readable: 3/3 compiled model(s)" in stats.stdout
+        assert "SELECT * resolved through ref() or a CTE: 1" in stats.stdout
+        assert "add column docs to resolve" not in stats.stdout
+
+        # And the count of models with no rule names the materialized view.
+        assert "DDL rules: 2/3 model(s)" in stats.stdout
+        assert "materialized_view (no on_schema_change)" in stats.stdout
+
+    def test_check_really_does_read_that_star(self, unruled_project):
+        """The half stats was contradicting."""
+        _dbt_compile(unruled_project)
+        _dbt_plan(["snapshot", "--project-dir", str(unruled_project)])
+        (unruled_project / "models" / "int_star.sql").write_text(
+            "{{ config(materialized='incremental', on_schema_change='sync_all_columns') }}\n"
+            "-- touched\nSELECT * FROM {{ ref('stg_base') }}\n"
+        )
+        _dbt_compile(unruled_project)
+
+        result = _dbt_plan(
+            ["check", "--project-dir", str(unruled_project), "--dialect", "duckdb", "--no-color"]
+        )
+        assert "SAFE  int_star" in result.stdout
+        assert "REVIEW REQUIRED (SELECT *)" not in result.stdout

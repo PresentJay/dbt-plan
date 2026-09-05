@@ -222,7 +222,8 @@ def _do_stats(args: argparse.Namespace) -> None:
 
     from dbt_plan.columns import extract_columns
     from dbt_plan.diff import iter_model_sql
-    from dbt_plan.manifest import load_manifest
+    from dbt_plan.manifest import build_node_index, load_manifest
+    from dbt_plan.predictor import has_ddl_rule
 
     project_dir = Path(args.project_dir)
     target_dir = project_dir / args.target_dir
@@ -242,38 +243,60 @@ def _do_stats(args: argparse.Namespace) -> None:
         print(f"Error: Could not parse manifest.json: {e}", file=sys.stderr)
         sys.exit(2)
 
-    # Count materializations and on_schema_change
+    # Count over the same index `check` builds, so package models and disabled
+    # ones are out of both. Counting models check never looks at is half of what
+    # made the two commands disagree.
+    node_index = build_node_index(manifest)
     mat_counts: Counter[str] = Counter()
-    osc_counts: Counter[str] = Counter()
     incremental_osc: Counter[str] = Counter()
-    total = 0
+    no_rule: Counter[str] = Counter()
 
-    for nid, node in (manifest.get("nodes") or {}).items():
-        if not nid.startswith("model."):
-            continue
-        total += 1
-        config = node.get("config") or {}
-        mat = config.get("materialized") or "table"
-        osc = config.get("on_schema_change") or "ignore"
-        mat_counts[mat] += 1
-        osc_counts[osc] += 1
-        if mat == "incremental":
-            incremental_osc[osc] += 1
+    for node in node_index.values():
+        mat_counts[node.materialization] += 1
+        if node.materialization == "incremental":
+            incremental_osc[node.on_schema_change or "ignore"] += 1
+        if not has_ddl_rule(node.materialization, node.on_schema_change):
+            label = node.materialization
+            if node.on_schema_change:
+                label += f" + {node.on_schema_change}"
+            elif node.materialization != "snapshot":
+                label += " (no on_schema_change)"
+            no_rule[label] += 1
+    total = len(node_index)
 
-    # Count SELECT * in compiled SQL
+    # Read every model's columns the way `check` does, resolver included. Without
+    # it, a `select * from {{ ref(x) }}` that check expands through the DAG was
+    # counted here as unanalysable, and the advice printed underneath -- "add
+    # column docs to resolve" -- was wrong for exactly those models.
     try:
         compiled_dir = _find_compiled_dir(target_dir)
     except ValueError:
         compiled_dir = None
-    star_count = 0
+
+    star_written = 0  # the SQL asks for `*`
+    unreadable = 0  # and dbt-plan still cannot say which columns that is
+    unreadable_with_docs = 0
     sql_count = 0
     if compiled_dir:
         dialect = getattr(args, "dialect", "snowflake") or "snowflake"
+        resolver = _make_table_resolver(
+            compiled_dir, _build_relation_index(manifest, node_index), dialect
+        )
         for sql_file in iter_model_sql(compiled_dir):
             sql_count += 1
-            cols = extract_columns(sql_file.read_text(encoding="utf-8"), dialect=dialect)
-            if cols == ["*"]:
-                star_count += 1
+            sql = sql_file.read_text(encoding="utf-8")
+            if extract_columns(sql, dialect=dialect) == ["*"]:
+                star_written += 1
+            cols = extract_columns(sql, dialect=dialect, table_columns=resolver)
+            if (
+                cols is None
+                or cols == ["*"]
+                or (len(cols) == 1 and cols[0].startswith("* except("))
+            ):
+                unreadable += 1
+                node = node_index.get(sql_file.stem)
+                if node is not None and node.columns:
+                    unreadable_with_docs += 1
 
     # Output
     print(f"dbt-plan stats -- {total} model(s) in manifest\n")
@@ -286,20 +309,23 @@ def _do_stats(args: argparse.Namespace) -> None:
         risk = "  ← dbt-plan monitors this" if osc in ("sync_all_columns", "fail") else ""
         print(f"  {osc:20s} {count:>4}{risk}")
 
-    # Count manifest column fallback availability
-    manifest_fallback = 0
     if sql_count:
-        for nid, node in (manifest.get("nodes") or {}).items():
-            if nid.startswith("model.") and node.get("columns"):
-                manifest_fallback += 1
-
-        pct = star_count * 100 // sql_count
-        print(f"\nSELECT * usage: {star_count}/{sql_count} models ({pct}%)")
-        if star_count > 0:
-            print(f"  Manifest column fallback available: {manifest_fallback}/{total} models")
-            remaining = star_count - min(star_count, manifest_fallback)
+        # Two lines, because they are two questions. One "Coverage" answering
+        # neither is how this output used to print `SELECT * usage: 1/5` and
+        # `Coverage: 5/5 fully analyzed` one after the other.
+        pct = star_written * 100 // sql_count
+        print(f"\nSELECT * usage: {star_written}/{sql_count} models ({pct}%)")
+        print(f"Columns readable: {sql_count - unreadable}/{sql_count} compiled model(s)")
+        resolved_stars = star_written - min(star_written, unreadable)
+        if resolved_stars:
+            print(f"  SELECT * resolved through ref() or a CTE: {resolved_stars}")
+        if unreadable:
+            print(f"  unresolved: {unreadable} -- these report review required")
+            if unreadable_with_docs:
+                print(f"    manifest columns documented for {unreadable_with_docs} of them")
+            remaining = unreadable - unreadable_with_docs
             if remaining:
-                print(f"  Remaining without fallback: {remaining} (add column docs to resolve)")
+                print(f"    no fallback for {remaining} (add column docs to resolve)")
 
     # Cascade risk: reuse already-computed counter instead of re-scanning manifest
     fail_chains = incremental_osc.get("fail", 0)
@@ -307,10 +333,12 @@ def _do_stats(args: argparse.Namespace) -> None:
         print(f"\nCascade risk: {fail_chains} incremental model(s) with on_schema_change=fail")
         print("  These will break if upstream schema changes")
 
-    # Readiness score
-    monitorable = incremental_osc.get("sync_all_columns", 0) + incremental_osc.get("fail", 0)
-    safe = mat_counts.get("table", 0) + mat_counts.get("view", 0) + mat_counts.get("ephemeral", 0)
-    print(f"\nCoverage: {safe + monitorable}/{total} models fully analyzed by dbt-plan")
+    with_rule = total - sum(no_rule.values())
+    print(f"\nDDL rules: {with_rule}/{total} model(s)")
+    if no_rule:
+        print("  no rule, always review required:")
+        for label, count in no_rule.most_common():
+            print(f"    {label:38s} {count:>4}")
 
 
 def _exit_code_for(result: CheckResult, warning_exit_code: int) -> int:

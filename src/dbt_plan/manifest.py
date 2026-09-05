@@ -299,6 +299,32 @@ def build_unit_test_index(manifest: dict) -> dict[str, UnitTestNode]:
     return index
 
 
+def _authored_on_schema_change(node: dict, config: dict) -> str | None:
+    """`on_schema_change` as the author wrote it, or None when dbt supplied it.
+
+    dbt resolves this for *every* model, so `config["on_schema_change"]` is
+    `"ignore"` on a view, a materialized view and a custom materialization alike.
+    Reading that as the author's assertion is what let a materialized view drop a
+    column and report `NO DDL / SAFE`: predict_ddl's guard for a materialization it
+    has no rule for tests `on_schema_change is None`, which never happened.
+
+    `unrendered_config` carries only what a human wrote, from the model file or
+    from `dbt_project.yml`. An explicit setting is still honoured -- a custom
+    materialization declared `sync_all_columns` still earns a destructive verdict.
+
+    Older manifests have no `unrendered_config`, and the resolved value cannot say
+    who set it. There, keep it only for `incremental`, whose default is dbt's own
+    documented rule; refuse for everything else. A false warning is the acceptable
+    direction.
+    """
+    authored = node.get("unrendered_config")
+    if isinstance(authored, dict):
+        return authored.get("on_schema_change")
+    if (config.get("materialized") or "table") == "incremental":
+        return config.get("on_schema_change")
+    return None
+
+
 def build_node_index(manifest: dict, *, include_packages: bool = False) -> dict[str, ModelNode]:
     """Build a compiled-SQL-name → ModelNode index for O(1) lookups.
 
@@ -358,7 +384,7 @@ def build_node_index(manifest: dict, *, include_packages: bool = False) -> dict[
             node_id=node_id,
             name=key,
             materialization=config.get("materialized") or "table",
-            on_schema_change=config.get("on_schema_change"),
+            on_schema_change=_authored_on_schema_change(node, config),
             version=str(version) if version is not None else None,
             # Extract column names from manifest (used as fallback for SELECT *)
             columns=tuple(c.lower() for c in (node.get("columns") or {})),
