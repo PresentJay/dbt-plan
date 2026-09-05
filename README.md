@@ -2,7 +2,11 @@
 
 Static analysis tool that warns about risky DDL changes before `dbt run`.
 
-Like `terraform plan` for dbt. Runs on compiled SQL — you need a `dbt compile` (which connects), but from there dbt-plan works on files alone. Works with any warehouse (Snowflake, BigQuery, Redshift, Postgres, etc.).
+Like `terraform plan` for dbt, and used the same way: you run it **before** the thing
+that changes your warehouse, not only in CI afterwards.
+
+Runs on compiled SQL. It reads files and nothing else, so it works with any warehouse —
+Snowflake, BigQuery, Redshift, Postgres, DuckDB — through one code path.
 
 ## What It Looks Like
 
@@ -41,12 +45,48 @@ It does NOT execute anything, connect to any warehouse, or simulate `dbt run`. I
 
 ```bash
 pip install dbt-plan
-
-# In your dbt project directory:
-dbt-plan run               # One command: compile baseline → compile current → check
+dbt-plan run               # compile baseline → compile current → check
 ```
 
-That's it. `dbt-plan run` handles `dbt compile`, snapshotting, and checking automatically — so it needs whatever credentials your `dbt compile` normally needs. If you can't compile locally, run it in CI (see below) and dbt-plan reads the artifacts there.
+`dbt-plan run` does the whole thing in one command, and needs whatever credentials your
+`dbt compile` normally needs.
+
+### The loop it is built for
+
+Once you have a baseline, the inner loop is a single sub-second command. Edit a model or a
+macro, recompile, and see what `dbt run` would do — *before* running it:
+
+```bash
+dbt-plan snapshot          # once, on the revision you are changing from
+                           # ... edit models, edit macros ...
+dbt compile && dbt-plan check
+```
+
+Measured on a project of 3 models, median of 3 runs:
+
+| step | time |
+|---|---|
+| `dbt compile` (Fusion) | 1.8 – 3.8 s |
+| **`dbt-plan check`** | **0.11 s** |
+| `dbt-plan snapshot` | 0.10 s |
+
+200 models, every one of them changed: **0.48 s**. The compile is the cost, and you were
+compiling anyway — dbt-plan itself is fast enough to sit in the edit loop rather than at
+the end of it.
+
+### Working with a coding agent
+
+An agent editing models cannot eyeball a diff and hesitate. Give it the check and the
+reasons behind it:
+
+```bash
+dbt-plan agent-setup       # writes dbt-plan guidance into your AGENTS.md
+dbt-plan check --format json
+```
+
+The guidance leads with what an agent most often gets wrong: adding a model to
+`ignore_models`, or downgrading `on_schema_change` from `sync_all_columns` to `ignore`,
+silences a real finding without making the change safe.
 
 ### More commands
 
@@ -54,7 +94,6 @@ That's it. `dbt-plan run` handles `dbt compile`, snapshotting, and checking auto
 dbt-plan init              # Generate .dbt-plan.yml config + update .gitignore
 dbt-plan stats             # Analyze project readiness
 dbt-plan ci-setup          # Generate GitHub Actions workflow
-dbt-plan agent-setup       # Write AGENTS.md so coding agents know to run the check
 dbt-plan check --format github   # GitHub markdown output
 dbt-plan check --format json     # JSON for CI pipelines
 dbt-plan check --select model1   # Check specific model only
