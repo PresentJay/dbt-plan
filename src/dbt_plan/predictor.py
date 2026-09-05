@@ -8,6 +8,8 @@ from dataclasses import dataclass, field, replace
 from enum import Enum
 from pathlib import Path
 
+from dbt_plan.manifest import model_key
+
 
 class Safety(Enum):
     SAFE = "safe"
@@ -656,7 +658,7 @@ def analyze_cascade_impacts(
         # A model with nothing downstream still carries its own unit tests, so
         # this does not return early -- only the report line is skipped.
         if downstream_nids:
-            downstream_map[pred.model_name] = [nid.split(".")[-1] for nid in downstream_nids]
+            downstream_map[pred.model_name] = [model_key(nid) for nid in downstream_nids]
 
         # incremental+ignore alters nothing physical, so nothing downstream of
         # it moves. Its own unit tests still do: they run the model's SELECT
@@ -701,9 +703,8 @@ def analyze_cascade_impacts(
         downstream_to_check = [] if ignore_incremental else downstream_nids
         impacts: list[DownstreamImpact] = []
         for ds_nid in downstream_to_check:
-            ds_node = node_index.get(ds_nid.split(".")[-1])
-            if not ds_node:
-                ds_node = base_node_index.get(ds_nid.split(".")[-1])
+            ds_key = model_key(ds_nid)
+            ds_node = node_index.get(ds_key) or base_node_index.get(ds_key)
             if not ds_node:
                 continue
 

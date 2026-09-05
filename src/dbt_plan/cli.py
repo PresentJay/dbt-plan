@@ -357,24 +357,31 @@ def _star_macro_degraded(sql: str) -> bool:
 
 
 def _build_relation_index(manifest: dict, node_index: dict) -> dict[str, str]:
-    """Map the relation a model writes -> the model's name.
+    """Map the relation a model writes -> the key its compiled SQL is indexed under.
 
     `select * from {{ ref(x) }}` compiles to the physical relation, not the model
     name, so matching needs the manifest's `relation_name`. The bare name is
     registered too: dbt model names are unique across a project, so it is an
-    unambiguous fallback when a manifest predates `relation_name`.
+    unambiguous fallback when a manifest predates `relation_name`. For a versioned
+    model both spellings point at the same file -- `fct_orders` is the name two
+    versions share, `fct_orders_v2` is the one that was written.
     """
+    from dbt_plan.manifest import model_key
+
     index: dict[str, str] = {}
     for node_id, node in (manifest.get("nodes") or {}).items():
         if not node_id.startswith("model."):
             continue
         name = node.get("name")
-        if not name or name not in node_index:
+        path = node.get("path")
+        key = Path(path).stem if path else model_key(node_id)
+        if not name or key not in node_index:
             continue
         relation = node.get("relation_name")
         if relation:
-            index[relation.replace('"', "").replace("`", "").lower()] = name
-        index.setdefault(name.lower(), name)
+            index[relation.replace('"', "").replace("`", "").lower()] = key
+        index.setdefault(key.lower(), key)
+        index.setdefault(name.lower(), key)
     return index
 
 
