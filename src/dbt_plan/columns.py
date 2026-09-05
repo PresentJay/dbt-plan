@@ -265,3 +265,64 @@ def extract_cast_types(
     if resolved is None:
         return None
     return {name: cast for name, cast in resolved if cast}
+
+
+def columns_read_from(
+    sql: str,
+    relation: str,
+    schema: dict[str, dict[str, str]],
+    *,
+    dialect: str = "snowflake",
+) -> list[str] | None:
+    """Which columns this SQL names explicitly from `relation`.
+
+    Cascade detection has always been textual -- look for the dropped column's
+    name anywhere in the downstream SQL -- which fires on a comment, a string
+    literal, and any column of the same name belonging to a different table:
+
+        SELECT c.customer_id
+        FROM stg_orders o JOIN dim_customers c ON o.order_id = c.order_id
+
+    Nothing there reads `stg_orders.customer_id`, and the text search says it does.
+    Resolving the reference instead needs a schema, and dbt-plan has one: every
+    model's columns, worked out from the project's own compiled SQL. `schema` is
+    keyed by bare model name, which sqlglot matches against the fully qualified
+    relation that compiled dbt SQL actually contains.
+
+    Named explicitly, and stars deliberately left out of the answer. This exists to
+    decide whether a query will *fail*, and `select *` never fails when a column
+    disappears -- it returns one column fewer. That is a different finding, and
+    predict_ddl already makes it for the model that inherits the loss.
+
+    Returns None when the answer would be a guess: the SQL will not parse, or a
+    column cannot be attributed to a relation. The caller falls back to searching
+    the text, which is wider -- a refusal here must never narrow what gets reported.
+    """
+    from sqlglot.errors import OptimizeError, SqlglotError
+    from sqlglot.optimizer.qualify import qualify
+
+    sql = sql.lstrip("\ufeff")
+    try:
+        tree = qualify(
+            sqlglot.parse_one(sql, dialect=dialect),
+            schema=schema,
+            dialect=dialect,
+            expand_stars=False,
+        )
+    except (SqlglotError, OptimizeError, ValueError, KeyError, RecursionError):
+        return None
+
+    aliases = {
+        table.alias_or_name
+        for table in tree.find_all(exp.Table)
+        if table.name.lower() == relation.lower()
+    }
+    if not aliases:
+        return []  # it does not read that relation at all
+    return sorted(
+        {
+            column.name.lower()
+            for column in tree.find_all(exp.Column)
+            if column.table in aliases and not isinstance(column.this, exp.Star)
+        }
+    )

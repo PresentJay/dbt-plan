@@ -7,6 +7,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- **Cascade detection resolves the reference instead of searching for the name.**
+  `docs/use-cases.md` apologised for this one -- "a column named `id` will match a
+  great deal" -- and the apology was earned:
+
+  ```sql
+  -- customer_id used to live here
+  SELECT o.order_id, c.customer_id, c.tier
+  FROM stg_orders o JOIN dim_customers c ON o.order_id = 1
+  WHERE 'customer_id' <> ''
+  ```
+
+  Nothing there reads `stg_orders.customer_id`. 0.13.0 reported it as a broken ref,
+  on three separate matches: the comment, the string literal, and the other table's
+  column of the same name. `dbt build` builds that model without complaint.
+
+  dbt-plan already knows every model's columns, from the project's own compiled SQL,
+  so the downstream model is now parsed against that schema and a break is reported
+  only when the name resolves to the changed relation.
+
+  Stars are deliberately not counted. `select *` never fails when a column
+  disappears -- it returns one column fewer -- and that loss is already reported, for
+  the model that inherits it.
+
+  **The text search is still there as the fallback.** When the SQL will not parse, or
+  a column cannot be attributed to a relation, dbt-plan drops back to it: a refusal
+  has to widen what gets reported, never narrow it.
+
+  Measured at 0.43-0.55s on the 200-model `SELECT *` chain, against 0.22s before and
+  a budget of 5s.
+
+
 ### Fixed
 - **`dbt-plan run` no longer stashes its own snapshot, which could leave your work
   in the stash.** (#119) `.dbt-plan/` is untracked, so `--include-untracked` took it;

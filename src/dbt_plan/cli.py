@@ -524,6 +524,61 @@ def _build_relation_index(manifest: dict, node_index: dict) -> dict[str, str]:
     return index
 
 
+def _make_reference_reader(
+    compiled_sql_index: dict[str, Path],
+    node_index: dict,
+    table_columns,
+    dialect: str,
+):
+    """(downstream model, changed model) → the columns the first reads from the second.
+
+    None when that cannot be resolved, which is the caller's signal to fall back to
+    searching the text. The schema is every model whose columns dbt-plan can already
+    work out, keyed by bare name -- sqlglot matches that against the fully qualified
+    relation compiled dbt SQL actually contains.
+
+    Built from the *base* columns on purpose. The question is whether the downstream
+    SQL reads a column that is going away, and that column exists only on the base
+    side; against the current schema the reference is already unresolvable, which
+    would refuse and hand the true finding back to the text search.
+
+    Both the schema and each answer are built once and cached, because a change
+    touching many models asks about the same downstream SQL repeatedly.
+    """
+    from dbt_plan.columns import columns_read_from
+
+    schema: dict[str, dict[str, str]] = {}
+    answers: dict[tuple[str, str], list[str] | None] = {}
+
+    def build_schema() -> dict[str, dict[str, str]]:
+        if schema:
+            return schema
+        for name in node_index:
+            columns = table_columns(name.lower())
+            if columns:
+                # sqlglot only needs the names; the types are never compared here.
+                schema[name] = dict.fromkeys(columns, "UNKNOWN")
+        return schema
+
+    def read(downstream: str, changed: str) -> list[str] | None:
+        key = (downstream, changed)
+        if key in answers:
+            return answers[key]
+        path = compiled_sql_index.get(downstream)
+        answer = None
+        if path is not None and changed in build_schema():
+            try:
+                answer = columns_read_from(
+                    path.read_text(encoding="utf-8"), changed, schema, dialect=dialect
+                )
+            except (OSError, UnicodeDecodeError):
+                answer = None
+        answers[key] = answer
+        return answer
+
+    return read
+
+
 def _make_table_resolver(
     compiled_dir, relation_index: dict[str, str], dialect: str, model_dirs=None
 ):
@@ -1104,6 +1159,9 @@ def _do_check(args: argparse.Namespace) -> int:
         test_sql_index=test_sql_index,
         base_columns_of=base_table_columns,
         current_columns_of=current_table_columns,
+        columns_read_of=_make_reference_reader(
+            compiled_sql_index, node_index, base_table_columns, dialect
+        ),
     )
     predictions = attach_downstream_exposures(
         predictions=predictions,
