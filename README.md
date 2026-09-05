@@ -35,8 +35,9 @@ dbt-plan analyzes compiled SQL diffs to catch dangerous schema changes at PR tim
 - **Column changes**: detects ADD/DROP COLUMN from SQL diff
 - **Risk assessment**: judges safety based on materialization x on_schema_change rules
 - **Cascade analysis**: finds downstream models broken by a dropped column — the ones that
-  name it, the ones that select `*` and lose it without their own file changing, and the unit
-  tests whose fixtures pin it down. Names the exposures whose owners need telling
+  name it, resolved against the project's own schema rather than matched as text; the ones
+  that select `*` and lose it without their own file changing; and the tests whose fixtures
+  pin it down. Names the exposures whose owners need telling
 - **Contracts**: reports a change an enforced contract will reject, in either direction
 - **Config changes**: detects materialization or on_schema_change policy changes
 - **Type changes**: compares explicit `CAST` types between revisions

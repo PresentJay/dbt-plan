@@ -663,6 +663,7 @@ def analyze_cascade_impacts(
     test_sql_index: dict[str, Path] | None = None,
     base_columns_of: Callable[[str], list[str] | None] | None = None,
     current_columns_of: Callable[[str], list[str] | None] | None = None,
+    columns_read_of: Callable[[str, str], list[str] | None] | None = None,
 ) -> tuple[list[DDLPrediction], dict[str, list[str]]]:
     """Analyze cascade impacts of column changes on downstream nodes.
 
@@ -682,6 +683,9 @@ def analyze_cascade_impacts(
         base_columns_of, current_columns_of: resolve a model name to its columns
             on each side, following `ref()` so a `SELECT *` expands. Omitted, the
             unchanged-file check below is skipped.
+        columns_read_of: (downstream model, changed model) → the columns the first
+            reads from the second, or None when that cannot be resolved. Omitted or
+            refusing, the broken-ref check falls back to searching the text.
 
     Returns:
         (updated_predictions, downstream_map)
@@ -784,7 +788,25 @@ def analyze_cascade_impacts(
                     except (OSError, UnicodeDecodeError):
                         pass  # unreadable file — skip broken_ref check for this model
 
-                if ds_sql:
+                # Resolving the reference beats searching for the name: the text
+                # search fires on a comment, a string literal, and any column of the
+                # same name belonging to a different table in the same query. It is
+                # the fallback rather than the answer, because a refusal there must
+                # widen what gets reported, never narrow it.
+                read = columns_read_of(ds_node.name, pred.model_name) if columns_read_of else None
+                if read is not None:
+                    broken_refs = [col for col in cascade_removed if col.lower() in read]
+                    if broken_refs:
+                        impacts.append(
+                            DownstreamImpact(
+                                model_name=ds_node.name,
+                                materialization=ds_mat,
+                                on_schema_change=ds_osc,
+                                risk="broken_ref",
+                                reason=f"reads dropped column(s): {', '.join(broken_refs)}",
+                            )
+                        )
+                elif ds_sql:
                     broken_refs = [
                         col for col, pattern in col_patterns.items() if pattern.search(ds_sql)
                     ]

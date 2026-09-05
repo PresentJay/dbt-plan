@@ -263,12 +263,18 @@ point where a long cascade list becomes hard to read.
 
 Worth knowing before you put it in front of your team.
 
-**It over-reports downstream breakage.** Cascade detection is textual — it looks
-for the dropped column name in downstream compiled SQL. A column named `id` will
-match a great deal. The benchmark above reports 1890 cascade risks from 20
-dropped columns, because that project is a 200-deep chain. Real projects are
-wider and shallower, but the direction of the error is deliberate: it would
-rather point at something harmless than miss a break.
+**It can still over-report downstream breakage, but only when it has to.**
+Cascade detection resolves the reference: it parses the downstream model against a
+schema built from the project's own compiled SQL, and reports a break only when the
+model *names* the dropped column and that name resolves to the changed relation. A
+mention in a comment, in a string literal, or on another table's column of the same
+name is no longer a finding.
+
+When that cannot be resolved — the SQL will not parse, or a column cannot be
+attributed to a relation — it falls back to the old text search, which is wider. The
+direction of the error is deliberate: a refusal has to widen what gets reported,
+never narrow it, so an unparseable downstream model is still over-reported rather
+than passed over.
 
 **It reports a warning when it cannot be sure.** `SELECT *` without manifest
 column definitions, a duplicate column name from a join, an unrecognised

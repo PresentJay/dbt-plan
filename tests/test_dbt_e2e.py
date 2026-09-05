@@ -802,3 +802,76 @@ class TestAFailedCompileIsNotACleanRun:
         result = _dbt_plan(["check", "--project-dir", str(dbt_project), "--no-color"])
         assert "out of date" not in result.stdout
         assert result.returncode == 0, result.stdout
+
+
+@pytest.fixture
+def ambiguous_project(tmp_path):
+    """A downstream model that mentions a column three times and reads none of them."""
+    project = tmp_path / "ambiguous"
+    (project / "models").mkdir(parents=True)
+    (project / "dbt_project.yml").write_text(
+        "name: ambiguous\nversion: '1.0.0'\nprofile: ambiguous_profile\n"
+        'model-paths: ["models"]\ntarget-path: "target"\n'
+    )
+    (project / "profiles.yml").write_text(
+        "ambiguous_profile:\n  target: dev\n  outputs:\n    dev:\n"
+        '      type: duckdb\n      path: ":memory:"\n'
+    )
+    (project / "models" / "stg_orders.sql").write_text(
+        "{{ config(materialized='view') }}\n"
+        "SELECT 1 AS order_id, 'c' AS customer_id, 'open' AS status\n"
+    )
+    (project / "models" / "dim_customers.sql").write_text(
+        "{{ config(materialized='view') }}\nSELECT 'c' AS customer_id, 'gold' AS tier\n"
+    )
+    # Mentions customer_id in a comment, a string literal, and as another table's
+    # column. Reads none of stg_orders' customer_id.
+    (project / "models" / "fct_innocent.sql").write_text(
+        "{{ config(materialized='table') }}\n"
+        "-- customer_id used to live here\n"
+        "SELECT o.order_id, c.customer_id, c.tier\n"
+        "FROM {{ ref('stg_orders') }} o\n"
+        "JOIN {{ ref('dim_customers') }} c ON o.order_id = 1\n"
+        "WHERE 'customer_id' <> ''\n"
+    )
+    (project / "models" / "fct_guilty.sql").write_text(
+        "{{ config(materialized='table') }}\n"
+        "SELECT order_id, customer_id FROM {{ ref('stg_orders') }}\n"
+    )
+    return project
+
+
+class TestCascadeResolvesRatherThanMatches:
+    def test_only_the_model_that_reads_the_column_is_reported(self, ambiguous_project):
+        _dbt_compile(ambiguous_project)
+        _dbt_plan(["snapshot", "--project-dir", str(ambiguous_project)])
+        (ambiguous_project / "models" / "stg_orders.sql").write_text(
+            "{{ config(materialized='view') }}\nSELECT 1 AS order_id, 'open' AS status\n"
+        )
+        _dbt_compile(ambiguous_project)
+
+        result = _dbt_plan(
+            ["check", "--project-dir", str(ambiguous_project), "--dialect", "duckdb", "--no-color"]
+        )
+        assert "BROKEN_REF  fct_guilty: reads dropped column(s): customer_id" in result.stdout
+        # It stays in the informational downstream list, where it belongs. What it
+        # must not be is a finding.
+        findings = [ln for ln in result.stdout.splitlines() if ">>" in ln]
+        assert not any("fct_innocent" in ln for ln in findings), result.stdout
+        assert "Downstream: fct_guilty, fct_innocent" in result.stdout
+        assert result.returncode == 1
+
+    def test_dbt_agrees_about_which_one_breaks(self, ambiguous_project):
+        """The claim above, measured. fct_innocent builds; fct_guilty does not."""
+        _dbt_compile(ambiguous_project)
+        (ambiguous_project / "models" / "stg_orders.sql").write_text(
+            "{{ config(materialized='view') }}\nSELECT 1 AS order_id, 'open' AS status\n"
+        )
+        # `+model` so the upstream views exist: the profile is in-memory, so
+        # nothing survives between invocations.
+        innocent = _dbt_build(ambiguous_project, "+fct_innocent")
+        assert innocent.returncode == 0, innocent.stdout
+
+        guilty = _dbt_build(ambiguous_project, "+fct_guilty")
+        assert guilty.returncode != 0
+        assert 'column "customer_id" not found' in guilty.stdout.lower()
