@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.13.0] - 2026-09-05
+
 ### Added
 - **`--select` understands dbt's graph operators.** (#31) It was an exact
   set-membership test, so `fct_orders+` matched nothing and the run reported "no
@@ -22,106 +24,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   for. `tag:` and `path:` are reported on stderr rather than quietly matching
   nothing -- a `--select` narrower than intended hides findings, which is the
   failure worth being loud about.
-
-### Changed
-- **The dialect is read from the manifest.** (#27) `--dialect` defaulted to
-  `snowflake`, and `metadata.adapter_type` had been sitting in the file dbt-plan
-  parses on every run. A BigQuery or Postgres project with no flag passed was
-  parsed as Snowflake. Precedence is unchanged where anyone spoke:
-  `--dialect` > `DBT_PLAN_DIALECT` > `.dbt-plan.yml` > the manifest > `snowflake`.
-  An adapter sqlglot has no dialect for falls back rather than failing.
-
-  `dbt-plan stats` was reading neither the config file nor the environment for
-  this; it now resolves it the same way `check` does.
-
-- **An enforced contract makes the manifest columns trustworthy.** (#28) 0.10.0
-  stopped a `SAFE` verdict built from manifest columns being reported as safe,
-  because `schema.yml` conventionally documents only the columns you test -- the
-  same partial list lands on both sides of the diff and cancels out. A contract is
-  the case where that reasoning does not hold: dbt requires every column to be
-  declared and fails the build otherwise. Those models are now analysed rather
-  than escalated to review.
-
-- **Snapshots say what changed.** (#30) Every snapshot got
-  `REVIEW REQUIRED (snapshot)` and nothing else, though the column diff had
-  already been computed and thrown away. The verdict is deliberately unchanged --
-  snapshot schema changes are not auto-managed, and the `dbt_valid_from` columns
-  are invisible to a compiled-SQL diff -- but the report now names the columns.
-  Along the way, a `SELECT *` on either side is no longer differenced into
-  `DROP COLUMN *`, which affected the unknown-materialization report too.
-
-
-### Fixed
-- **The guard against materializations dbt-plan has no rule for now actually fires.**
-  (#91) This closes a false all-clear that has been live since 0.11.0 added the
-  guard.
-
-  ```python
-  if materialization != "incremental" and on_schema_change is None:
-  ```
-
-  dbt resolves `on_schema_change` for **every** model, so a view, a materialized
-  view and a custom materialization all carry `'ignore'` whether or not anyone
-  wrote it. The guard never saw `None`, fell through to the incremental rules, and
-  answered with the thing it was written to prevent. Measured on dbt 1.11.7, a
-  materialized view dropping a column:
-
-  ```
-  SAFE  mv_thing (materialized_view, ignore)
-    NO DDL
-  exit=0
-  ```
-
-  `on_schema_change` is now read from `unrendered_config`, which carries only what
-  a human wrote -- in the model or in `dbt_project.yml`. An explicit setting is
-  still honoured, so a custom materialization declared `sync_all_columns` still
-  earns a destructive verdict. A manifest too old to have `unrendered_config` keeps
-  the resolved value for `incremental`, whose default is dbt's own documented rule,
-  and refuses for everything else.
-
-- **`dbt-plan stats` no longer contradicts `dbt-plan check`.** (#52) It reported
-  `SELECT * usage: 1/5` and `Coverage: 5/5 models fully analyzed` one line apart.
-
-  - The `SELECT *` count ran the extraction **without** the resolver `check`
-    passes, so a `select * from {{ ref(x) }}` that check expands through the DAG
-    was counted as unanalysable -- and the advice underneath it, "add column docs
-    to resolve", was wrong for exactly those models. There are now two lines:
-    how many models write `*`, and how many models' columns dbt-plan can read.
-  - "Coverage" counted materializations, not analysability. It left out
-    `append_new_columns` and `ignore`, which dbt-plan analyses exactly, and never
-    learned about #41. It is now `DDL rules: N/M`, derived by asking `predict_ddl`
-    rather than restating the table, and it names the materializations with no
-    rule instead of leaving you to work out which.
-  - Both counts now run over the same index `check` builds, so package models and
-    disabled ones are out of both.
-
-
-### Fixed
-- **Versioned models are analysed instead of skipped.** (#53) Two versions of a
-  model share one dbt name, and the node_id carries the version where every other
-  model carries its name -- `model.p.fct_orders.v2`. dbt-plan read that last
-  segment as the model name, so:
-
-  ```
-  dbt-plan -- 0 model(s) changed
-  WARNING: Skipped 1 model(s) not found in manifest: fct_orders_v2
-  WARNING: The compile is incomplete -- 1 model(s) in the manifest have no
-           compiled SQL: fct_orders
-  ```
-
-  A `sync_all_columns` DROP COLUMN went entirely unanalysed under those two
-  warnings. It now reports
-  `DESTRUCTIVE fct_orders_v2 (incremental, sync_all_columns)` and exits 1.
-
-  The index is keyed by the name the compiled file was written under throughout,
-  since the diff is a comparison of files. `defined_in:` is honoured -- the node's
-  own `path` is the authority, with the derived `<name>_v<n>` kept as an alias so
-  both spellings resolve. Two versions no longer collapse into one entry either;
-  they can differ in materialization and `on_schema_change`, and only the first
-  used to be indexed.
-
-
-### Added
 - **A change an enforced contract will reject is now reported.** (#87) dbt-plan read
   no contract information at all -- `grep -rn contract src/dbt_plan/` returned one
   docstring -- so a change dbt refuses to build reported SAFE.
@@ -175,6 +77,98 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Neither this nor #24 covered that alone: a downstream `table` is rebuilt safely, so
   the inherited-loss check stays quiet, while the `not_null` on it still cannot bind.
 
+### Changed
+- **The dialect is read from the manifest.** (#27) `--dialect` defaulted to
+  `snowflake`, and `metadata.adapter_type` had been sitting in the file dbt-plan
+  parses on every run. A BigQuery or Postgres project with no flag passed was
+  parsed as Snowflake. Precedence is unchanged where anyone spoke:
+  `--dialect` > `DBT_PLAN_DIALECT` > `.dbt-plan.yml` > the manifest > `snowflake`.
+  An adapter sqlglot has no dialect for falls back rather than failing.
+
+  `dbt-plan stats` was reading neither the config file nor the environment for
+  this; it now resolves it the same way `check` does.
+
+- **An enforced contract makes the manifest columns trustworthy.** (#28) 0.10.0
+  stopped a `SAFE` verdict built from manifest columns being reported as safe,
+  because `schema.yml` conventionally documents only the columns you test -- the
+  same partial list lands on both sides of the diff and cancels out. A contract is
+  the case where that reasoning does not hold: dbt requires every column to be
+  declared and fails the build otherwise. Those models are now analysed rather
+  than escalated to review.
+
+- **Snapshots say what changed.** (#30) Every snapshot got
+  `REVIEW REQUIRED (snapshot)` and nothing else, though the column diff had
+  already been computed and thrown away. The verdict is deliberately unchanged --
+  snapshot schema changes are not auto-managed, and the `dbt_valid_from` columns
+  are invisible to a compiled-SQL diff -- but the report now names the columns.
+  Along the way, a `SELECT *` on either side is no longer differenced into
+  `DROP COLUMN *`, which affected the unknown-materialization report too.
+
+### Fixed
+- **The guard against materializations dbt-plan has no rule for now actually fires.**
+  (#91) This closes a false all-clear that has been live since 0.11.0 added the
+  guard.
+
+  ```python
+  if materialization != "incremental" and on_schema_change is None:
+  ```
+
+  dbt resolves `on_schema_change` for **every** model, so a view, a materialized
+  view and a custom materialization all carry `'ignore'` whether or not anyone
+  wrote it. The guard never saw `None`, fell through to the incremental rules, and
+  answered with the thing it was written to prevent. Measured on dbt 1.11.7, a
+  materialized view dropping a column:
+
+  ```
+  SAFE  mv_thing (materialized_view, ignore)
+    NO DDL
+  exit=0
+  ```
+
+  `on_schema_change` is now read from `unrendered_config`, which carries only what
+  a human wrote -- in the model or in `dbt_project.yml`. An explicit setting is
+  still honoured, so a custom materialization declared `sync_all_columns` still
+  earns a destructive verdict. A manifest too old to have `unrendered_config` keeps
+  the resolved value for `incremental`, whose default is dbt's own documented rule,
+  and refuses for everything else.
+
+- **`dbt-plan stats` no longer contradicts `dbt-plan check`.** (#52) It reported
+  `SELECT * usage: 1/5` and `Coverage: 5/5 models fully analyzed` one line apart.
+
+  - The `SELECT *` count ran the extraction **without** the resolver `check`
+    passes, so a `select * from {{ ref(x) }}` that check expands through the DAG
+    was counted as unanalysable -- and the advice underneath it, "add column docs
+    to resolve", was wrong for exactly those models. There are now two lines:
+    how many models write `*`, and how many models' columns dbt-plan can read.
+  - "Coverage" counted materializations, not analysability. It left out
+    `append_new_columns` and `ignore`, which dbt-plan analyses exactly, and never
+    learned about #41. It is now `DDL rules: N/M`, derived by asking `predict_ddl`
+    rather than restating the table, and it names the materializations with no
+    rule instead of leaving you to work out which.
+  - Both counts now run over the same index `check` builds, so package models and
+    disabled ones are out of both.
+- **Versioned models are analysed instead of skipped.** (#53) Two versions of a
+  model share one dbt name, and the node_id carries the version where every other
+  model carries its name -- `model.p.fct_orders.v2`. dbt-plan read that last
+  segment as the model name, so:
+
+  ```
+  dbt-plan -- 0 model(s) changed
+  WARNING: Skipped 1 model(s) not found in manifest: fct_orders_v2
+  WARNING: The compile is incomplete -- 1 model(s) in the manifest have no
+           compiled SQL: fct_orders
+  ```
+
+  A `sync_all_columns` DROP COLUMN went entirely unanalysed under those two
+  warnings. It now reports
+  `DESTRUCTIVE fct_orders_v2 (incremental, sync_all_columns)` and exits 1.
+
+  The index is keyed by the name the compiled file was written under throughout,
+  since the diff is a comparison of files. `defined_in:` is honoured -- the node's
+  own `path` is the authority, with the derived `<name>_v<n>` kept as an alias so
+  both spellings resolve. Two versions no longer collapse into one entry either;
+  they can differ in materialization and `on_schema_change`, and only the first
+  used to be indexed.
 
 ## [0.12.0] - 2026-09-05
 
