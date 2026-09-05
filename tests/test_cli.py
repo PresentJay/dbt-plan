@@ -1232,9 +1232,7 @@ class TestSelectWarning:
 
 
 class TestMainDispatch:
-    def test_run_help_includes_common_check_flags_but_keeps_compile_command_run_only(
-        self, capsys
-    ):
+    def test_run_help_includes_common_check_flags_but_keeps_compile_command_run_only(self, capsys):
         """check and run share common check flags without leaking run-only flags."""
         with patch("sys.argv", ["dbt-plan", "check", "--help"]):
             with pytest.raises(SystemExit) as exc_info:
