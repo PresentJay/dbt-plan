@@ -7,6 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.11.1] - 2026-09-05
+
+### Changed
+- **Documentation only, released so PyPI stops describing the tool by the wrong
+  axis.** The PyPI page is built from `README.md` and only updates on a release,
+  and it is currently the first search result for this project — so the page most
+  people read was still framing dbt-plan as a CI check.
+
+  It is used the way `terraform plan` is used: before the command that changes
+  the warehouse, not only in CI afterwards. The README now leads with that loop,
+  states the measured cost of running it (`check` 0.11s on 3 models, 0.48s on 200
+  with every one changed — the `dbt compile` is the whole cost and you were paying
+  it anyway), and surfaces `agent-setup` in Quick Start rather than fourth in a
+  command list.
+
+  `docs/use-cases.md` gains a first case with no cheap alternative anywhere else:
+  a macro change. One line removed from a macro, no model file touched, and
+  `fct_orders` loses a column from a table that has data in it. The pull request
+  diff is two lines and says none of that.
+
+  No source changes.
+
 ## [0.11.0] - 2026-09-03
 
 ### Removed
