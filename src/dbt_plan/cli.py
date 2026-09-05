@@ -723,7 +723,7 @@ def _do_check(args: argparse.Namespace) -> int:
 
     from dbt_plan.columns import extract_cast_types, extract_columns
     from dbt_plan.config import Config
-    from dbt_plan.diff import diff_compiled_dirs, iter_model_sql, iter_non_model_sql
+    from dbt_plan.diff import ModelDiff, diff_compiled_dirs, iter_model_sql, iter_non_model_sql
     from dbt_plan.manifest import (
         build_data_test_index,
         build_exposure_index,
@@ -863,6 +863,23 @@ def _do_check(args: argparse.Namespace) -> int:
     # Build O(1) lookup indexes instead of O(N) scan per model
     node_index = build_node_index(manifest)
     base_node_index = build_node_index(base_manifest) if base_manifest else {}
+
+    # A deleted model is not in the diff. `dbt compile` never removes what it wrote
+    # before, so the orphaned compiled file is on both sides with identical bytes,
+    # and the MODEL REMOVED rule that exists for exactly this case could never fire
+    # in the normal flow. The manifest is the authority: a model the base manifest
+    # had and the current one does not is gone, whatever target/ still contains.
+    already = {d.model_name for d in model_diffs}
+    deleted = sorted(
+        name
+        for name in base_node_index
+        if name not in node_index and name not in already and name not in config.ignore_models
+    )
+    if deleted:
+        base_sql_by_stem = {f.stem: f for f in iter_model_sql(base_compiled, base_model_dirs)}
+        for name in deleted:
+            model_diffs.append(ModelDiff(name, "removed", base_sql_by_stem.get(name), None))
+        _log(f"Deleted from the manifest, still compiled: {', '.join(deleted)}")
 
     # Filter: --select. After the manifest, because `fct_orders+` needs the graph.
     select_models = getattr(args, "select", None)
