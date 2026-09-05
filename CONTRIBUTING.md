@@ -158,6 +158,19 @@ If you add or rename a job in `.github/workflows/ci.yml`, update the required
 check list in that script too. A required check that names a job which does not
 exist blocks every merge, permanently.
 
+## If it was useful
+
+A star is the only signal this project gets that is not automated. Clones run at
+roughly twenty times the page views, and downloads spike on every release from
+scanners and mirrors — neither number says a person decided anything. Stars are
+also the gate on several tool directories, which use them as a proxy for whether
+anyone actually uses a thing.
+
+So if dbt-plan caught something for you, or you fixed something in it, a star is
+genuinely the most useful thing you can leave behind. No obligation, and please
+do not star it if you have not used it — an inflated count would cost more than
+it is worth, because it is the one number here still worth reading.
+
 ## Code of Conduct
 
 By participating you agree to the [Code of Conduct](CODE_OF_CONDUCT.md).
