@@ -1092,6 +1092,46 @@ class TestCiSetup:
 
 
 class TestRun:
+    def test_run_forwards_acknowledge_to_check(self, tmp_path):
+        """run passes --acknowledge through to the final check."""
+        import argparse
+        import subprocess
+
+        from dbt_plan.cli import _do_run
+
+        args = argparse.Namespace(
+            project_dir=str(tmp_path),
+            format=None,
+            no_color=True,
+            verbose=False,
+            dialect=None,
+            select=None,
+            acknowledge="model_a,model_b",
+            compile_command="dbt compile",
+        )
+
+        def run_command(command, **kwargs):
+            if command == ["dbt", "--version"]:
+                return subprocess.CompletedProcess(command, returncode=0)
+            if command == ["git", "status", "--porcelain"]:
+                return subprocess.CompletedProcess(command, returncode=0, stdout="")
+            if command == ["git", "rev-parse", "--short", "HEAD"]:
+                return subprocess.CompletedProcess(command, returncode=0, stdout="abc123\n")
+            if command == ["dbt", "compile"]:
+                return subprocess.CompletedProcess(command, returncode=0, stdout="", stderr="")
+            raise AssertionError(f"Unexpected subprocess command: {command}")
+
+        with (
+            patch("subprocess.run", side_effect=run_command),
+            patch("dbt_plan.cli._do_snapshot"),
+            patch("dbt_plan.cli._do_check", return_value=0) as check,
+        ):
+            exit_code = _do_run(args)
+
+        assert exit_code == 0
+        check.assert_called_once()
+        assert check.call_args.args[0].acknowledge == "model_a,model_b"
+
     def test_run_missing_dbt_returns_2(self, tmp_path, capsys, monkeypatch):
         """run returns 2 when dbt is not available."""
         import argparse
@@ -1192,6 +1232,42 @@ class TestSelectWarning:
 
 
 class TestMainDispatch:
+    def test_run_help_includes_common_check_flags_but_keeps_compile_command_run_only(
+        self, capsys
+    ):
+        """check and run share common check flags without leaking run-only flags."""
+        with patch("sys.argv", ["dbt-plan", "check", "--help"]):
+            with pytest.raises(SystemExit) as exc_info:
+                main()
+            assert exc_info.value.code == 0
+        check_help = capsys.readouterr().out
+
+        with patch("sys.argv", ["dbt-plan", "run", "--help"]):
+            with pytest.raises(SystemExit) as exc_info:
+                main()
+            assert exc_info.value.code == 0
+        run_help = capsys.readouterr().out
+
+        for flag in [
+            "--project-dir",
+            "--format",
+            "--no-color",
+            "--select",
+            "--verbose",
+            "--dialect",
+            "--acknowledge",
+        ]:
+            assert flag in check_help
+            assert flag in run_help
+
+        assert "--compile-command" not in check_help
+        assert "--compile-command" in run_help
+        # run owns its baseline snapshot and current manifest, so these stay check-only.
+        assert "--base-dir" in check_help
+        assert "--manifest" in check_help
+        assert "--base-dir" not in run_help
+        assert "--manifest" not in run_help
+
     def test_no_subcommand_exits_zero(self):
         """Running dbt-plan with no subcommand exits with code 0."""
         with patch("sys.argv", ["dbt-plan"]):
