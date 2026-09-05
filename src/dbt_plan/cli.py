@@ -270,6 +270,40 @@ _SAMPLE_CONFIG = """\
 """
 
 
+SNAPSHOT_DIR = ".dbt-plan/"
+
+
+def _gitignore_snapshots(project_dir: Path) -> None:
+    """Add the snapshot directory to `.gitignore`, for `dbt-plan init`.
+
+    Deliberately not called from `snapshot`. `dbt-plan run` snapshots with the
+    user's tree stashed, so writing to `.gitignore` there makes `.gitignore` the
+    file the pop cannot restore -- the same failure one level along. `run` keeps
+    the snapshot out of the stash instead; see `_STASH_PATHSPEC`.
+    """
+    gitignore = project_dir / ".gitignore"
+    banner = "# dbt-plan snapshots (ephemeral, do not commit)"
+    try:
+        if gitignore.exists():
+            content = gitignore.read_text(encoding="utf-8")
+            if SNAPSHOT_DIR in content:
+                return
+            with gitignore.open("a", encoding="utf-8") as f:
+                if content and not content.endswith("\n"):
+                    f.write("\n")
+                f.write(f"\n{banner}\n{SNAPSHOT_DIR}\n")
+            print(f"Added {SNAPSHOT_DIR} to .gitignore")
+        else:
+            gitignore.write_text(f"{banner}\n{SNAPSHOT_DIR}\n", encoding="utf-8")
+            print(f"Created .gitignore with {SNAPSHOT_DIR}")
+    except OSError as e:
+        print(
+            f"Warning: could not add {SNAPSHOT_DIR} to .gitignore ({e}).\n"
+            "  Add it by hand -- otherwise git sees the snapshot as your change.",
+            file=sys.stderr,
+        )
+
+
 def _do_init(args: argparse.Namespace) -> None:
     """Generate a sample .dbt-plan.yml config file."""
     project_dir = Path(args.project_dir)
@@ -286,22 +320,7 @@ def _do_init(args: argparse.Namespace) -> None:
     config_path.write_text(_SAMPLE_CONFIG, encoding="utf-8")
     print(f"Created {config_path}")
 
-    # Add .dbt-plan/ to .gitignore if not already there
-    gitignore = project_dir / ".gitignore"
-    entry = ".dbt-plan/"
-    if gitignore.exists():
-        content = gitignore.read_text(encoding="utf-8")
-        if entry not in content:
-            with gitignore.open("a", encoding="utf-8") as f:
-                if not content.endswith("\n"):
-                    f.write("\n")
-                f.write(f"\n# dbt-plan snapshots (ephemeral, do not commit)\n{entry}\n")
-            print(f"Added {entry} to .gitignore")
-    else:
-        gitignore.write_text(
-            f"# dbt-plan snapshots (ephemeral, do not commit)\n{entry}\n", encoding="utf-8"
-        )
-        print(f"Created .gitignore with {entry}")
+    _gitignore_snapshots(project_dir)
 
 
 def _do_stats(args: argparse.Namespace) -> None:
@@ -1348,6 +1367,17 @@ def _do_agent_setup(args: argparse.Namespace) -> None:
     print("Coding agents that read AGENTS.md will pick this up automatically.")
 
 
+def _is_snapshot_path(status_line: str) -> bool:
+    """True when a `git status --porcelain` line is only dbt-plan's own snapshot.
+
+    Matched as a path prefix, not a substring: someone's `models/.dbt-plan-notes.md`
+    is their work, and treating it as ours would leave it out of the stash and then
+    out of the baseline.
+    """
+    path = status_line[3:].strip().strip('"')
+    return path == SNAPSHOT_DIR.rstrip("/") or path.startswith(SNAPSHOT_DIR)
+
+
 def _do_run(args: argparse.Namespace) -> int:
     """One-command check: compile baseline, compile current, run check.
 
@@ -1438,7 +1468,13 @@ def _do_run(args: argparse.Namespace) -> int:
             file=sys.stderr,
         )
         return 2
-    has_changes = bool(git_status.stdout.strip())
+    # dbt-plan's own snapshot is not the user's work. Counting it would stash it,
+    # and the pop then collides with the snapshot this run is about to write --
+    # leaving their real changes in the stash. `snapshot` gitignores it, so this
+    # only matters when that could not be written.
+    has_changes = any(
+        line.strip() and not _is_snapshot_path(line) for line in git_status.stdout.splitlines()
+    )
 
     # 2. Say what the baseline is. Without `--against`, it is your last commit --
     # so a change you already committed is not in the comparison at all, and the

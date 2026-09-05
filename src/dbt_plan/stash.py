@@ -20,6 +20,17 @@ from pathlib import Path
 
 STASH_LABEL = "dbt-plan-run-temp"
 
+# Everything in the repository except this project's snapshot directory. `:/` is
+# the repository root, so a dbt project in a subdirectory still gets the whole
+# tree stashed; the exclusion is relative to the project, which is where the
+# snapshot lives.
+#
+# The snapshot has to stay out. It is untracked, so `--include-untracked` would
+# take it -- and then `dbt-plan run` writes a new one before popping, and the pop
+# refuses because the untracked files it holds already exist. The user's real
+# work is left in the stash by a command that touched nothing of theirs.
+_STASH_PATHSPEC = (":/", ":(exclude).dbt-plan")
+
 
 class StashError(RuntimeError):
     """The tree could not be stashed, so no clean baseline is possible."""
@@ -100,7 +111,16 @@ def clean_worktree(project_dir: Path, *, has_changes: bool) -> Iterator[StashSta
     """
     state = StashState()
     if has_changes:
-        push = _git(project_dir, "stash", "push", "-m", STASH_LABEL, "--include-untracked")
+        push = _git(
+            project_dir,
+            "stash",
+            "push",
+            "-m",
+            STASH_LABEL,
+            "--include-untracked",
+            "--",
+            *_STASH_PATHSPEC,
+        )
         if push.returncode != 0:
             raise StashError(push.stderr.strip())
         state.ref = current_stash_ref(project_dir)

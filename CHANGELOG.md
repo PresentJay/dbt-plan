@@ -8,6 +8,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
+- **`dbt-plan run` no longer stashes its own snapshot, which could leave your work
+  in the stash.** (#119) `.dbt-plan/` is untracked, so `--include-untracked` took it;
+  `run` then wrote a new snapshot before popping, and the pop refused because the
+  untracked files it held already existed:
+
+  ```
+  Error: could not restore your stashed changes:
+  error: could not restore untracked files from stash
+    Your work is NOT lost -- it is still in the stash.
+  ```
+
+  The loud message was doing its job -- the work was recoverable, and the command
+  said exactly how. The bug is that a command which touched nothing of theirs left
+  someone's uncommitted work in a stash, on any project that had run `dbt-plan
+  snapshot` before.
+
+  The stash now excludes the snapshot directory by pathspec, so it stays in the tree
+  and the snapshot written during the block cannot collide with the pop. `:/` keeps
+  the rest of the repository included, so a dbt project in a subdirectory still gets
+  the whole tree stashed. `run` also stops counting the snapshot as a change at all,
+  so an otherwise clean tree is not stashed for it.
+
+  Not fixed by gitignoring the snapshot from `snapshot`, which was the first attempt:
+  that write lands inside `run`'s stash window and makes `.gitignore` the file the pop
+  cannot restore -- the same failure one step along.
+
+
+### Fixed
 - **A failed `dbt compile` is no longer reported as a clean run.** (#106) dbt-plan
   reads `target/`, and nothing in `target/` says whether it is current. Measured on
   jaffle_shop:
