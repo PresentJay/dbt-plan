@@ -437,6 +437,7 @@ def _do_check(args: argparse.Namespace) -> int:
     from dbt_plan.config import Config
     from dbt_plan.diff import diff_compiled_dirs, iter_model_sql
     from dbt_plan.manifest import (
+        build_exposure_index,
         build_node_index,
         build_unit_test_index,
         find_downstream_batch,
@@ -446,6 +447,7 @@ def _do_check(args: argparse.Namespace) -> int:
         DDLOperation,
         Safety,
         analyze_cascade_impacts,
+        attach_downstream_exposures,
         predict_ddl,
     )
 
@@ -850,9 +852,18 @@ def _do_check(args: argparse.Namespace) -> int:
         child_map=child_map,
         unit_test_index=build_unit_test_index(manifest),
     )
+    predictions = attach_downstream_exposures(
+        predictions=predictions,
+        model_node_ids=model_node_ids,
+        all_downstream=all_downstream,
+        child_map=child_map,
+        exposure_index=build_exposure_index(manifest),
+    )
     for pred in predictions:
         if pred.downstream_impacts:
             _log(f"  Cascade impacts for {pred.model_name}: {len(pred.downstream_impacts)}")
+        if pred.downstream_exposures:
+            _log(f"  Downstream exposures for {pred.model_name}: {len(pred.downstream_exposures)}")
 
     # 4. Format output
     check_result = CheckResult(
