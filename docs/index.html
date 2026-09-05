@@ -303,7 +303,7 @@
       </div>
       <div class="feature">
         <div class="feature-title">Cascade analysis</div>
-        <div class="feature-desc">Finds downstream models that reference dropped columns or will fail from schema changes.</div>
+        <div class="feature-desc">Finds downstream models broken by a dropped column: the ones that name it, the ones that select * and lose it without their own file changing, and the unit tests whose fixtures pin it down.</div>
       </div>
       <div class="feature">
         <div class="feature-title">Config changes</div>
