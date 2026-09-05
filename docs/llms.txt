@@ -20,10 +20,11 @@ the columns.
 ## What it does and does not do
 
 dbt-plan reads `target/compiled/**/*.sql` and `target/manifest.json`, diffs them against a
-saved baseline, and reports column additions/removals, materialization changes, and
-downstream models broken by a dropped column -- including ones that select `*` and lose it
-without their own file changing, and the unit tests whose fixtures name it. Exit codes drive CI: 0 safe, 1 destructive,
-2 warning.
+saved baseline, and reports column additions/removals, materialization changes, changes an
+enforced contract will reject, and everything downstream that a dropped column breaks:
+models that name it, models that select `*` and lose it without their own file changing,
+data tests, and unit tests whose fixtures pin it down. Exit codes drive CI: 0 safe,
+1 destructive, 2 warning.
 
 It does not execute SQL, simulate `dbt run`, or connect to a warehouse. It does not judge
 `--full-refresh` behavior (a runtime flag), seed/source changes, or pre/post-hook DDL.

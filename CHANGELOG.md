@@ -8,6 +8,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **A change an enforced contract will reject is now reported.** (#87) dbt-plan read
+  no contract information at all -- `grep -rn contract src/dbt_plan/` returned one
+  docstring -- so a change dbt refuses to build reported SAFE.
+
+  ```
+  WARNING  fct_contract (table, ignore)
+    CONTRACT VIOLATION: customer_id missing in definition
+    CREATE OR REPLACE TABLE
+  ```
+
+  The wording is dbt's own, from the table it prints when it refuses the model.
+
+  Under an enforced contract the ordinary rules invert: dbt requires every column
+  to be declared, so a column **added** to the SQL fails the build exactly as a
+  removed one does. Everywhere else in dbt-plan an added column is safe and a
+  `table` is `CREATE OR REPLACE`.
+
+  Names only. dbt compares its declared `data_type` against what the warehouse
+  reports; dbt-plan sees only what the SQL casts explicitly, and deciding that
+  `varchar` and `TEXT` are the same claim needs a per-adapter type table that does
+  not exist here. Both measured failures are name mismatches.
+
+  Columns that cannot be read from the SQL become REVIEW REQUIRED rather than
+  silence -- a contract makes that refusal more important, not less, since the one
+  thing the author stated is the thing going unchecked.
+
 - **Data tests broken by a dropped column are now reported.** (#85, #86) This closes
   a false all-clear, and the most common one left: unit tests are rare, `not_null`
   is in nearly every dbt project.

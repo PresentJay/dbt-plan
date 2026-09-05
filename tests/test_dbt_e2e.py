@@ -444,3 +444,85 @@ SELECT
 
         result = _dbt_plan(["check", "--project-dir", str(dbt_project), "--no-color"])
         assert "DATA_TEST" not in result.stdout, result.stdout
+
+
+_CONTRACT_MODEL = """{{{{ config(materialized='table', contract={{'enforced': True}}) }}}}
+
+SELECT
+    1 AS order_id{extra}
+"""
+
+
+@pytest.fixture
+def contract_project(tmp_path):
+    """A project with one contracted model, declared in YAML and produced in SQL."""
+    project = tmp_path / "contract_project"
+    (project / "models").mkdir(parents=True)
+    (project / "dbt_project.yml").write_text(
+        "name: contract_project\nversion: '1.0.0'\nprofile: contract_profile\n"
+        'model-paths: ["models"]\ntarget-path: "target"\n'
+    )
+    (project / "profiles.yml").write_text(
+        "contract_profile:\n  target: dev\n  outputs:\n    dev:\n"
+        '      type: duckdb\n      path: ":memory:"\n'
+    )
+    (project / "models" / "fct_contract.sql").write_text(
+        _CONTRACT_MODEL.format(extra=",\n    'cust_abc' AS customer_id")
+    )
+    (project / "models" / "schema.yml").write_text(
+        """version: 2
+models:
+  - name: fct_contract
+    config:
+      contract:
+        enforced: true
+    columns:
+      - name: order_id
+        data_type: integer
+      - name: customer_id
+        data_type: varchar
+"""
+    )
+    return project
+
+
+class TestAnEnforcedContract:
+    def _snapshot_then(self, project, sql):
+        _dbt_compile(project)
+        _dbt_plan(["snapshot", "--project-dir", str(project)])
+        (project / "models" / "fct_contract.sql").write_text(sql)
+        _dbt_compile(project)
+        return _dbt_plan(["check", "--project-dir", str(project), "--no-color"])
+
+    def test_a_removed_column_is_named_the_way_dbt_names_it(self, contract_project):
+        result = self._snapshot_then(contract_project, _CONTRACT_MODEL.format(extra=""))
+        assert "CONTRACT VIOLATION: customer_id missing in definition" in result.stdout
+        assert result.returncode == 2, result.stdout
+
+    def test_dbt_build_really_refuses_it(self, contract_project):
+        """The claim above, measured. A table is CREATE OR REPLACE and otherwise safe."""
+        _dbt_compile(contract_project)
+        (contract_project / "models" / "fct_contract.sql").write_text(
+            _CONTRACT_MODEL.format(extra="")
+        )
+        result = _dbt_build(contract_project, "fct_contract")
+        assert result.returncode != 0
+        assert "This model has an enforced contract that failed" in result.stdout
+        assert "missing in definition" in result.stdout
+
+    def test_an_added_column_is_a_violation_too(self, contract_project):
+        """Everywhere else in dbt-plan an added column is safe. Under a contract it is not."""
+        result = self._snapshot_then(
+            contract_project,
+            _CONTRACT_MODEL.format(extra=",\n    'cust_abc' AS customer_id,\n    'x' AS note"),
+        )
+        assert "CONTRACT VIOLATION: note missing in contract" in result.stdout
+        assert result.returncode == 2, result.stdout
+
+    def test_a_change_that_keeps_the_shape_stays_safe(self, contract_project):
+        result = self._snapshot_then(
+            contract_project,
+            _CONTRACT_MODEL.format(extra=",\n    'cust_xyz' AS customer_id"),
+        )
+        assert "CONTRACT VIOLATION" not in result.stdout
+        assert result.returncode == 0, result.stdout

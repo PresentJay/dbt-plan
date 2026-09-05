@@ -152,6 +152,10 @@ class ModelNode:
     materialization: str  # "table", "view", "incremental", "ephemeral"
     on_schema_change: str | None  # "ignore", "fail", "append_new_columns", "sync_all_columns"
     columns: tuple[str, ...] = ()  # from manifest column definitions (fallback for SELECT *)
+    # `contract: {enforced: true}`. When set, dbt requires every column to be
+    # declared, so `columns` above stops being documentation and becomes the shape
+    # dbt itself checks the SQL against.
+    contract_enforced: bool = False
 
 
 def load_manifest(manifest_path: str | Path) -> dict:
@@ -321,6 +325,7 @@ def build_node_index(manifest: dict, *, include_packages: bool = False) -> dict[
                 materialization=config.get("materialized") or "table",
                 on_schema_change=config.get("on_schema_change"),
                 columns=manifest_cols,
+                contract_enforced=bool((config.get("contract") or {}).get("enforced")),
             )
     return index
 
