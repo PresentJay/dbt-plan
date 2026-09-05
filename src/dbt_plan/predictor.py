@@ -828,3 +828,78 @@ def attach_downstream_exposures(
         if found:
             updated[i] = replace(pred, downstream_exposures=[found[k] for k in sorted(found)])
     return updated
+
+
+def apply_contract(
+    prediction: DDLPrediction,
+    node,
+    current_columns: list[str] | None,
+) -> DDLPrediction:
+    """Report a change that an enforced contract will reject.
+
+    A contract is the author stating what the model's shape is, which is exactly
+    the kind of claim dbt-plan can check against the SQL without running anything.
+    dbt checks the same thing at build time and refuses to create the relation:
+
+        This model has an enforced contract that failed.
+        | column_name | definition_type | contract_type | mismatch_reason       |
+        | customer_id |                 | VARCHAR       | missing in definition |
+
+    Under an enforced contract the ordinary safety rules invert. Everywhere else
+    an added column is safe and a `table` is `CREATE OR REPLACE`; here both are a
+    build failure, because dbt requires every column to be declared:
+
+        | note        | VARCHAR         |               | missing in contract |
+
+    Names only, not types. dbt compares its declared `data_type` against what the
+    warehouse reports; dbt-plan sees only what the SQL casts explicitly, and
+    deciding that `varchar` and `TEXT` are the same claim needs a per-adapter type
+    table that does not exist here. A wrong answer on types would be worse than no
+    answer, and the two measured failures above are both name mismatches.
+
+    Never destructive: nothing is dropped, the run stops. Same class as
+    `incremental` + `on_schema_change: fail`.
+    """
+    if not getattr(node, "contract_enforced", False):
+        return prediction
+    if prediction.materialization == "ephemeral":
+        return prediction  # no relation exists, so there is nothing to enforce against
+    declared = {col.lower() for col in node.columns}
+    if not declared:
+        # Enforcement with nothing declared is dbt's error to report, not this one's.
+        return prediction
+
+    unreadable = (
+        current_columns is None
+        or current_columns == ["*"]
+        or (len(current_columns) == 1 and current_columns[0].startswith("* except("))
+    )
+    if unreadable:
+        return replace(
+            prediction,
+            safety=worst_safety([prediction.safety, Safety.WARNING]),
+            operations=[
+                DDLOperation(
+                    "REVIEW REQUIRED (contract enforced, but the columns this SQL "
+                    "produces could not be read)"
+                ),
+                *prediction.operations,
+            ],
+        )
+
+    produced = {col.lower() for col in current_columns}
+    violations = [
+        *(f"{col} missing in definition" for col in sorted(declared - produced)),
+        *(f"{col} missing in contract" for col in sorted(produced - declared)),
+    ]
+    if not violations:
+        return prediction
+
+    return replace(
+        prediction,
+        safety=worst_safety([prediction.safety, Safety.WARNING]),
+        operations=[
+            *(DDLOperation(f"CONTRACT VIOLATION: {v}") for v in violations),
+            *prediction.operations,
+        ],
+    )

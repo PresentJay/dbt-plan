@@ -448,6 +448,7 @@ def _do_check(args: argparse.Namespace) -> int:
         DDLOperation,
         Safety,
         analyze_cascade_impacts,
+        apply_contract,
         attach_downstream_exposures,
         predict_ddl,
     )
@@ -693,6 +694,11 @@ def _do_check(args: argparse.Namespace) -> int:
             current_columns=current_cols,
             status=diff.status,
         )
+
+        # An enforced contract is checked against the SQL, not against the base
+        # revision, so a removed model has nothing left to check.
+        if diff.status != "removed":
+            prediction = apply_contract(prediction, node, current_cols)
 
         # Detect materialization or on_schema_change config changes
         if base_node and diff.status == "modified":

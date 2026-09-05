@@ -35,6 +35,7 @@ dbt-plan은 `dbt run` 전에 위험을 경고하는 **정적 분석 도구**다.
 - 하위 모델 cascade 영향 분석 (broken ref, build failure, SELECT * 상속 컬럼 손실)
 - 하위 unit test 픽스처 컬럼 검사, 하위 exposure 소유자 표시
 - materialization/on_schema_change 설정 변경 감지
+- enforced contract 위반 감지 (컬럼 이름만, data_type 비교는 범위 밖)
 
 ### DO NOT (범위 밖)
 - `dbt run` 시뮬레이션 — 런타임 동작은 범위 밖
@@ -86,6 +87,7 @@ make test
 | incremental | sync_all_columns | ADD + DROP COLUMN | DESTRUCTIVE if removed |
 | any | (model removed) | MODEL REMOVED | DESTRUCTIVE |
 | any | (unknown osc) | UNKNOWN on_schema_change | WARNING |
+| any | (contract enforced) | CONTRACT VIOLATION (이름 불일치, 추가/삭제 양쪽) | WARNING |
 | materialized_view / custom | (no osc set) | UNKNOWN materialization | WARNING |
 | materialized_view / custom | (osc set) | follows incremental rules | per osc |
 
