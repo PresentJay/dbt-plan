@@ -501,7 +501,10 @@ class TestJsonRoundTripNullValues:
         # null_mat: materialized null -> "table", osc preserved as "fail"
         assert "null_mat" in index
         assert index["null_mat"].materialization == "table"
-        assert index["null_mat"].on_schema_change == "fail"
+        # No `unrendered_config` in this hand-written manifest, and a resolved
+        # on_schema_change cannot say who set it -- so it is kept for incremental,
+        # whose default is dbt's own documented rule, and refused for the rest.
+        assert index["null_mat"].on_schema_change is None
 
         # null_cols: columns null -> empty tuple
         assert "null_cols" in index

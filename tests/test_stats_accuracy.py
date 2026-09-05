@@ -247,8 +247,8 @@ class TestSelectStarCounting:
 class TestManifestColumnFallback:
     """Scenario 3: Manifest column fallback info."""
 
-    def test_fallback_available_count(self, tmp_path, capsys):
-        """2 of 3 SELECT * models have manifest columns defined."""
+    def test_fallback_is_counted_only_for_models_it_could_help(self, tmp_path, capsys):
+        """It used to count every documented model, including ones already readable."""
         nodes = {}
         # star1 and star2 have columns in manifest
         nid, node = _model_node("star1", materialization="table", columns={"id": {}, "name": {}})
@@ -283,17 +283,25 @@ class TestManifestColumnFallback:
 
         out = capsys.readouterr().out
         assert "SELECT * usage: 3/5 models (60%)" in out
-        # manifest_fallback counts ALL models with columns defined (2 out of 5 total)
-        assert "Manifest column fallback available: 2/5 models" in out
-        # Remaining = star_count - min(star_count, manifest_fallback) = 3 - min(3, 2) = 1
-        assert "Remaining without fallback: 1" in out
+        # None of the three stars can be resolved: they select from raw relations,
+        # which are not models and have no compiled SQL to expand from.
+        assert "Columns readable: 2/5 compiled model(s)" in out
+        assert "unresolved: 3 -- these report review required" in out
+        assert "manifest columns documented for 2 of them" in out
+        assert "no fallback for 1 (add column docs to resolve)" in out
 
 
-class TestCoverageScore:
-    """Scenario 4: Coverage score math."""
+class TestDdlRuleCount:
+    """Scenario 4: which models dbt-plan has a rule for, rather than a readiness score.
 
-    def test_coverage_calculation(self, tmp_path, capsys):
-        """Coverage = tables + views + ephemeral + monitorable incremental."""
+    The old "Coverage: N/N models fully analyzed" counted materializations. It
+    excluded `append_new_columns` and `ignore`, which dbt-plan analyses exactly,
+    and it could print `SELECT * usage: 1/5` and `Coverage: 5/5 fully analyzed`
+    one line apart.
+    """
+
+    def test_only_materializations_with_no_rule_are_excluded(self, tmp_path, capsys):
+        """Derived from predict_ddl itself, so the count cannot drift from the rules."""
         nodes = {}
         # 3 tables
         for i in range(3):
@@ -336,11 +344,11 @@ class TestCoverageScore:
         _do_stats(args)
 
         out = capsys.readouterr().out
-        total = 11
-        # safe = tables(3) + views(2) + ephemeral(1) = 6
-        # monitorable = sync_all_columns(2) + fail(1) = 3
-        # coverage = 6 + 3 = 9
-        assert f"Coverage: 9/{total} models fully analyzed by dbt-plan" in out
+        # Every model here has an exact rule except the snapshot -- including the
+        # append_new_columns and ignore ones, which the old count left out.
+        assert "DDL rules: 10/11 model(s)" in out
+        assert "no rule, always review required:" in out
+        assert "snapshot" in out
 
 
 class TestEdgeCases:
@@ -356,8 +364,7 @@ class TestEdgeCases:
 
         out = capsys.readouterr().out
         assert "0 model(s) in manifest" in out
-        # Coverage should show 0/0
-        assert "Coverage: 0/0 models fully analyzed by dbt-plan" in out
+        assert "DDL rules: 0/0 model(s)" in out
 
     def test_only_test_source_nodes(self, tmp_path, capsys):
         """Manifest with only test/source nodes — 0 models."""
@@ -630,5 +637,7 @@ class TestStatsSelectStarZero:
 
         out = capsys.readouterr().out
         assert "SELECT * usage: 0/2 models (0%)" in out
-        # No fallback info when no SELECT * models
-        assert "Manifest column fallback" not in out
+        assert "Columns readable: 2/2 compiled model(s)" in out
+        # Nothing unresolved, so no advice about how to resolve it.
+        assert "unresolved" not in out
+        assert "add column docs" not in out

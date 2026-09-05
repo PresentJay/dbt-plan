@@ -363,7 +363,7 @@ git push</pre>
         <tr><td>dbt-plan snapshot</td><td>Save current compiled SQL + manifest as baseline for later comparison.</td></tr>
         <tr><td>dbt-plan ci-setup</td><td>Generate GitHub Actions workflow that runs dbt-plan on every PR.</td></tr>
         <tr><td>dbt-plan init</td><td>Generate .dbt-plan.yml config + add .dbt-plan/ to .gitignore.</td></tr>
-        <tr><td>dbt-plan stats</td><td>Analyze project: materialization distribution, SELECT * usage, cascade risks.</td></tr>
+        <tr><td>dbt-plan stats</td><td>Analyze project: materialization distribution, how many models' columns it can read, and which materializations it has no rule for.</td></tr>
       </tbody>
     </table>
   </section>

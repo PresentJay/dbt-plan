@@ -128,11 +128,20 @@ class TestRealNodeIndex:
         assert index["dim_books"].materialization == "table"
         assert index["fct_orders"].materialization == "incremental"
 
-    def test_node_on_schema_change(self, real_manifest):
-        """Node index preserves on_schema_change settings."""
+    def test_on_schema_change_is_kept_only_where_the_author_set_it(self, real_manifest):
+        """dbt resolves it for every model, so the resolved value asserts nothing.
+
+        `stg_orders` is a view and nobody wrote `on_schema_change` for it; dbt still
+        records `"ignore"`. Carrying that as the author's assertion is what let a
+        materialized view drop a column and report NO DDL.
+        """
         index = build_node_index(real_manifest)
+        assert (
+            real_manifest["nodes"]["model.test_project.stg_orders"]["config"]["on_schema_change"]
+            == "ignore"
+        )
+        assert index["stg_orders"].on_schema_change is None
         assert index["fct_orders"].on_schema_change == "sync_all_columns"
-        assert index["stg_orders"].on_schema_change == "ignore"
 
     def test_node_columns_come_from_the_schema_file_or_not_at_all(self, real_manifest):
         """The fixture has both cases on purpose, so both paths are exercised.

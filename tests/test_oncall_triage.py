@@ -664,7 +664,7 @@ class TestScenario4StatsCommand:
         assert "dbt-plan stats" in output
         assert "Materializations:" in output
         assert "on_schema_change" in output
-        assert "Coverage:" in output
+        assert "DDL rules:" in output
 
         # Verify no crash, no empty output
         assert len(output) > 100, "Stats output seems too short to be useful"
