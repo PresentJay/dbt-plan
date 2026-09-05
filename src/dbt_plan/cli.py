@@ -221,6 +221,7 @@ def _do_stats(args: argparse.Namespace) -> None:
     from collections import Counter
 
     from dbt_plan.columns import extract_columns
+    from dbt_plan.diff import iter_model_sql
     from dbt_plan.manifest import load_manifest
 
     project_dir = Path(args.project_dir)
@@ -268,7 +269,7 @@ def _do_stats(args: argparse.Namespace) -> None:
     sql_count = 0
     if compiled_dir:
         dialect = getattr(args, "dialect", "snowflake") or "snowflake"
-        for sql_file in compiled_dir.rglob("*.sql"):
+        for sql_file in iter_model_sql(compiled_dir):
             sql_count += 1
             cols = extract_columns(sql_file.read_text(encoding="utf-8"), dialect=dialect)
             if cols == ["*"]:
@@ -437,9 +438,10 @@ def _do_check(args: argparse.Namespace) -> int:
 
     from dbt_plan.columns import extract_cast_types, extract_columns
     from dbt_plan.config import Config
-    from dbt_plan.diff import diff_compiled_dirs
+    from dbt_plan.diff import diff_compiled_dirs, iter_model_sql
     from dbt_plan.manifest import (
         build_node_index,
+        build_unit_test_index,
         find_downstream_batch,
         load_manifest,
     )
@@ -836,7 +838,7 @@ def _do_check(args: argparse.Namespace) -> int:
     # 3c. Build compiled SQL index once (O(1) lookup instead of rglob per downstream)
     compiled_sql_index: dict[str, Path] = {}
     if current_compiled:
-        for sql_file in current_compiled.rglob("*.sql"):
+        for sql_file in iter_model_sql(current_compiled):
             compiled_sql_index[sql_file.stem] = sql_file
 
     # 3d. Cascade impact analysis (extracted to predictor module)
@@ -848,6 +850,8 @@ def _do_check(args: argparse.Namespace) -> int:
         node_index=node_index,
         base_node_index=base_node_index,
         compiled_sql_index=compiled_sql_index,
+        child_map=child_map,
+        unit_test_index=build_unit_test_index(manifest),
     )
     for pred in predictions:
         if pred.downstream_impacts:

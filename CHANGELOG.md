@@ -7,6 +7,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **Unit tests downstream of a dropped column are now reported.** (#43) A dbt unit
+  test pins its columns down by hand, in `expect` and in every `given` input, and
+  dbt checks each of those against the real relation it stands for:
+
+  ```
+  Invalid column name: 'customer_id' in unit test fixture for 'stg_orders'.
+  Accepted columns for 'stg_orders' are: ['order_id', 'store_id', 'order_date']
+  ```
+
+  So dropping a column fails the build even when the model's own DDL is safe --
+  a view is `CREATE OR REPLACE`, and dbt-plan called that SAFE while `dbt build`
+  was going to stop. It is now a `UNIT_TEST_FAILURE` cascade risk and a warning.
+
+  Both the `expect` block of the changed model's own tests and the `given` inputs
+  of tests further downstream are checked, since a `given` fixture standing in for
+  the changed model is validated the same way. Only fixtures that stand for the
+  changed model are compared. Only removals are reported: adding a column leaves
+  every fixture passing, measured against dbt 1.11.7.
+
+  A fixture that cannot be read from the manifest -- `fixture:` file references,
+  `format: sql` -- is reported as `UNIT_TEST_UNREADABLE` rather than passed over.
+
+### Fixed
+- **dbt-plan no longer treats compiled unit test SQL as a model.** `dbt build`
+  writes unit tests into `target/compiled/` alongside the models, under a
+  directory named for the schema file that declared them. dbt-plan diffed them
+  as models, so any project with unit tests got a spurious
+  `Skipped N model(s) not found in manifest` on every run -- and two models that
+  each carried a `test_shape` aborted the run outright on the duplicate-name
+  check. Anything under a `*.yml` path segment is now skipped.
+
 ## [0.11.2] - 2026-09-05
 
 ### Added

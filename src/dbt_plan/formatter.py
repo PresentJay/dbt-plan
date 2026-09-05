@@ -6,7 +6,7 @@ import json
 import sys
 from dataclasses import dataclass, field
 
-from dbt_plan.predictor import DDLPrediction, Safety
+from dbt_plan.predictor import RISK_SAFETY, DDLPrediction, Safety
 
 _SAFETY_ORDER = {Safety.DESTRUCTIVE: 0, Safety.WARNING: 1, Safety.SAFE: 2}
 _SAFETY_ICON = {
@@ -115,8 +115,7 @@ def format_text(result: CheckResult, *, color: bool | None = None) -> str:
         # Cascade impacts
         for impact in pred.downstream_impacts:
             risk_label = _colored(
-                impact.risk.upper(),
-                Safety.WARNING if impact.risk != "broken_ref" else Safety.DESTRUCTIVE,
+                impact.risk.upper(), RISK_SAFETY.get(impact.risk, Safety.WARNING)
             )
             lines.append(f"  >> {risk_label}  {impact.model_name}: {impact.reason}")
         lines.append("")
@@ -190,7 +189,7 @@ def format_github(result: CheckResult) -> str:
         if downstream:
             lines.append("- " + _format_downstream_line(downstream).lstrip())
         for impact in pred.downstream_impacts:
-            risk_icon = "\u26a0\ufe0f" if impact.risk == "build_failure" else "\U0001f534"
+            risk_icon = _SAFETY_ICON[RISK_SAFETY.get(impact.risk, Safety.WARNING)]
             lines.append(
                 f"- {risk_icon} **{impact.risk.upper()}** `{impact.model_name}`: {impact.reason}"
             )

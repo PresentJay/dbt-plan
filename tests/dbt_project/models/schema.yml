@@ -1,0 +1,41 @@
+version: 2
+
+# Downstream nodes that are not models. dbt-plan walks child_map into both of
+# these, so they exist here to keep that walk honest against a real manifest
+# rather than a hand-written fixture.
+
+unit_tests:
+  - name: test_stg_orders_shape
+    model: stg_orders
+    given: []
+    expect:
+      format: dict
+      rows:
+        - order_id: 1
+          store_id: store_001
+          order_date: '2024-01-01'
+          customer_id: cust_abc
+
+  - name: test_dim_books_groups_by_store
+    model: dim_books
+    given:
+      - input: ref('stg_orders')
+        format: dict
+        rows:
+          - store_id: store_001
+            customer_id: cust_abc
+    expect:
+      format: dict
+      rows:
+        - store_id: store_001
+          title: Sample Title
+
+exposures:
+  - name: orders_dashboard
+    type: dashboard
+    url: https://example.com/dashboards/orders
+    owner:
+      name: Data Team
+      email: data@example.com
+    depends_on:
+      - ref('stg_orders')

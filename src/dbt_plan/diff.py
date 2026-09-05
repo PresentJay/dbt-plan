@@ -2,8 +2,32 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterator
 from dataclasses import dataclass
 from pathlib import Path
+
+
+def iter_model_sql(directory: Path) -> Iterator[Path]:
+    """Yield the compiled SQL files under `directory` that are models.
+
+    dbt writes YAML-defined nodes -- unit tests, generic data tests -- into a
+    directory named after the schema file that declared them:
+
+        target/compiled/my_project/models/schema.yml/models/test_orders_shape.sql
+
+    so anything under a `*.yml` path segment is not a model. Left in, a unit test
+    is diffed as one and reported as "not found in manifest", and two models that
+    each carry a `test_shape` collide on the duplicate-stem check below and abort
+    the whole run.
+
+    Symlinks are skipped so a link cannot pull in a file outside the project.
+    """
+    for f in directory.rglob("*.sql"):
+        if f.is_symlink():
+            continue
+        if any(part.endswith((".yml", ".yaml")) for part in f.relative_to(directory).parts[:-1]):
+            continue
+        yield f
 
 
 @dataclass(frozen=True)
@@ -39,9 +63,7 @@ def diff_compiled_dirs(
         raise FileNotFoundError(f"Current directory does not exist: {current_dir}")
 
     base_models: dict[str, Path] = {}
-    for f in base_dir.rglob("*.sql"):
-        if f.is_symlink():
-            continue  # Skip symlinks to prevent reading files outside the project
+    for f in iter_model_sql(base_dir):
         if f.stem in base_models:
             raise ValueError(
                 f"Duplicate model name '{f.stem}' in {base_dir}: {base_models[f.stem]} vs {f}"
@@ -49,9 +71,7 @@ def diff_compiled_dirs(
         base_models[f.stem] = f
 
     current_models: dict[str, Path] = {}
-    for f in current_dir.rglob("*.sql"):
-        if f.is_symlink():
-            continue  # Skip symlinks to prevent reading files outside the project
+    for f in iter_model_sql(current_dir):
         if f.stem in current_models:
             raise ValueError(
                 f"Duplicate model name '{f.stem}' in {current_dir}: "

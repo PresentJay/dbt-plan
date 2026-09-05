@@ -101,8 +101,10 @@ class TestRealManifestLoading:
         stg_children = child_map.get("model.test_project.stg_orders", [])
         assert "model.test_project.dim_books" in stg_children
         assert "model.test_project.fct_orders" in stg_children
-        # Leaf models have no children
-        assert child_map.get("model.test_project.dim_books", []) == []
+        # A leaf model still has its unit tests hanging off it, and nothing else.
+        assert child_map.get("model.test_project.dim_books", []) == [
+            "unit_test.test_project.dim_books.test_dim_books_groups_by_store"
+        ]
         assert child_map.get("model.test_project.fct_orders", []) == []
 
 

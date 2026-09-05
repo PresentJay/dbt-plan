@@ -165,3 +165,85 @@ GROUP BY 1
         result = _dbt_plan(["check", "--project-dir", str(dbt_project), "--format", "github"])
         assert "###" in result.stdout
         assert "**SAFE**" in result.stdout
+
+
+def _dbt_build(project_dir: Path, select: str) -> subprocess.CompletedProcess:
+    """Run dbt build, which is where a broken unit test actually surfaces."""
+    return subprocess.run(
+        [
+            _DBT,
+            "build",
+            "--profiles-dir",
+            ".",
+            "--target-path",
+            "target",
+            "--select",
+            select,
+        ],
+        cwd=project_dir,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        timeout=120,
+    )
+
+
+_STG_ORDERS_WITHOUT_CUSTOMER_ID = """{{ config(materialized='view') }}
+
+SELECT
+    1 AS order_id,
+    'store_001' AS store_id,
+    '2024-01-01' AS order_date
+"""
+
+
+class TestUnitTestsAreReachedByCascade:
+    """The prediction and the build, side by side, on the same change.
+
+    tests/dbt_project declares two unit tests. Dropping `customer_id` from
+    stg_orders breaks both -- one through its own `expect`, one through the
+    `given` fixture standing in for stg_orders inside dim_books' test. dbt-plan
+    has to name both before the build does.
+    """
+
+    @pytest.fixture
+    def project_without_customer_id(self, dbt_project):
+        _dbt_compile(dbt_project)
+        _dbt_plan(["snapshot", "--project-dir", str(dbt_project)])
+        stg = dbt_project / "models" / "staging" / "stg_orders.sql"
+        stg.write_text(_STG_ORDERS_WITHOUT_CUSTOMER_ID)
+        _dbt_compile(dbt_project)
+        return dbt_project
+
+    def test_dbt_build_really_fails_on_the_dropped_column(self, project_without_customer_id):
+        """The claim dbt-plan makes below is this, measured."""
+        result = _dbt_build(project_without_customer_id, "stg_orders")
+        assert result.returncode != 0
+        assert "test_stg_orders_shape" in result.stdout
+        assert "Invalid column name: 'customer_id'" in result.stdout
+
+    def test_check_names_both_unit_tests(self, project_without_customer_id):
+        result = _dbt_plan(
+            ["check", "--project-dir", str(project_without_customer_id), "--no-color"]
+        )
+        assert "UNIT_TEST_FAILURE" in result.stdout
+        assert "test_stg_orders_shape" in result.stdout
+        assert "test_dim_books_groups_by_store" in result.stdout
+        # A view is CREATE OR REPLACE and safe on its own; the build is not.
+        assert result.returncode == 2, result.stdout
+
+    def test_compiled_unit_test_sql_is_not_reported_as_a_model(self, dbt_project):
+        """dbt build writes unit test SQL into target/compiled, next to the models."""
+        _dbt_compile(dbt_project)
+        _dbt_plan(["snapshot", "--project-dir", str(dbt_project)])
+        _dbt_build(dbt_project, "stg_orders")
+
+        compiled_unit_tests = list(
+            (dbt_project / "target" / "compiled").rglob("test_stg_orders_shape.sql")
+        )
+        assert compiled_unit_tests, "dbt did not compile the unit test; the guard is untested"
+
+        result = _dbt_plan(["check", "--project-dir", str(dbt_project), "--no-color"])
+        assert "test_stg_orders_shape" not in result.stdout
+        assert "not found in manifest" not in result.stdout
+        assert result.returncode == 0, result.stdout
