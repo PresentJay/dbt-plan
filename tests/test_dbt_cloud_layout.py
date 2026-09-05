@@ -10,7 +10,7 @@ from __future__ import annotations
 import pytest
 
 from dbt_plan.cli import _find_compiled_dir
-from dbt_plan.diff import diff_compiled_dirs
+from dbt_plan.diff import diff_compiled_dirs, iter_model_sql
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -38,7 +38,7 @@ class TestStandardCliLayout:
 
         result = _find_compiled_dir(target)
         assert result is not None
-        assert result == target / "compiled" / "my_project" / "models"
+        assert result == (target / "compiled" / "my_project", ("models",))
 
     def test_find_compiled_dir_with_deep_model(self, tmp_path):
         target = tmp_path / "target"
@@ -46,7 +46,7 @@ class TestStandardCliLayout:
         _make_sql(models / "stg_orders.sql")
 
         result = _find_compiled_dir(target)
-        assert result == target / "compiled" / "my_project" / "models"
+        assert result == (target / "compiled" / "my_project", ("models",))
 
 
 # ---------------------------------------------------------------------------
@@ -64,7 +64,7 @@ class TestFlatLayout:
 
         result = _find_compiled_dir(target)
         assert result is not None
-        assert result == target / "compiled" / "models"
+        assert result == (target / "compiled", ("models",))
 
     def test_flat_takes_priority_over_project_subdir(self, tmp_path):
         """When both flat models/ and project/models/ exist, flat wins."""
@@ -77,7 +77,7 @@ class TestFlatLayout:
 
         result = _find_compiled_dir(target)
         # Flat layout check comes first in the implementation
-        assert result == target / "compiled" / "models"
+        assert result == (target / "compiled", ("models",))
 
 
 # ---------------------------------------------------------------------------
@@ -99,7 +99,7 @@ class TestNestedModelDirectories:
         compiled_dir = _find_compiled_dir(target)
         assert compiled_dir is not None
 
-        found = {f.stem for f in compiled_dir.rglob("*.sql")}
+        found = {f.stem for f in iter_model_sql(*compiled_dir)}
         assert found == {"model_a", "model_b", "model_c"}
 
     def test_diff_finds_all_nested_models(self, tmp_path):
@@ -160,7 +160,7 @@ class TestNonSqlFilesFiltered:
 
         compiled_dir = _find_compiled_dir(target)
         assert compiled_dir is not None
-        found = list(compiled_dir.rglob("*.sql"))
+        found = list(iter_model_sql(*compiled_dir))
         assert len(found) == 1
         assert found[0].stem == "real_model"
 
@@ -224,7 +224,7 @@ class TestNonModelDirectories:
 
         result = _find_compiled_dir(target)
         assert result is not None
-        assert result == target / "compiled" / "my_project" / "models"
+        assert result == (target / "compiled" / "my_project", ("models",))
 
     def test_multiple_projects_with_models_raises(self, tmp_path):
         """Multiple project directories with models/ → ValueError."""
@@ -252,7 +252,7 @@ class TestVeryDeepNesting:
         compiled_dir = _find_compiled_dir(target)
         assert compiled_dir is not None
 
-        found = list(compiled_dir.rglob("*.sql"))
+        found = list(iter_model_sql(*compiled_dir))
         assert len(found) == 1
         assert found[0].stem == "deep_model"
 
@@ -286,7 +286,7 @@ class TestSpecialCharactersInPath:
         compiled_dir = _find_compiled_dir(target)
         assert compiled_dir is not None
 
-        found = list(compiled_dir.rglob("*.sql"))
+        found = list(iter_model_sql(*compiled_dir))
         assert len(found) == 1
         assert found[0].stem == "model_with_dashes"
 

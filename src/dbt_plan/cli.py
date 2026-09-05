@@ -6,7 +6,8 @@ import argparse
 import json
 import shutil
 import sys
-from pathlib import Path
+from pathlib import Path, PurePosixPath
+from typing import NamedTuple
 
 from dbt_plan.formatter import CheckResult, format_github, format_json, format_text
 
@@ -24,48 +25,81 @@ def _configure_output_streams() -> None:
             reconfigure(encoding="utf-8", errors="replace")
 
 
-def _root_project_name(target_dir: Path) -> str | None:
-    """Name of the project that produced this target/, per its own manifest.
+class CompiledLayout(NamedTuple):
+    """Where this project's compiled SQL is, and which of it is models."""
 
-    Read only when `target/compiled/` holds more than one project directory, so
-    the ordinary case never pays for parsing the largest file dbt writes.
+    root: Path  # target/compiled/<project>/
+    model_dirs: tuple[str, ...]  # its `model-paths`, as written on disk
 
-    This is the same field `build_node_index` uses to keep package models out of
-    the index. The two sides of dbt-plan should agree on which project is yours.
+
+def _manifest_layout(target_dir: Path) -> tuple[str | None, tuple[str, ...]]:
+    """The project that produced this target/, and the directories its models live in.
+
+    `model-paths` is configurable in `dbt_project.yml` and is not always `models`;
+    a project that renames it used to get "No compiled SQL found", and one that
+    lists several had every model outside `models/` silently skipped. Neither needs
+    `dbt_project.yml` parsed -- every model node records where it was declared:
+
+        "original_file_path": "transformations/stg_orders.sql"
+
+    The project name is the same field `build_node_index` uses to keep package
+    models out of the index. The two sides of dbt-plan should agree on which
+    project is yours.
     """
     try:
         with (target_dir / "manifest.json").open("r", encoding="utf-8") as f:
-            metadata = json.load(f).get("metadata") or {}
+            manifest = json.load(f)
     except (OSError, json.JSONDecodeError, UnicodeDecodeError):
-        return None
+        return None, ()
+
+    metadata = manifest.get("metadata") or {}
     name = metadata.get("project_name")
-    return name if isinstance(name, str) and name else None
+    project = name if isinstance(name, str) and name else None
+
+    model_dirs: dict[str, None] = {}
+    for node_id, node in (manifest.get("nodes") or {}).items():
+        if not node_id.startswith("model."):
+            continue
+        if project and node_id.split(".")[1] != project:
+            continue  # a package's models are compiled elsewhere and are not ours
+        declared = node.get("original_file_path")
+        if isinstance(declared, str) and declared:
+            model_dirs[PurePosixPath(declared).parts[0]] = None
+    return project, tuple(model_dirs)
 
 
-def _find_compiled_dir(target_dir: Path) -> Path | None:
-    """Find compiled SQL models directory inside target/.
+def _find_compiled_dir(target_dir: Path) -> CompiledLayout | None:
+    """The directory dbt compiled this project into, and its model subdirectories.
 
     Supports two dbt layouts:
-    1. target/compiled/{project_name}/models/  (standard)
-    2. target/compiled/models/  (flat, some dbt versions/configs)
+    1. target/compiled/{project_name}/  (standard)
+    2. target/compiled/            (flat, some dbt versions/configs)
 
-    dbt compiles every installed package into its own directory here, so a
-    project depending on a package that ships models has several. The root
-    project is identified from the manifest; only a genuinely undecidable case
-    raises.
+    Returns the project root rather than the model directory, because `model-paths`
+    can name several and can be renamed. What is under it is grouped by the path
+    each node was declared in, so the caller filters with `iter_model_sql`.
+
+    dbt compiles every installed package into its own directory here, so a project
+    depending on a package that ships models has several. The root project is
+    identified from the manifest; only a genuinely undecidable case raises.
     """
     compiled = target_dir / "compiled"
     if not compiled.exists():
         return None
 
-    # Flat layout: target/compiled/models/ (no project subdir)
-    flat_models = compiled / "models"
-    if flat_models.is_dir():
-        return flat_models
+    root_project, model_dirs = _manifest_layout(target_dir)
+    # An unreadable manifest, or one with no models: fall back to dbt's default
+    # rather than scanning nothing.
+    model_dirs = model_dirs or ("models",)
 
-    # Standard layout: target/compiled/{project_name}/models/
+    # Flat layout: the model directories sit directly under compiled/.
+    if any((compiled / name).is_dir() for name in model_dirs):
+        return CompiledLayout(compiled, model_dirs)
+
     candidates = [
-        d / "models" for d in sorted(compiled.iterdir()) if d.is_dir() and (d / "models").exists()
+        d
+        for d in sorted(compiled.iterdir())
+        if d.is_dir() and any((d / name).is_dir() for name in model_dirs)
     ]
     if not candidates:
         return None
@@ -73,12 +107,11 @@ def _find_compiled_dir(target_dir: Path) -> Path | None:
         # A package that ships models, almost always. The manifest names the
         # project that owns this target directory; anything else here is a
         # dependency and is not ours to check.
-        root_project = _root_project_name(target_dir)
         for candidate in candidates:
-            if candidate.parent.name == root_project:
-                return candidate
+            if candidate.name == root_project:
+                return CompiledLayout(candidate, model_dirs)
 
-        project_names = [c.parent.name for c in candidates]
+        project_names = [c.name for c in candidates]
         # Deliberately does not suggest --project-dir: these directories are
         # inside that project's target/, so passing it changes nothing.
         raise ValueError(
@@ -90,7 +123,7 @@ def _find_compiled_dir(target_dir: Path) -> Path | None:
                 else "is missing or unreadable. Run 'dbt compile' to regenerate it."
             )
         )
-    return candidates[0]
+    return CompiledLayout(candidates[0], model_dirs)
 
 
 def _do_snapshot(args: argparse.Namespace) -> None:
@@ -100,10 +133,11 @@ def _do_snapshot(args: argparse.Namespace) -> None:
     base_dir = project_dir / ".dbt-plan" / "base"
 
     try:
-        compiled_dir = _find_compiled_dir(target_dir)
+        found = _find_compiled_dir(target_dir)
     except ValueError as e:
         print(f"Error: {e}", file=sys.stderr)
         sys.exit(2)
+    compiled_dir = found[0] if found else None
     if compiled_dir is None:
         print(
             "Error: No compiled SQL found. "
@@ -271,9 +305,10 @@ def _do_stats(args: argparse.Namespace) -> None:
     # counted here as unanalysable, and the advice printed underneath -- "add
     # column docs to resolve" -- was wrong for exactly those models.
     try:
-        compiled_dir = _find_compiled_dir(target_dir)
+        found = _find_compiled_dir(target_dir)
     except ValueError:
-        compiled_dir = None
+        found = None
+    compiled_dir, model_dirs = found if found else (None, ())
 
     star_written = 0  # the SQL asks for `*`
     unreadable = 0  # and dbt-plan still cannot say which columns that is
@@ -284,9 +319,9 @@ def _do_stats(args: argparse.Namespace) -> None:
             (manifest.get("metadata") or {}).get("adapter_type")
         )
         resolver = _make_table_resolver(
-            compiled_dir, _build_relation_index(manifest, node_index), dialect
+            compiled_dir, _build_relation_index(manifest, node_index), dialect, model_dirs
         )
-        for sql_file in iter_model_sql(compiled_dir):
+        for sql_file in iter_model_sql(compiled_dir, model_dirs):
             sql_count += 1
             sql = sql_file.read_text(encoding="utf-8")
             if extract_columns(sql, dialect=dialect) == ["*"]:
@@ -417,7 +452,9 @@ def _build_relation_index(manifest: dict, node_index: dict) -> dict[str, str]:
     return index
 
 
-def _make_table_resolver(compiled_dir, relation_index: dict[str, str], dialect: str):
+def _make_table_resolver(
+    compiled_dir, relation_index: dict[str, str], dialect: str, model_dirs=None
+):
     """Resolve a relation to the columns of the model that produces it.
 
     dbt-plan already holds every model's compiled SQL and a manifest naming the
@@ -432,7 +469,9 @@ def _make_table_resolver(compiled_dir, relation_index: dict[str, str], dialect: 
     from dbt_plan.columns import extract_columns
     from dbt_plan.diff import iter_model_sql
 
-    sql_by_model = {f.stem: f for f in iter_model_sql(compiled_dir)} if compiled_dir else {}
+    sql_by_model = (
+        {f.stem: f for f in iter_model_sql(compiled_dir, model_dirs)} if compiled_dir else {}
+    )
     cache: dict[str, list[str] | None] = {}
     in_progress: set[str] = set()
 
@@ -585,12 +624,19 @@ def _do_check(args: argparse.Namespace) -> int:
         _log(f"Using legacy snapshot format: {base_dir}")
 
     try:
-        current_compiled = _find_compiled_dir(target_dir)
+        found = _find_compiled_dir(target_dir)
     except ValueError as e:
         print(f"Error: {e}", file=sys.stderr)
         return 2
-    _log(f"Base compiled: {base_compiled}")
-    _log(f"Current compiled: {current_compiled}")
+    current_compiled, model_dirs = found if found else (None, ())
+    # A snapshot taken before 0.14 was copied from inside the model directory, so
+    # the prefix is already gone and filtering by it would find nothing at all --
+    # which would report every model as added rather than saying the base is old.
+    base_model_dirs = (
+        model_dirs if any((base_compiled / name).is_dir() for name in model_dirs) else None
+    )
+    _log(f"Base compiled: {base_compiled} (model dirs: {base_model_dirs or 'legacy layout'})")
+    _log(f"Current compiled: {current_compiled} (model dirs: {', '.join(model_dirs)})")
     if current_compiled is None:
         print(
             "Error: No compiled SQL found. "
@@ -610,7 +656,9 @@ def _do_check(args: argparse.Namespace) -> int:
     # 1. Diff compiled dirs
     _log(f"Manifest: {manifest_path}")
     try:
-        model_diffs = diff_compiled_dirs(base_compiled, current_compiled)
+        model_diffs = diff_compiled_dirs(
+            base_compiled, current_compiled, base_model_dirs, model_dirs
+        )
     except (ValueError, FileNotFoundError) as e:
         print(f"Error: {e}", file=sys.stderr)
         return 2
@@ -682,12 +730,13 @@ def _do_check(args: argparse.Namespace) -> int:
     # `select * from {{ ref(x) }}` names a relation, not a model. These let the
     # column resolver follow that reference into the other model's compiled SQL.
     current_table_columns = _make_table_resolver(
-        current_compiled, _build_relation_index(manifest, node_index), dialect
+        current_compiled, _build_relation_index(manifest, node_index), dialect, model_dirs
     )
     base_table_columns = _make_table_resolver(
         base_compiled,
         _build_relation_index(base_manifest or manifest, base_node_index or node_index),
         dialect,
+        base_model_dirs,
     )
 
     _log(f"Manifest: {len(node_index)} model(s) indexed")
@@ -700,7 +749,7 @@ def _do_check(args: argparse.Namespace) -> int:
     # makes it ordinary. It matters because a model missing from *both* compiled
     # directories yields no diff entry, so it is never examined -- and with
     # nothing else changed that used to print "no model changes" and exit 0.
-    compiled_stems = {f.stem for f in iter_model_sql(current_compiled)}
+    compiled_stems = {f.stem for f in iter_model_sql(current_compiled, model_dirs)}
     uncompiled_models = sorted(
         name
         for name in node_index
@@ -957,11 +1006,9 @@ def _do_check(args: argparse.Namespace) -> int:
     compiled_sql_index: dict[str, Path] = {}
     test_sql_index: dict[str, Path] = {}
     if current_compiled:
-        for sql_file in iter_model_sql(current_compiled):
+        for sql_file in iter_model_sql(current_compiled, model_dirs):
             compiled_sql_index[sql_file.stem] = sql_file
-        # Singular tests compile outside the models tree, so they are indexed from
-        # the project root of target/compiled rather than from current_compiled.
-        for sql_file in iter_non_model_sql(current_compiled.parent, current_compiled.name):
+        for sql_file in iter_non_model_sql(current_compiled, model_dirs):
             test_sql_index[sql_file.stem] = sql_file
 
     # 3d. Cascade impact analysis (extracted to predictor module)

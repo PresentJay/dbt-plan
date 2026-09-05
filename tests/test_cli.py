@@ -145,7 +145,7 @@ class TestSnapshotPathValidation:
         captured = capsys.readouterr()
         assert "Snapshot saved to" in captured.out
         base = project_dir / ".dbt-plan" / "base"
-        assert (base / "compiled" / "m.sql").exists()
+        assert (base / "compiled" / "models" / "m.sql").exists()
         assert (base / "manifest.json").exists()
 
     def test_snapshot_overwrites_existing(self, tmp_path, capsys):
@@ -164,7 +164,7 @@ class TestSnapshotPathValidation:
         _do_snapshot(args)
 
         base = project_dir / ".dbt-plan" / "base"
-        assert (base / "compiled" / "m.sql").read_text(encoding="utf-8") == "SELECT 2"
+        assert (base / "compiled" / "models" / "m.sql").read_text(encoding="utf-8") == "SELECT 2"
 
     def test_snapshot_no_compiled_sql_exits_2(self, tmp_path):
         """Snapshot exits 2 when no compiled SQL exists."""
@@ -189,7 +189,7 @@ class TestFindCompiledDir:
         (models / "m.sql").write_text("SELECT 1")
 
         result = _find_compiled_dir(tmp_path)
-        assert result == models
+        assert result == (compiled, ("models",))
 
     def test_standard_layout(self, tmp_path):
         """Standard layout: target/compiled/{project}/models/."""
@@ -201,7 +201,7 @@ class TestFindCompiledDir:
         (models / "m.sql").write_text("SELECT 1")
 
         result = _find_compiled_dir(tmp_path)
-        assert result == models
+        assert result == (compiled / "my_project", ("models",))
 
     def test_no_compiled_dir(self, tmp_path):
         """No compiled dir → None."""

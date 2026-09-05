@@ -7,6 +7,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **A project that renames `model-paths` is no longer refused.** (#95) `model-paths`
+  is configurable in `dbt_project.yml`, and dbt-plan assumed it was `models`:
+
+  ```
+  # model-paths: ["transformations"]
+  $ dbt compile
+  $ dbt-plan snapshot
+  Error: No compiled SQL found. Run 'dbt compile' first to generate compiled SQL
+  in the target/ directory.
+  ```
+
+  The compile was right there. The message named the one thing the user had already
+  done, which sends them to check dbt rather than dbt-plan.
+
+  A project listing **several** paths was worse: `models/` was scanned and the rest
+  were skipped without a word, so a change in one of them was never diffed. That is
+  a missed finding, not an error.
+
+  No `dbt_project.yml` parsing was needed for either -- every model node records
+  where it was declared, in `original_file_path`.
+
+  `dbt-plan snapshot` now saves the project's compiled root rather than its model
+  directory, so the snapshot layout gained one level. A snapshot taken by an earlier
+  version is detected and compared as before, rather than being read as an empty
+  baseline and reporting every model as added.
+
+
 ## [0.13.0] - 2026-09-05
 
 ### Added

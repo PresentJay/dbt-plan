@@ -2,15 +2,15 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterator
+from collections.abc import Iterator, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
 
-def iter_model_sql(directory: Path) -> Iterator[Path]:
-    """Yield the compiled SQL files under `directory` that are models.
+def iter_model_sql(root: Path, model_dirs: Sequence[str] | None = None) -> Iterator[Path]:
+    """Yield the compiled SQL files under `root` that are models.
 
-    dbt writes YAML-defined nodes -- unit tests, generic data tests -- into a
+    dbt writes YAML-declared nodes -- unit tests, generic data tests -- into a
     directory named after the schema file that declared them:
 
         target/compiled/my_project/models/schema.yml/models/test_orders_shape.sql
@@ -20,12 +20,21 @@ def iter_model_sql(directory: Path) -> Iterator[Path]:
     each carry a `test_shape` collide on the duplicate-stem check below and abort
     the whole run.
 
+    `model_dirs` names the top-level directories dbt wrote models into. That is
+    `model-paths` from `dbt_project.yml`, which is configurable and is not always
+    `models`; it is read from the manifest rather than assumed. None means no
+    prefix restriction, which is what a snapshot taken before 0.14 needs -- those
+    were copied from inside the model directory, so the prefix is already gone.
+
     Symlinks are skipped so a link cannot pull in a file outside the project.
     """
-    for f in directory.rglob("*.sql"):
+    for f in root.rglob("*.sql"):
         if f.is_symlink():
             continue
-        if any(part.endswith((".yml", ".yaml")) for part in f.relative_to(directory).parts[:-1]):
+        parts = f.relative_to(root).parts
+        if model_dirs is not None and parts[0] not in model_dirs:
+            continue
+        if any(part.endswith((".yml", ".yaml")) for part in parts[:-1]):
             continue
         yield f
 
@@ -42,23 +51,23 @@ class ModelDiff:
     current_sql: str | None = None  # cached content to avoid re-reading
 
 
-def iter_non_model_sql(compiled_root: Path, models_dir_name: str) -> Iterator[Path]:
-    """Yield the compiled SQL of everything under `compiled_root` that is not a model.
+def iter_non_model_sql(root: Path, model_dirs: Sequence[str]) -> Iterator[Path]:
+    """Yield the compiled SQL of everything under `root` that is not a model.
 
     Data tests and unit tests, in the two places dbt writes them:
 
         target/compiled/p/tests/singular_customer_tier.sql        <- test-paths
         target/compiled/p/models/schema.yml/not_null_orders_x.sql <- declared in YAML
 
-    Neither is inside the `models/` tree that `iter_model_sql` walks, so this is
-    its complement -- the same rule read the other way round.
+    Neither is a model, so this is the complement of `iter_model_sql` -- the same
+    rule read the other way round.
     """
-    for f in compiled_root.rglob("*.sql"):
+    for f in root.rglob("*.sql"):
         if f.is_symlink():
             continue
-        parts = f.relative_to(compiled_root).parts
+        parts = f.relative_to(root).parts
         under_yaml = any(part.endswith((".yml", ".yaml")) for part in parts[:-1])
-        if parts[0] == models_dir_name and not under_yaml:
+        if parts[0] in model_dirs and not under_yaml:
             continue
         yield f
 
@@ -66,6 +75,8 @@ def iter_non_model_sql(compiled_root: Path, models_dir_name: str) -> Iterator[Pa
 def diff_compiled_dirs(
     base_dir: str | Path,
     current_dir: str | Path,
+    base_model_dirs: Sequence[str] | None = None,
+    current_model_dirs: Sequence[str] | None = None,
 ) -> list[ModelDiff]:
     """Compare two directories of compiled SQL files.
 
@@ -84,7 +95,7 @@ def diff_compiled_dirs(
         raise FileNotFoundError(f"Current directory does not exist: {current_dir}")
 
     base_models: dict[str, Path] = {}
-    for f in iter_model_sql(base_dir):
+    for f in iter_model_sql(base_dir, base_model_dirs):
         if f.stem in base_models:
             raise ValueError(
                 f"Duplicate model name '{f.stem}' in {base_dir}: {base_models[f.stem]} vs {f}"
@@ -92,7 +103,7 @@ def diff_compiled_dirs(
         base_models[f.stem] = f
 
     current_models: dict[str, Path] = {}
-    for f in iter_model_sql(current_dir):
+    for f in iter_model_sql(current_dir, current_model_dirs):
         if f.stem in current_models:
             raise ValueError(
                 f"Duplicate model name '{f.stem}' in {current_dir}: "

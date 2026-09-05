@@ -383,7 +383,7 @@ class TestMultipleProjectsInCompiledDir:
         assert "--project-dir" not in error_msg
 
     def test_single_project_no_error(self, tmp_path):
-        """Single project in compiled/ returns the models dir without error."""
+        """Single project in compiled/ returns its root and its model dirs."""
         target = tmp_path / "target"
         compiled = target / "compiled"
 
@@ -391,7 +391,7 @@ class TestMultipleProjectsInCompiledDir:
         models_dir.mkdir(parents=True)
 
         result = _find_compiled_dir(target)
-        assert result == models_dir
+        assert result == (compiled / "my_project", ("models",))
 
     def test_flat_layout_no_error(self, tmp_path):
         """Flat layout (target/compiled/models/) works without error."""
@@ -400,7 +400,7 @@ class TestMultipleProjectsInCompiledDir:
         models_dir.mkdir(parents=True)
 
         result = _find_compiled_dir(target)
-        assert result == models_dir
+        assert result == (target / "compiled", ("models",))
 
     def test_no_compiled_dir_returns_none(self, tmp_path):
         """Missing compiled/ directory returns None."""
@@ -420,7 +420,7 @@ class TestMultipleProjectsInCompiledDir:
         (compiled / "not_a_project").mkdir(parents=True)  # no models/ inside
 
         result = _find_compiled_dir(target)
-        assert result == compiled / "real_project" / "models"
+        assert result == (compiled / "real_project", ("models",))
 
 
 # ===========================================================================
