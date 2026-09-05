@@ -25,11 +25,16 @@ dependencies = [
 
 [project.scripts]
 dbt-plan = "dbt_plan.cli:main"
+dbt-plan-mcp = "dbt_plan_mcp.server:main"
 
 [project.optional-dependencies]
 test = ["pytest>=8.0.0", "pytest-cov>=6.0.0"]
 dev = ["pytest>=8.0.0", "pytest-cov>=6.0.0", "ruff>=0.8.0"]
 dbt = ["dbt-core>=1.7.0", "dbt-duckdb>=1.7.0"]
+# The MCP server lives outside src/dbt_plan/ on purpose: it is async and speaks a
+# protocol, and tests/test_invariants.py forbids asyncio and network imports in the
+# analysis core. Keeping it a separate package keeps that guarantee provable.
+mcp = ["mcp>=2.0.0"]
 
 [project.urls]
 Homepage = "https://github.com/PresentJay/dbt-plan"
@@ -42,7 +47,7 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/dbt_plan"]
+packages = ["src/dbt_plan", "src/dbt_plan_mcp"]
 
 # Ship only what is needed to build and understand the package. An sdist is
 # published permanently and mirrored worldwide, so anything swept into it is
@@ -52,6 +57,7 @@ packages = ["src/dbt_plan"]
 [tool.hatch.build.targets.sdist]
 include = [
     "/src/dbt_plan",
+    "/src/dbt_plan_mcp",
     "/README.md",
     "/README.ko.md",
     "/CHANGELOG.md",
