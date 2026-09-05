@@ -1,6 +1,6 @@
 """SQLGlot-based column extraction from compiled SQL."""
 
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 
 import sqlglot
 from sqlglot import exp
@@ -267,18 +267,17 @@ def extract_cast_types(
     return {name: cast for name, cast in resolved if cast}
 
 
-def columns_read_from(
+def columns_read_by_relation(
     sql: str,
-    relation: str,
     schema: dict[str, dict[str, str]],
     *,
     dialect: str = "snowflake",
-) -> list[str] | None:
-    """Which columns this SQL names explicitly from `relation`.
+) -> dict[str, list[str]] | None:
+    """Every relation this SQL names columns from, and which columns -- in one parse.
 
-    Cascade detection has always been textual -- look for the dropped column's
-    name anywhere in the downstream SQL -- which fires on a comment, a string
-    literal, and any column of the same name belonging to a different table:
+    Cascade detection was textual -- look for the dropped column's name anywhere in
+    the downstream SQL -- which fires on a comment, a string literal, and any column
+    of the same name belonging to a different table:
 
         SELECT c.customer_id
         FROM stg_orders o JOIN dim_customers c ON o.order_id = c.order_id
@@ -286,17 +285,23 @@ def columns_read_from(
     Nothing there reads `stg_orders.customer_id`, and the text search says it does.
     Resolving the reference instead needs a schema, and dbt-plan has one: every
     model's columns, worked out from the project's own compiled SQL. `schema` is
-    keyed by bare model name, which sqlglot matches against the fully qualified
+    keyed by bare relation name, which sqlglot matches against the fully qualified
     relation that compiled dbt SQL actually contains.
 
-    Named explicitly, and stars deliberately left out of the answer. This exists to
-    decide whether a query will *fail*, and `select *` never fails when a column
-    disappears -- it returns one column fewer. That is a different finding, and
-    predict_ddl already makes it for the model that inherits the loss.
+    One parse per downstream model, answering for every relation it touches. The
+    cascade asks about each model that is losing a column -- in a `SELECT *` chain
+    that is every model upstream -- and re-qualifying the same SQL once per question
+    put a 200-model project at 38 seconds against a 5 second budget.
 
-    Returns None when the answer would be a guess: the SQL will not parse, or a
-    column cannot be attributed to a relation. The caller falls back to searching
-    the text, which is wider -- a refusal here must never narrow what gets reported.
+    Named explicitly, and stars deliberately left out. This exists to decide whether
+    a query will *fail*, and `select *` never fails when a column disappears -- it
+    returns one column fewer. That is a different finding, and predict_ddl already
+    makes it for the model that inherits the loss.
+
+    Keys are the relation names as written in the SQL, lowercased. Returns None when
+    the answer would be a guess: the SQL will not parse, or a column cannot be
+    attributed to a relation. The caller falls back to searching the text, which is
+    wider -- a refusal here must never narrow what gets reported.
     """
     from sqlglot.errors import OptimizeError, SqlglotError
     from sqlglot.optimizer.qualify import qualify
@@ -312,20 +317,36 @@ def columns_read_from(
     except (SqlglotError, OptimizeError, ValueError, KeyError, RecursionError):
         return None
 
-    aliases = {
-        table.alias_or_name
-        for table in tree.find_all(exp.Table)
-        if table.name.lower() == relation.lower()
+    alias_to_relation = {
+        table.alias_or_name: table.name.lower() for table in tree.find_all(exp.Table)
     }
-    if not aliases:
-        return []  # it does not read that relation at all
-    return sorted(
-        {
-            column.name.lower()
-            for column in tree.find_all(exp.Column)
-            if column.table in aliases and not isinstance(column.this, exp.Star)
-        }
-    )
+    read: dict[str, set[str]] = {name: set() for name in alias_to_relation.values()}
+    for column in tree.find_all(exp.Column):
+        relation = alias_to_relation.get(column.table)
+        if relation is not None and not isinstance(column.this, exp.Star):
+            read[relation].add(column.name.lower())
+    return {relation: sorted(columns) for relation, columns in read.items()}
+
+
+def columns_read_from(
+    sql: str,
+    relation: str | Iterable[str],
+    schema: dict[str, dict[str, str]],
+    *,
+    dialect: str = "snowflake",
+) -> list[str] | None:
+    """Which columns this SQL names explicitly from `relation`.
+
+    `relation` is every name the model is known by -- its own, and the relation an
+    `alias:` config makes it write to. Compiled SQL only ever contains the latter,
+    so matching on the model name alone answers "does not read it" for a model that
+    reads nothing else. See columns_read_by_relation for the rest.
+    """
+    by_relation = columns_read_by_relation(sql, schema, dialect=dialect)
+    if by_relation is None:
+        return None
+    names = {relation.lower()} if isinstance(relation, str) else {r.lower() for r in relation}
+    return sorted({col for name in names for col in by_relation.get(name, [])})
 
 
 # Coarse on purpose. sqlglot parses `varchar` and `text` to different types, and on

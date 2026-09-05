@@ -745,24 +745,26 @@ def analyze_cascade_impacts(
         lost_by_model: dict[str, list[str]] = (
             {pred.model_name: cascade_removed} if cascade_removed else {}
         )
-        col_patterns = _column_patterns(lost_by_model)
 
         downstream_to_check = [] if ignore_incremental else downstream_nids
         impacts: list[DownstreamImpact] = []
+        # Pass 1: what each downstream model becomes. Build failures on
+        # on_schema_change=fail, and models that lose a column they never named
+        # because they select * from one that did. This fills lost_by_model, and
+        # pass 2 needs the whole map -- a model two hops away reads the column from
+        # the passthrough, not from the model that changed.
+        ds_nodes = []
         for ds_nid in downstream_to_check:
             ds_key = model_key(ds_nid)
             ds_node = node_index.get(ds_key) or base_node_index.get(ds_key)
             if not ds_node:
                 continue
+            if ds_node.materialization == "ephemeral":
+                continue  # CTE substitution, no physical table -- always safe
+            ds_nodes.append(ds_node)
 
             ds_mat = ds_node.materialization
             ds_osc = ds_node.on_schema_change or "ignore"
-
-            # ephemeral: CTE substitution, no physical table — always safe
-            if ds_mat == "ephemeral":
-                continue
-
-            # incremental + fail: guaranteed build failure on any schema change
             if ds_mat == "incremental" and ds_osc == "fail" and (cascade_added or cascade_removed):
                 impacts.append(
                     DownstreamImpact(
@@ -773,58 +775,7 @@ def analyze_cascade_impacts(
                         reason="upstream schema changed, on_schema_change=fail",
                     )
                 )
-                # Don't continue — also check for broken column refs below
 
-            # Check for broken column references in downstream SQL
-            # Applies to ALL materialization types (table/view/incremental):
-            # even though table/view DDL is safe (CREATE OR REPLACE),
-            # the SELECT will fail if it references a dropped upstream column
-            if col_patterns:
-                ds_sql_path = compiled_sql_index.get(ds_node.name)
-                ds_sql = None
-                if ds_sql_path:
-                    try:
-                        ds_sql = ds_sql_path.read_text(encoding="utf-8")
-                    except (OSError, UnicodeDecodeError):
-                        pass  # unreadable file — skip broken_ref check for this model
-
-                # Resolving the reference beats searching for the name: the text
-                # search fires on a comment, a string literal, and any column of the
-                # same name belonging to a different table in the same query. It is
-                # the fallback rather than the answer, because a refusal there must
-                # widen what gets reported, never narrow it.
-                read = columns_read_of(ds_node.name, pred.model_name) if columns_read_of else None
-                if read is not None:
-                    broken_refs = [col for col in cascade_removed if col.lower() in read]
-                    if broken_refs:
-                        impacts.append(
-                            DownstreamImpact(
-                                model_name=ds_node.name,
-                                materialization=ds_mat,
-                                on_schema_change=ds_osc,
-                                risk="broken_ref",
-                                reason=f"reads dropped column(s): {', '.join(broken_refs)}",
-                            )
-                        )
-                elif ds_sql:
-                    broken_refs = [
-                        col for col, pattern in col_patterns.items() if pattern.search(ds_sql)
-                    ]
-                    if broken_refs:
-                        impacts.append(
-                            DownstreamImpact(
-                                model_name=ds_node.name,
-                                materialization=ds_mat,
-                                on_schema_change=ds_osc,
-                                risk="broken_ref",
-                                reason=f"references dropped column(s): {', '.join(broken_refs)}",
-                            )
-                        )
-
-            # A model whose own file did not change can still change shape, when it
-            # selects `*` from one that did. Nothing above catches it: the diff has
-            # no entry for an identical file, and broken_ref looks for the column by
-            # name in SQL that never names it.
             if cascade_removed and base_columns_of and current_columns_of:
                 inherited, ds_lost = _inherited_impact(
                     ds_node, base_columns_of, current_columns_of, changed_models=model_node_ids
@@ -833,8 +784,60 @@ def analyze_cascade_impacts(
                     impacts.append(inherited)
                 if ds_lost:
                     # It may lose the column harmlessly -- a table is rebuilt -- and
-                    # still break every test that reads it.
+                    # still break every model and test that reads it from there.
                     lost_by_model[ds_node.name] = ds_lost
+
+        # Pass 2: who reads a column that is going away, from whichever model it is
+        # going away from. Checked against every model in lost_by_model, not only the
+        # one that changed: `fct` reading `customer_id` from `mid`, which reads `*`
+        # from `stg`, breaks when `stg` drops it, and `fct` never mentions `stg`.
+        # The text search caught that by accident, matching the name anywhere; the
+        # resolved reader only answers about the relation it is asked about, so it
+        # has to be asked about each one.
+        if lost_by_model:
+            patterns = _column_patterns(lost_by_model)
+            for ds_node in ds_nodes:
+                ds_mat = ds_node.materialization
+                ds_osc = ds_node.on_schema_change or "ignore"
+                broken: dict[str, None] = {}
+                fell_back = False
+                ds_sql = None
+                ds_sql_path = compiled_sql_index.get(ds_node.name)
+                if ds_sql_path:
+                    try:
+                        ds_sql = ds_sql_path.read_text(encoding="utf-8")
+                    except (OSError, UnicodeDecodeError):
+                        ds_sql = None  # unreadable file -- the text search is skipped too
+
+                for lost_model, removed in lost_by_model.items():
+                    if lost_model == ds_node.name:
+                        continue
+                    # Resolving the reference beats searching for the name: the text
+                    # search fires on a comment, a string literal, and any column of
+                    # the same name on a different table. It stays as the fallback,
+                    # because a refusal must widen what gets reported, never narrow it.
+                    read = columns_read_of(ds_node.name, lost_model) if columns_read_of else None
+                    if read is not None:
+                        for col in removed:
+                            if col.lower() in read:
+                                broken[col] = None
+                    elif ds_sql:
+                        fell_back = True
+                        for col in removed:
+                            if patterns[col].search(ds_sql):
+                                broken[col] = None
+
+                if broken:
+                    verb = "references" if fell_back else "reads"
+                    impacts.append(
+                        DownstreamImpact(
+                            model_name=ds_node.name,
+                            materialization=ds_mat,
+                            on_schema_change=ds_osc,
+                            risk="broken_ref",
+                            reason=f"{verb} dropped column(s): {', '.join(broken)}",
+                        )
+                    )
 
         test_owners = [node_id, *downstream_to_check]
         impacts += _unit_test_impacts(lost_by_model, test_owners, child_map, unit_test_index)
