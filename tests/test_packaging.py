@@ -457,6 +457,22 @@ class TestMcpRegistryManifest:
         assert manifest["version"] == version
         assert manifest["packages"][0]["version"] == version
 
+    def test_description_fits_the_registry_limit(self) -> None:
+        """The registry rejects a description over 100 characters with a 422.
+
+        Found by running `mcp-publisher validate` before publishing rather than
+        during it -- the first version of this manifest was 254 characters and
+        would have failed at the point of release.
+        """
+        import json
+
+        manifest = json.loads((ROOT / "server.json").read_text(encoding="utf-8"))
+
+        assert len(manifest["description"]) <= 100, (
+            f"description is {len(manifest['description'])} chars; "
+            "the MCP registry rejects anything over 100"
+        )
+
     def test_it_points_at_the_pypi_package_this_repo_publishes(self) -> None:
         import json
 
