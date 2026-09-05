@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.14.0] - 2026-09-05
+
 ### Added
 - **A contract's declared `data_type` is now compared with the SQL's cast.** (#103)
   0.13.0 shipped contract checking by column name and said types were out of reach,
@@ -30,7 +32,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   explicit cast -- its type is whatever the warehouse infers, which dbt-plan does
   not ask. Casts are read only under an enforced contract, since that is the one
   place dbt checks the declaration against the SQL.
+- **`dbt-plan run --against main`.** (#114) The baseline was HEAD of the current
+  branch, so a change you had already committed was not in the comparison:
 
+  ```
+  $ git commit -am "drop status"
+  $ dbt-plan run
+  dbt-plan -- no model changes detected
+  ```
+
+  That is a `DROP COLUMN` against a table with data in it, reported as nothing --
+  and "before opening a pull request", which is what the command is for and what
+  the instructions `dbt-plan agent-setup` writes tell an agent to do, is exactly
+  when the interesting changes are committed already. `action.yml` had this right
+  all along; the local command did not.
+
+  `--against` compares with the **branch point**, not the tip, so nothing other
+  people merged while the branch was open is reported as yours.
+
+  The default is unchanged, because changing it would mean checking out another
+  commit on every run and moving someone's HEAD uninvited. What is new is that the
+  default says what it is:
+
+  ```
+  Baseline: your last commit (a1b2c3d). Anything already committed on this branch
+  is not compared -- pass --against main for that.
+  ```
+
+  The HEAD restore is structural, like the stash restore next to it, and HEAD comes
+  back *before* the stash is popped so the work lands on the tree it came from.
 
 ### Changed
 - **Cascade detection resolves the reference instead of searching for the name.**
@@ -63,7 +93,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Measured at 0.43-0.55s on the 200-model `SELECT *` chain, against 0.22s before and
   a budget of 5s.
 
-
 ### Fixed
 - **`dbt-plan run` no longer stashes its own snapshot, which could leave your work
   in the stash.** (#119) `.dbt-plan/` is untracked, so `--include-untracked` took it;
@@ -90,9 +119,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Not fixed by gitignoring the snapshot from `snapshot`, which was the first attempt:
   that write lands inside `run`'s stash window and makes `.gitignore` the file the pop
   cannot restore -- the same failure one step along.
-
-
-### Fixed
 - **A failed `dbt compile` is no longer reported as a clean run.** (#106) dbt-plan
   reads `target/`, and nothing in `target/` says whether it is current. Measured on
   jaffle_shop:
@@ -125,57 +151,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   One direction only: a `git checkout` moves mtimes without changing content, and
   reports a `target/` that really is stale. A file **deleted** since the compile is
   not caught -- a deletion leaves no mtime behind.
-
-
-### Added
-- **`dbt-plan run --against main`.** (#114) The baseline was HEAD of the current
-  branch, so a change you had already committed was not in the comparison:
-
-  ```
-  $ git commit -am "drop status"
-  $ dbt-plan run
-  dbt-plan -- no model changes detected
-  ```
-
-  That is a `DROP COLUMN` against a table with data in it, reported as nothing --
-  and "before opening a pull request", which is what the command is for and what
-  the instructions `dbt-plan agent-setup` writes tell an agent to do, is exactly
-  when the interesting changes are committed already. `action.yml` had this right
-  all along; the local command did not.
-
-  `--against` compares with the **branch point**, not the tip, so nothing other
-  people merged while the branch was open is reported as yours.
-
-  The default is unchanged, because changing it would mean checking out another
-  commit on every run and moving someone's HEAD uninvited. What is new is that the
-  default says what it is:
-
-  ```
-  Baseline: your last commit (a1b2c3d). Anything already committed on this branch
-  is not compared -- pass --against main for that.
-  ```
-
-  The HEAD restore is structural, like the stash restore next to it, and HEAD comes
-  back *before* the stash is popped so the work lands on the tree it came from.
-
-### Fixed
 - **`dbt-plan run --select` documented the graph operators it already supported.**
   (part of #116) 0.13.0 taught `--select` dbt's `model+` syntax and updated only the
   `check` parser's help. `run` hands the value straight to the same code, so the
   feature worked and the help said otherwise.
-
-
-### Documentation
-- **`docs/use-cases.md` now reports what dbt-plan says on jaffle_shop.** (#98) Every
-  other example on that page uses a project written to show the tool working. This
-  one is a project anyone can clone: seven ordinary changes, the output length and
-  exit code for each, no false positives and no misses, and both destructive
-  predictions checked against `dbt build`. It also records the two things
-  jaffle_shop cannot exercise -- it has no incremental models, so every model-level
-  verdict there is `SAFE` and every finding came from cascade.
-
-
-### Fixed
 - **A project that renames `model-paths` is no longer refused.** (#95) `model-paths`
   is configurable in `dbt_project.yml`, and dbt-plan assumed it was `models`:
 
@@ -202,6 +181,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   version is detected and compared as before, rather than being read as an empty
   baseline and reporting every model as added.
 
+### Documentation
+- **`docs/use-cases.md` now reports what dbt-plan says on jaffle_shop.** (#98) Every
+  other example on that page uses a project written to show the tool working. This
+  one is a project anyone can clone: seven ordinary changes, the output length and
+  exit code for each, no false positives and no misses, and both destructive
+  predictions checked against `dbt build`. It also records the two things
+  jaffle_shop cannot exercise -- it has no incremental models, so every model-level
+  verdict there is `SAFE` and every finding came from cascade.
 
 ## [0.13.0] - 2026-09-05
 
