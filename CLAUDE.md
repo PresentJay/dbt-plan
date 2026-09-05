@@ -32,7 +32,8 @@ dbt-plan은 `dbt run` 전에 위험을 경고하는 **정적 분석 도구**다.
 ### DO (범위 안)
 - 컴파일 SQL 컬럼 변경 감지
 - materialization × on_schema_change 규칙 기반 위험도 판정
-- 하위 모델 cascade 영향 분석 (broken ref, build failure)
+- 하위 모델 cascade 영향 분석 (broken ref, build failure, SELECT * 상속 컬럼 손실)
+- 하위 unit test 픽스처 컬럼 검사, 하위 exposure 소유자 표시
 - materialization/on_schema_change 설정 변경 감지
 
 ### DO NOT (범위 밖)

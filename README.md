@@ -34,7 +34,9 @@ dbt-plan analyzes compiled SQL diffs to catch dangerous schema changes at PR tim
 
 - **Column changes**: detects ADD/DROP COLUMN from SQL diff
 - **Risk assessment**: judges safety based on materialization x on_schema_change rules
-- **Cascade analysis**: finds downstream models that reference dropped columns
+- **Cascade analysis**: finds downstream models broken by a dropped column — the ones that
+  name it, the ones that select `*` and lose it without their own file changing, and the unit
+  tests whose fixtures pin it down. Names the exposures whose owners need telling
 - **Config changes**: detects materialization or on_schema_change policy changes
 - **Type changes**: compares explicit `CAST` types between revisions
 - **`SELECT *` resolution**: reads the columns from the CTEs of the same statement, and follows a `ref()` into the referenced model's compiled SQL
@@ -133,8 +135,9 @@ dbt-plan is a **static analysis warning tool**, not a runtime simulator.
 |----------|-------------|
 | Column ADD/DROP detection from compiled SQL | `dbt run` simulation |
 | materialization × on_schema_change risk rules | Warehouse connection |
-| Cascade broken ref / build failure analysis | `seed` / `source` change detection |
+| Cascade: broken refs, build failures, inherited column loss | `seed` / `source` change detection |
 | Config change detection (materialization, osc) | `pre_hook` / `post_hook` DDL analysis |
+| Unit test fixtures and exposure owners downstream | `seed` / `source` fixtures dbt-plan cannot read |
 | Explicit `CAST` type changes | Type changes on uncast columns |
 | `SELECT *` resolved through CTEs and `ref()` | `SELECT *` over a source or a raw table |
 | CI exit codes + structured output | `full_refresh` mode judgment |

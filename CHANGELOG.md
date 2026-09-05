@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.12.0] - 2026-09-05
+
 ### Added
 - **A model that loses a column without its own file changing is now reported.**
   (#24) This closes a false all-clear.
