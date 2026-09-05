@@ -58,3 +58,50 @@ jobs:
         with:
           files: dist/*
           generate_release_notes: true
+
+  # Republish server.json so the MCP registry stops pointing at the previous
+  # release. server.json carries the version, so skipping this leaves the registry
+  # advertising a version that is no longer current -- and an agent installing from
+  # it gets an older dbt-plan than the entry claims.
+  #
+  # A separate job on purpose. `release` holds PYPI_API_TOKEN; this one holds no
+  # secret at all. GitHub OIDC is exchanged for a registry token at run time, so
+  # id-token write is the entire permission surface, and the two never sit in the
+  # same job.
+  #
+  # `needs: release` means PyPI and the GitHub Release have already succeeded. If
+  # this step fails the release still shipped, and the run goes red so it is
+  # obvious the registry needs a manual `mcp-publisher publish`.
+  publish-registry:
+    needs: release
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      # mcp-publisher is a Go binary from the registry's releases, not a package on
+      # PyPI or npm. Fetched with curl rather than as an action, so the allowlist
+      # and SHA pinning that cover `uses:` do not apply -- the checksum replaces them.
+      - name: Install mcp-publisher
+        env:
+          VERSION: v1.8.1
+          SHA256: a06c9096dcb9727c13555b6be26c7effa707b01f06a4c561ba7a3635443cf2cc
+        run: |
+          set -euo pipefail
+          curl -fsSL -o publisher.tar.gz \
+            "https://github.com/modelcontextprotocol/registry/releases/download/$VERSION/mcp-publisher_linux_amd64.tar.gz"
+          echo "$SHA256  publisher.tar.gz" | sha256sum -c -
+          tar xzf publisher.tar.gz mcp-publisher
+
+      # Catches a malformed manifest before authenticating rather than after. The
+      # registry caps description at 100 characters and returns 422, which is how
+      # the first version of this manifest was found to be invalid.
+      - name: Validate
+        run: ./mcp-publisher validate
+
+      - name: Publish
+        run: |
+          ./mcp-publisher login github-oidc
+          ./mcp-publisher publish

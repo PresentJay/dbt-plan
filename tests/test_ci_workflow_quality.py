@@ -414,3 +414,78 @@ class TestContentMatchesConstant:
     def test_ci_workflow_ends_with_newline(self):
         """The constant ends with a newline (POSIX convention)."""
         assert _CI_WORKFLOW.endswith("\n")
+
+
+_RELEASE_WORKFLOW = Path(__file__).parents[1] / ".github" / "workflows" / "release.yml"
+
+
+class TestRegistryPublishJob:
+    """Republishing server.json to the MCP registry, and the separation that keeps it safe.
+
+    The registry entry carries a version. Skipping the republish leaves it advertising
+    a release that is no longer current, so an agent installing from the registry gets
+    an older dbt-plan than the entry claims.
+    """
+
+    @staticmethod
+    def _job(name: str) -> str:
+        """Body of one job, with comments stripped.
+
+        Comments are removed before splitting because a comment block sits between
+        the jobs at the same indentation, so a naive boundary match attributes it to
+        the job above -- and the prose in it discusses the very permissions these
+        tests assert are absent. Parsing the YAML properly would be better, but
+        pyyaml is not in the test extra and CI installs only that, so a guard
+        depending on it would silently skip exactly where it matters.
+        """
+        lines = [
+            line
+            for line in _RELEASE_WORKFLOW.read_text(encoding="utf-8").splitlines()
+            if not line.lstrip().startswith("#")
+        ]
+        block = re.search(
+            rf"^  {name}:\n(.*?)(?=^  [a-z-]+:\n|\Z)", "\n".join(lines) + "\n", re.M | re.S
+        )
+        assert block, f"{name} job not found in release.yml"
+        return block.group(1)
+
+    def test_it_is_a_separate_job_from_the_one_holding_the_pypi_token(self) -> None:
+        """The whole reason it is not folded into `release`.
+
+        `release` carries PYPI_API_TOKEN. Adding `id-token: write` there would put a
+        long-lived publishing secret and the ability to mint OIDC tokens for any
+        audience in the same job. Splitting them costs one checkout.
+        """
+        release = self._job("release")
+        publish = self._job("publish-registry")
+
+        assert "id-token: write" not in release
+        assert "id-token: write" in publish
+
+    def test_the_publish_job_holds_no_secrets(self) -> None:
+        publish = self._job("publish-registry")
+
+        assert "secrets." not in publish, (
+            "registry publishing authenticates through GitHub OIDC; a secret here "
+            "means someone reintroduced one that is not needed"
+        )
+
+    def test_it_runs_only_after_the_release_succeeded(self) -> None:
+        """PyPI and the GitHub Release come first, so a registry failure loses nothing."""
+        assert "needs: release" in self._job("publish-registry")
+
+    def test_the_publisher_binary_is_pinned_and_checksummed(self) -> None:
+        """It is fetched with curl rather than as an action, so the allowlist and SHA
+        pinning that cover `uses:` do not apply. The checksum is what replaces them."""
+        publish = self._job("publish-registry")
+
+        assert re.search(r"VERSION: v\d+\.\d+\.\d+", publish), "publisher version not pinned"
+        assert re.search(r"SHA256: [0-9a-f]{64}", publish), "publisher binary not checksummed"
+        assert "sha256sum -c -" in publish, "checksum declared but never verified"
+
+    def test_it_validates_before_authenticating(self) -> None:
+        """The registry caps description at 100 characters and returns 422. Finding that
+        after login is the same failure, later and noisier."""
+        publish = self._job("publish-registry")
+
+        assert publish.index("mcp-publisher validate") < publish.index("login github-oidc")
