@@ -457,6 +457,26 @@ class TestMcpRegistryManifest:
         assert manifest["version"] == version
         assert manifest["packages"][0]["version"] == version
 
+    def test_readme_carries_the_ownership_line(self) -> None:
+        """The registry reads the *PyPI* README to prove the publisher owns the package.
+
+        Without it, publishing fails with:
+
+            PyPI package 'dbt-plan' ownership validation failed. The server name
+            'io.github.PresentJay/dbt-plan' must appear as
+            'mcp-name: io.github.PresentJay/dbt-plan' in the package README
+
+        And because it is checked against PyPI rather than GitHub, removing this line
+        breaks nothing until the next release -- by which point the cause is several
+        commits back.
+        """
+        import json
+
+        manifest = json.loads((ROOT / "server.json").read_text(encoding="utf-8"))
+        readme = (ROOT / "README.md").read_text(encoding="utf-8")
+
+        assert f"mcp-name: {manifest['name']}" in readme
+
     def test_namespace_matches_the_github_login_exactly(self) -> None:
         """The registry namespace is case-sensitive and is not lowercased.
 

@@ -105,6 +105,13 @@ synchronous by design and `tests/test_invariants.py` fails the build on an `asyn
 network import anywhere inside it; an MCP server is both, so keeping them apart is what
 keeps that guarantee provable.
 
+Registry entry — the line below is how the MCP registry verifies that whoever publishes
+the entry also owns this PyPI package, so it has to stay in the README that ships:
+
+```
+mcp-name: io.github.PresentJay/dbt-plan
+```
+
 ### More commands
 
 ```bash
