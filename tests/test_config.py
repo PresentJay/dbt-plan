@@ -71,6 +71,13 @@ class TestConfigFile:
         warning = capsys.readouterr().err
         assert ":1: warning: cannot understand format" in warning
 
+    def test_unknown_key_warns_with_line_number_and_keeps_parsing(self, tmp_path, capsys):
+        (tmp_path / ".dbt-plan.yml").write_text("dialects: bigquery\nformat: json\n")
+        config = Config.load(tmp_path)
+        assert config.dialect == "snowflake"
+        assert config.format == "json"
+        assert ":1: warning: cannot understand dialects" in capsys.readouterr().err
+
     def test_ignores_comments_and_blanks(self, tmp_path):
         """Comments and blank lines are skipped."""
         (tmp_path / ".dbt-plan.yml").write_text(

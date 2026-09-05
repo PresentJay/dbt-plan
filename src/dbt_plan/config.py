@@ -89,6 +89,7 @@ class Config:
                 continue
 
             if key not in known_keys:
+                self._warn_config(project_dir, line_number, f"cannot understand {key}")
                 continue
 
             if key in list_keys and not value:
