@@ -185,3 +185,113 @@ def test_never_leaves_a_dbt_plan_stash_behind_on_success(tmp_path, cmd):
         "dbt-plan-run-temp" not in remaining
         or (repo / "model.sql").read_text(encoding="utf-8") != ""
     )
+
+
+class TestTheSnapshotIsNotTheUsersWork:
+    """`dbt-plan run` used to stash its own snapshot directory and then fail to pop.
+
+    `.dbt-plan/` is untracked, so `--include-untracked` took it; `run` then wrote a
+    new snapshot before popping, and the pop refused because the untracked files it
+    held already existed. Measured on jaffle_shop:
+
+        Error: could not restore your stashed changes:
+        error: could not restore untracked files from stash
+          Your work is NOT lost -- it is still in the stash.
+
+    The loud message is doing its job. The user's real uncommitted work being in a
+    stash after a command that touched nothing of theirs is the bug.
+    """
+
+    @pytest.mark.parametrize(
+        "line,ours",
+        [
+            ("?? .dbt-plan/", True),
+            ("?? .dbt-plan/base/compiled/m.sql", True),
+            (" M models/stg_orders.sql", False),
+            (" M .gitignore", False),
+            # A prefix match, not a substring: these are somebody's own files.
+            ("?? models/.dbt-plan-notes.md", False),
+            ("?? .dbt-plan-notes.md", False),
+        ],
+    )
+    def test_which_status_lines_are_ours(self, line, ours):
+        from dbt_plan.cli import _is_snapshot_path
+
+        assert _is_snapshot_path(line) is ours
+
+    def test_the_stash_leaves_the_snapshot_in_the_tree(self, tmp_path):
+        """So the snapshot written during the block cannot collide with the pop."""
+        from dbt_plan.stash import clean_worktree
+
+        repo = tmp_path / "proj"
+        repo.mkdir()
+        _git(repo, "init", "-q", "-b", "main")
+        _git(repo, "config", "user.email", "t@example.com")
+        _git(repo, "config", "user.name", "t")
+        (repo / "m.sql").write_text("SELECT 1\n", encoding="utf-8")
+        _git(repo, "add", "-A")
+        _git(repo, "commit", "-qm", "initial")
+
+        (repo / "m.sql").write_text("SELECT 2\n", encoding="utf-8")
+        snapshot = repo / ".dbt-plan" / "base"
+        snapshot.mkdir(parents=True)
+        (snapshot / "old.sql").write_text("SELECT 1\n", encoding="utf-8")
+
+        with clean_worktree(repo, has_changes=True):
+            # The user's edit is out of the way; the snapshot is not.
+            assert (repo / "m.sql").read_text(encoding="utf-8") == "SELECT 1\n"
+            assert (snapshot / "old.sql").exists()
+            # `run` overwrites it here, which used to be what broke the pop.
+            (snapshot / "old.sql").write_text("SELECT 2\n", encoding="utf-8")
+
+        assert (repo / "m.sql").read_text(encoding="utf-8") == "SELECT 2\n"
+        assert _git(repo, "stash", "list").stdout.strip() == ""
+
+    def test_snapshot_does_not_write_gitignore(self, tmp_path, capsys):
+        """It runs inside run's stash window, where that makes .gitignore the
+        file the pop cannot restore -- the same failure one level along."""
+        from dbt_plan.cli import _do_snapshot
+
+        project = tmp_path / "proj"
+        models = project / "target" / "compiled" / "p" / "models"
+        models.mkdir(parents=True)
+        (models / "m.sql").write_text("SELECT 1", encoding="utf-8")
+        (project / "target" / "manifest.json").write_text('{"nodes":{}}', encoding="utf-8")
+        gitignore = project / ".gitignore"
+        gitignore.write_text("target/\n", encoding="utf-8")
+
+        _do_snapshot(argparse.Namespace(project_dir=str(project), target_dir="target"))
+
+        assert gitignore.read_text(encoding="utf-8") == "target/\n"
+        assert "Snapshot saved" in capsys.readouterr().out
+
+    def test_run_does_not_stash_for_the_snapshot_alone(self, tmp_path):
+        """An otherwise clean tree with a snapshot in it must not be stashed at all.
+
+        Belt and braces next to the pathspec: the fewer times `run` reaches for the
+        stash, the fewer ways it can leave someone's work in one.
+        """
+        from unittest.mock import MagicMock
+
+        from dbt_plan.cli import _do_run
+        from dbt_plan.config import Config
+
+        calls = []
+
+        def side_effect(cmd, **kw):
+            calls.append(cmd)
+            result = MagicMock()
+            result.stdout = "?? .dbt-plan/\n" if cmd[-1] == "--porcelain" else ""
+            result.stderr = ""
+            result.returncode = 0
+            return result
+
+        with (
+            patch("subprocess.run", side_effect=side_effect),
+            patch("dbt_plan.cli._do_snapshot"),
+            patch("dbt_plan.cli._do_check", return_value=0),
+            patch("dbt_plan.config.Config.load", return_value=Config()),
+        ):
+            assert _do_run(_args(tmp_path, "dbt compile")) == 0
+
+        assert [c for c in calls if isinstance(c, list) and "stash" in c] == []
