@@ -457,6 +457,23 @@ class TestMcpRegistryManifest:
         assert manifest["version"] == version
         assert manifest["packages"][0]["version"] == version
 
+    def test_namespace_matches_the_github_login_exactly(self) -> None:
+        """The registry namespace is case-sensitive and is not lowercased.
+
+        Reverse-DNS convention suggests lowercase, so the first version of this
+        manifest said `io.github.presentjay/dbt-plan` and publishing returned 403:
+        "You have permission to publish: io.github.PresentJay/*". The registry
+        derives the namespace from the GitHub login as spelled.
+
+        The Pages URL in `websiteUrl` is genuinely lowercase -- github.io hosts are
+        -- so the two differing is correct, not a typo waiting to be tidied.
+        """
+        import json
+
+        manifest = json.loads((ROOT / "server.json").read_text(encoding="utf-8"))
+
+        assert manifest["name"] == "io.github.PresentJay/dbt-plan"
+
     def test_description_fits_the_registry_limit(self) -> None:
         """The registry rejects a description over 100 characters with a 422.
 

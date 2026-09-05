@@ -1,6 +1,6 @@
 {
   "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
-  "name": "io.github.presentjay/dbt-plan",
+  "name": "io.github.PresentJay/dbt-plan",
   "title": "dbt-plan",
   "description": "Predicts the DDL a dbt change will execute, before you run it. Reads files, not the warehouse.",
   "version": "0.11.1",
