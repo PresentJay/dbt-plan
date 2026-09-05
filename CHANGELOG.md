@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Documentation
+- **`docs/use-cases.md` now reports what dbt-plan says on jaffle_shop.** (#98) Every
+  other example on that page uses a project written to show the tool working. This
+  one is a project anyone can clone: seven ordinary changes, the output length and
+  exit code for each, no false positives and no misses, and both destructive
+  predictions checked against `dbt build`. It also records the two things
+  jaffle_shop cannot exercise -- it has no incremental models, so every model-level
+  verdict there is `SAFE` and every finding came from cascade.
+
+
 ### Fixed
 - **A project that renames `model-paths` is no longer refused.** (#95) `model-paths`
   is configurable in `dbt_project.yml`, and dbt-plan assumed it was `models`:
