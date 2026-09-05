@@ -851,6 +851,8 @@ def _do_check(args: argparse.Namespace) -> int:
         compiled_sql_index=compiled_sql_index,
         child_map=child_map,
         unit_test_index=build_unit_test_index(manifest),
+        base_columns_of=base_table_columns,
+        current_columns_of=current_table_columns,
     )
     predictions = attach_downstream_exposures(
         predictions=predictions,

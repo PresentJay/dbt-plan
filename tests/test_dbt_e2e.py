@@ -167,6 +167,18 @@ GROUP BY 1
         assert "**SAFE**" in result.stdout
 
 
+def _dbt_run(project_dir: Path) -> subprocess.CompletedProcess:
+    """Run dbt run, which is where an incremental DROP COLUMN actually happens."""
+    return subprocess.run(
+        [_DBT, "run", "--profiles-dir", ".", "--target-path", "target"],
+        cwd=project_dir,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        timeout=120,
+    )
+
+
 def _dbt_build(project_dir: Path, select: str) -> subprocess.CompletedProcess:
     """Run dbt build, which is where a broken unit test actually surfaces."""
     return subprocess.run(
@@ -282,3 +294,85 @@ SELECT
         result = _dbt_plan(["check", "--project-dir", str(dbt_project), "--no-color"])
         assert "SAFE" in result.stdout
         assert "orders_dashboard" not in result.stdout
+
+
+_STAR_STG_ORDERS = """{{{{ config(materialized='view') }}}}
+
+SELECT
+    1 AS order_id,
+    'open' AS status{extra}
+"""
+
+_STAR_FCT_ORDERS = """{{ config(
+    materialized='incremental',
+    on_schema_change='sync_all_columns'
+) }}
+
+SELECT * FROM {{ ref('stg_orders') }}
+"""
+
+
+@pytest.fixture
+def star_project(tmp_path):
+    """A project where the downstream model's file never changes.
+
+    Deliberately not tests/dbt_project: this one has to survive `dbt run`, so it
+    needs a duckdb file on disk and models that actually build.
+    """
+    project = tmp_path / "star_project"
+    (project / "models").mkdir(parents=True)
+    (project / "dbt_project.yml").write_text(
+        "name: star_project\nversion: '1.0.0'\nprofile: star_profile\n"
+        'model-paths: ["models"]\ntarget-path: "target"\n'
+    )
+    (project / "profiles.yml").write_text(
+        "star_profile:\n  target: dev\n  outputs:\n    dev:\n"
+        '      type: duckdb\n      path: "dev.duckdb"\n'
+    )
+    (project / "models" / "stg_orders.sql").write_text(
+        _STAR_STG_ORDERS.format(extra=",\n    'cust_abc' AS customer_id")
+    )
+    (project / "models" / "fct_orders.sql").write_text(_STAR_FCT_ORDERS)
+    return project
+
+
+def _fct_orders_columns(project_dir: Path) -> list[str]:
+    import duckdb
+
+    con = duckdb.connect(str(project_dir / "dev.duckdb"), read_only=True)
+    try:
+        return [
+            row[0]
+            for row in con.execute(
+                "select column_name from information_schema.columns "
+                "where table_name = 'fct_orders' order by ordinal_position"
+            ).fetchall()
+        ]
+    finally:
+        con.close()
+
+
+class TestADownstreamStarLosesAColumn:
+    """The model whose file did not change is the one that loses data."""
+
+    def test_check_names_the_downstream_model_and_fails(self, star_project):
+        _dbt_compile(star_project)
+        _dbt_plan(["snapshot", "--project-dir", str(star_project)])
+        (star_project / "models" / "stg_orders.sql").write_text(_STAR_STG_ORDERS.format(extra=""))
+        _dbt_compile(star_project)
+
+        result = _dbt_plan(["check", "--project-dir", str(star_project), "--no-color"])
+        assert "INHERITED_DROP" in result.stdout, result.stdout
+        assert "fct_orders: file unchanged, loses customer_id from upstream" in result.stdout
+        assert "DROP COLUMN customer_id" in result.stdout
+        # stg_orders is a view; its own DDL is CREATE OR REPLACE and safe.
+        assert result.returncode == 1, result.stdout
+
+    def test_dbt_really_drops_the_column_from_the_downstream_table(self, star_project):
+        """The claim above, measured. This is what exit 0 used to be hiding."""
+        assert _dbt_run(star_project).returncode == 0
+        assert "customer_id" in _fct_orders_columns(star_project)
+
+        (star_project / "models" / "stg_orders.sql").write_text(_STAR_STG_ORDERS.format(extra=""))
+        assert _dbt_run(star_project).returncode == 0
+        assert _fct_orders_columns(star_project) == ["order_id", "status"]
