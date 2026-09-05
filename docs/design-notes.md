@@ -11,8 +11,13 @@ input. It does not query the warehouse, run dbt, or simulate a run.
 
 This is a deliberate constraint, not a missing feature:
 
-- It runs on a pull request from a fork, where no credentials exist and none
-  should.
+- On the Fusion engine, which compiles without a warehouse connection, it runs on
+  a pull request from a fork where no credentials exist and none should. On dbt
+  Core it does not: dbt-plan never connects, but `dbt compile` does, so producing
+  the input needs the secrets a fork pull request is denied. The boundary under
+  Fusion is introspective macros — `run_query`, `get_columns_in_relation` — whose
+  models fail to compile and are then reported as an incomplete compile rather
+  than silently skipped.
 - It cannot fail because a warehouse is down, slow, or rate-limiting, so it can
   sit in the required-checks list without becoming a flaky gate.
 - There is no query cost, and no way for a static analysis pass to accidentally

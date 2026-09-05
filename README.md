@@ -82,7 +82,8 @@ dbt-plan is a **static analysis warning tool**, not a runtime simulator.
 
 dbt-plan answers a narrower question than the warehouse-connected tools (Recce,
 SQLMesh, data-diff) and costs nothing to run, so it works as the cheap gate in
-front of them — including on fork pull requests, where they cannot run at all.
+front of them — and on the Fusion engine, which compiles without a warehouse
+connection, that includes fork pull requests where they cannot run at all.
 See [use cases](docs/use-cases.md) for the comparison, real timings, and what it
 gets wrong.
 
@@ -92,7 +93,7 @@ Ideas that look useful but contradict what this tool is:
 
 | Idea | Why not |
 |------|---------|
-| INFORMATION_SCHEMA query | Requires a warehouse connection. dbt-plan reads files and nothing else — that is what makes it safe to run anywhere, including on a fork's PR. |
+| INFORMATION_SCHEMA query | Requires a warehouse connection. dbt-plan reads files and nothing else, which is what lets it run wherever its input exists — including a fork's pull request, once the project compiles on Fusion. |
 | Type changes on columns with no explicit `CAST` | The type is whatever the warehouse assigned, so seeing a change would mean asking it. Columns that *are* cast explicitly on both sides are compared — see below. |
 
 ## DDL Prediction Rules
