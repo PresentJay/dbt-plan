@@ -51,9 +51,48 @@ Reproduce it with `bash examples/sample-project/run-example.sh`.
 
 ---
 
-## Four situations where nothing else fits
+## Five situations where nothing else fits
 
-### 1. A pull request from a fork, on Fusion
+### 1. You changed a macro
+
+This is the one that has no cheap answer anywhere else, and the reason to run dbt-plan
+before `dbt run` rather than only in CI.
+
+A macro is edited. No model file changes:
+
+```diff
+  {% macro audit_cols() %}
+-     current_timestamp() AS dbt_loaded_at,
+-     'v1' AS pipeline_version
++     current_timestamp() AS dbt_loaded_at
+  {% endmacro %}
+```
+
+The pull request diff is two lines in one file. Nothing tells you which models call it,
+and nothing tells you that one of them is `incremental` with `on_schema_change:
+sync_all_columns`, where a vanished column means dbt issues `DROP COLUMN` against a table
+that has data in it.
+
+Compile and ask:
+
+```
+$ dbt compile && dbt-plan check
+
+dbt-plan -- 1 model(s) changed
+
+DESTRUCTIVE  fct_orders (incremental, sync_all_columns)
+  DROP COLUMN  pipeline_version
+
+dbt-plan: 1 checked, 0 safe, 0 warning, 1 destructive
+```
+
+Not a single model file was touched, and the column is named.
+
+This matters more when a coding agent is making the edit. A person changing a shared macro
+usually pauses to wonder where it is used. An agent changes it and moves on, so the check
+has to be in the loop rather than in someone's head.
+
+### 2. A pull request from a fork, on Fusion
 
 A contributor forks your dbt project and opens a pull request. Warehouse
 credentials are not available to that workflow, and should not be — that is the
@@ -130,7 +169,7 @@ an explicit statement about everything that did not. That is the same boundary
 `ci-setup` already names when it explains least privilege: `dbt compile` reads no
 tables unless your macros introspect.
 
-### 2. A required check on every pull request
+### 3. A required check on every pull request
 
 Required checks have to be fast and they have to be reliable, or people start
 asking for merge overrides.
@@ -147,7 +186,7 @@ run3: real 0.25
 No warehouse means nothing to be slow, nothing to be down, nothing to rate-limit,
 and no query bill for running it on all 40 pull requests you opened this week.
 
-### 3. Before you push
+### 4. Before you push
 
 ```bash
 dbt-plan run     # compile baseline, compile current, check — one command
@@ -157,7 +196,7 @@ It stashes uncommitted work to build the baseline and restores it afterwards. If
 anything fails in between, the restore still runs and tells you where your
 changes are.
 
-### 4. Reviewing a change you cannot run
+### 5. Reviewing a change you cannot run
 
 Reviewers frequently lack access to the warehouse the author used. The GitHub
 output is designed to make the risk legible to someone in that position:

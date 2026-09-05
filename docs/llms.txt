@@ -8,6 +8,15 @@
 Install with `pip install dbt-plan`. Requires Python 3.10+. The only runtime dependency is
 sqlglot.
 
+It is used the way `terraform plan` is used: before the command that changes the warehouse,
+not only in CI afterwards. `dbt-plan check` takes about 0.1 seconds once a baseline exists,
+and 0.5 seconds on a 200-model project where every model changed, so it belongs in the edit
+loop. The cost is the `dbt compile` that produces its input, which you were running anyway.
+
+The case with no cheap alternative is a macro change: no model file has a diff, yet every
+model calling the macro may gain or lose columns. dbt-plan names the affected models and
+the columns.
+
 ## What it does and does not do
 
 dbt-plan reads `target/compiled/**/*.sql` and `target/manifest.json`, diffs them against a
