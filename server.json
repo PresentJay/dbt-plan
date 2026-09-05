@@ -3,7 +3,7 @@
   "name": "io.github.PresentJay/dbt-plan",
   "title": "dbt-plan",
   "description": "Predicts the DDL a dbt change will execute, before you run it. Reads files, not the warehouse.",
-  "version": "0.13.0",
+  "version": "0.14.0",
   "websiteUrl": "https://presentjay.github.io/dbt-plan/",
   "repository": {
     "url": "https://github.com/PresentJay/dbt-plan",
@@ -14,7 +14,7 @@
       "registryType": "pypi",
       "registryBaseUrl": "https://pypi.org",
       "identifier": "dbt-plan",
-      "version": "0.13.0",
+      "version": "0.14.0",
       "transport": {
         "type": "stdio"
       }
