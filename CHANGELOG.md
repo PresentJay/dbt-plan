@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.11.2] - 2026-09-05
+
+### Added
+- **An `mcp-name:` line in the README, so the MCP registry will accept the entry.**
+  The registry will not take a PyPI-backed server on the publisher's word that they
+  own the package: it fetches the package page and looks for the server name spelled
+  `mcp-name: io.github.PresentJay/dbt-plan`. Without it, `mcp-publisher publish`
+  fails with a 400 and no entry is created.
+
+  It checks the README on PyPI, not the one on GitHub, and the PyPI page is only
+  rebuilt by a release — which is what this release is for. `tests/test_packaging.py`
+  now fails if the line is dropped, because otherwise dropping it costs nothing until
+  the next release, by which point the cause is several commits back.
+
+  No source changes.
+
 ## [0.11.1] - 2026-09-05
 
 ### Changed
