@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+from collections.abc import Callable
 from dataclasses import dataclass, field, replace
 from enum import Enum
 from pathlib import Path
@@ -46,6 +47,8 @@ RISK_SAFETY: dict[str, Safety] = {
     "build_failure": Safety.WARNING,
     "unit_test_failure": Safety.WARNING,
     "unit_test_unreadable": Safety.WARNING,
+    "inherited_drop": Safety.DESTRUCTIVE,
+    "inherited_change": Safety.WARNING,
 }
 
 _SAFETY_RANK = {Safety.SAFE: 0, Safety.WARNING: 1, Safety.DESTRUCTIVE: 2}
@@ -428,6 +431,67 @@ def _unit_test_impacts(
     return impacts
 
 
+def _inherited_impact(
+    ds_node,
+    base_columns_of: Callable[[str], list[str] | None],
+    current_columns_of: Callable[[str], list[str] | None],
+    changed_models: dict[str, str],
+) -> DownstreamImpact | None:
+    """Predict what happens to a downstream model whose own file did not change.
+
+    `select * from {{ ref(x) }}` compiles to the same bytes before and after x
+    loses a column, so the diff has no entry for it and dbt-plan used to say
+    nothing -- while dbt, on `incremental` + `sync_all_columns`, issues a
+    DROP COLUMN against a table that has data in it.
+
+    Both sides are resolved through `ref()` from the project's own compiled SQL
+    and run back through predict_ddl, so the verdict follows the same
+    materialization rules as any other model rather than a second set invented
+    here. A model whose columns cannot be read on both sides is still put through
+    predict_ddl, which answers REVIEW REQUIRED where the configuration allows a
+    drop and SAFE where it cannot -- silence would be the wrong answer, and so
+    would a guess.
+
+    Returns None when there is nothing to report: the model has its own entry in
+    the diff already, or its own verdict comes back safe.
+    """
+    if ds_node.name in changed_models:
+        return None  # it changed on its own; it has a verdict of its own
+
+    ds_base = base_columns_of(ds_node.name)
+    ds_current = current_columns_of(ds_node.name)
+    lost = sorted(set(ds_base) - set(ds_current)) if ds_base and ds_current else []
+    if ds_base is not None and ds_current is not None and not lost:
+        return None  # resolved on both sides and losing nothing
+
+    ds_pred = predict_ddl(
+        model_name=ds_node.name,
+        materialization=ds_node.materialization,
+        on_schema_change=ds_node.on_schema_change,
+        base_columns=ds_base,
+        current_columns=ds_current,
+        status="modified",
+    )
+    if ds_pred.safety == Safety.SAFE:
+        return None
+
+    detail = (
+        f"loses {', '.join(lost)} from upstream"
+        if lost
+        else "its columns cannot be resolved on both sides"
+    )
+    operations = ", ".join(
+        f"{op.operation} {op.column or ''}".strip() for op in ds_pred.operations
+    )
+    return DownstreamImpact(
+        model_name=ds_node.name,
+        materialization=ds_node.materialization,
+        on_schema_change=ds_node.on_schema_change,
+        risk="inherited_drop" if ds_pred.safety == Safety.DESTRUCTIVE else "inherited_change",
+        reason=f"file unchanged, {detail} -- {operations or ds_pred.safety.value}",
+    )
+
+
 def analyze_cascade_impacts(
     predictions: list[DDLPrediction],
     model_node_ids: dict[str, str],
@@ -438,6 +502,8 @@ def analyze_cascade_impacts(
     compiled_sql_index: dict[str, Path],
     child_map: dict[str, list[str]] | None = None,
     unit_test_index: dict | None = None,
+    base_columns_of: Callable[[str], list[str] | None] | None = None,
+    current_columns_of: Callable[[str], list[str] | None] | None = None,
 ) -> tuple[list[DDLPrediction], dict[str, list[str]]]:
     """Analyze cascade impacts of column changes on downstream nodes.
 
@@ -451,6 +517,9 @@ def analyze_cascade_impacts(
         compiled_sql_index: model_name → Path to compiled SQL file.
         child_map: manifest child_map, needed to reach non-model children.
         unit_test_index: node_id → UnitTestNode. Omitted, unit tests are skipped.
+        base_columns_of, current_columns_of: resolve a model name to its columns
+            on each side, following `ref()` so a `SELECT *` expands. Omitted, the
+            unchanged-file check below is skipped.
 
     Returns:
         (updated_predictions, downstream_map)
@@ -573,6 +642,17 @@ def analyze_cascade_impacts(
                                 reason=f"references dropped column(s): {', '.join(broken_refs)}",
                             )
                         )
+
+            # A model whose own file did not change can still change shape, when it
+            # selects `*` from one that did. Nothing above catches it: the diff has
+            # no entry for an identical file, and broken_ref looks for the column by
+            # name in SQL that never names it.
+            if cascade_removed and base_columns_of and current_columns_of:
+                inherited = _inherited_impact(
+                    ds_node, base_columns_of, current_columns_of, changed_models=model_node_ids
+                )
+                if inherited is not None:
+                    impacts.append(inherited)
 
         if impacts:
             # Escalate to the worst risk found; cascade never downgrades a verdict.

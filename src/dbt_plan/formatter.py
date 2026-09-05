@@ -26,6 +26,21 @@ _BOLD = "\033[1m"
 
 
 _MAX_DOWNSTREAM_NAMES = 5  # Truncate long downstream lists for readability
+_MAX_IMPACT_LINES = 10  # Beyond this a pull request comment is unreadable
+
+
+def _impacts_to_show(impacts: list) -> tuple[list, int]:
+    """The cascade impacts to print, worst first, and how many were held back.
+
+    A `select *` chain can put every model in the project downstream of one
+    change, and a hundred bullets in a pull request comment is a wall nobody
+    reads. Sorted before truncating so the cut only ever removes the least
+    severe; `--format json` still carries all of them.
+    """
+    ordered = sorted(
+        impacts, key=lambda imp: _SAFETY_ORDER[RISK_SAFETY.get(imp.risk, Safety.WARNING)]
+    )
+    return ordered[:_MAX_IMPACT_LINES], max(0, len(ordered) - _MAX_IMPACT_LINES)
 
 
 def _exposure_line(exposure) -> str:
@@ -120,11 +135,14 @@ def format_text(result: CheckResult, *, color: bool | None = None) -> str:
         if downstream:
             lines.append(_format_downstream_line(downstream))
         # Cascade impacts
-        for impact in pred.downstream_impacts:
+        shown, held_back = _impacts_to_show(pred.downstream_impacts)
+        for impact in shown:
             risk_label = _colored(
                 impact.risk.upper(), RISK_SAFETY.get(impact.risk, Safety.WARNING)
             )
             lines.append(f"  >> {risk_label}  {impact.model_name}: {impact.reason}")
+        if held_back:
+            lines.append(f"  >> ... and {held_back} more -- use --format json for all of them")
         for exposure in pred.downstream_exposures:
             lines.append(f"  -- EXPOSURE  {_exposure_line(exposure)}")
         lines.append("")
@@ -197,11 +215,14 @@ def format_github(result: CheckResult) -> str:
         downstream = result.downstream_map.get(pred.model_name, [])
         if downstream:
             lines.append("- " + _format_downstream_line(downstream).lstrip())
-        for impact in pred.downstream_impacts:
+        shown, held_back = _impacts_to_show(pred.downstream_impacts)
+        for impact in shown:
             risk_icon = _SAFETY_ICON[RISK_SAFETY.get(impact.risk, Safety.WARNING)]
             lines.append(
                 f"- {risk_icon} **{impact.risk.upper()}** `{impact.model_name}`: {impact.reason}"
             )
+        if held_back:
+            lines.append(f"- ... and {held_back} more -- use `--format json` for all of them")
         for exposure in pred.downstream_exposures:
             lines.append(f"- **EXPOSURE** {_exposure_line(exposure)}")
         lines.append("")

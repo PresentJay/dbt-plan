@@ -8,6 +8,42 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **A model that loses a column without its own file changing is now reported.**
+  (#24) This closes a false all-clear.
+
+  ```
+  stg_orders:  SELECT order_id, customer_id, status  ->  SELECT order_id, status
+  fct_orders:  SELECT * FROM {{ ref('stg_orders') }}  ->  byte-identical
+  ```
+
+  `fct_orders` loses `customer_id` too, and on `incremental` + `sync_all_columns`
+  dbt issues a DROP COLUMN against a table with data in it. Measured on duckdb:
+
+  ```
+  alter table "dev"."main"."fct_orders" drop column
+  ```
+
+  0.11.2 reported `SAFE  stg_orders (view, ignore)` and exited 0. The diff only
+  carries models whose own file changed, and the broken-ref check looks for the
+  column by name in SQL that never names it.
+
+  Both sides of an unchanged downstream model are now resolved through `ref()`
+  from the project's own compiled SQL and run back through `predict_ddl`, so the
+  verdict follows the same materialization rules as any other model. A downstream
+  model that rebuilds itself -- `table`, `view`, `incremental` + `ignore` -- is
+  still safe and still silent. One whose columns cannot be read on both sides
+  gets REVIEW REQUIRED where its configuration allows a drop.
+
+  Measured at 0.20-0.30s on a 200-model project chained entirely by `SELECT *`,
+  the worst case for this, against a budget of 5s.
+
+### Changed
+- **Long cascade lists are truncated in the text and GitHub reports.** One
+  `SELECT *` chain can put every model in the project downstream of one change,
+  and a hundred bullets in a pull request comment is a wall nobody reads. Sorted
+  worst-first before the cut, so it only ever removes the least severe;
+  `--format json` still carries all of them.
+
 - **Exposures downstream of a change that is not safe are now named, with their
   owners.** (#44) An exposure records that something outside the project -- a
   dashboard, a notebook, a reverse-ETL sync -- reads a model. `find_downstream`
