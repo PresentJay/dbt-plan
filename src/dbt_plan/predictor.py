@@ -49,6 +49,8 @@ RISK_SAFETY: dict[str, Safety] = {
     "unit_test_unreadable": Safety.WARNING,
     "inherited_drop": Safety.DESTRUCTIVE,
     "inherited_change": Safety.WARNING,
+    "data_test_failure": Safety.WARNING,
+    "data_test_unreadable": Safety.WARNING,
 }
 
 _SAFETY_RANK = {Safety.SAFE: 0, Safety.WARNING: 1, Safety.DESTRUCTIVE: 2}
@@ -359,35 +361,37 @@ def predict_ddl(
     )
 
 
+def _column_patterns(lost_by_model: dict[str, list[str]]) -> dict[str, re.Pattern]:
+    """Word-boundary patterns for every column being removed, compiled once."""
+    return {
+        col: re.compile(r"\b" + re.escape(col) + r"\b", re.IGNORECASE)
+        for columns in lost_by_model.values()
+        for col in columns
+    }
+
+
 def _unit_test_impacts(
-    changed_model: str,
+    lost_by_model: dict[str, list[str]],
     owner_node_ids: list[str],
-    removed_columns: list[str],
     child_map: dict[str, list[str]],
     unit_test_index: dict,
 ) -> list[DownstreamImpact]:
-    """Report unit tests whose hand-written fixtures name a column this change removes.
+    """Report unit tests whose hand-written fixtures name a column being removed.
 
     dbt validates every fixture's column names against the real relation it stands
     for, so a dropped column fails the test at `dbt build` -- as an `expect` block
-    on the changed model itself, and as a `given` input anywhere downstream that
-    supplies the changed model's rows.
+    on the model losing the column, and as a `given` input anywhere downstream that
+    supplies that model's rows.
 
-    A unit test hangs off the model it tests as a direct child, so the owners are
-    the changed model plus everything downstream of it; no second walk. Only
-    fixtures standing in for `changed_model` are compared, since those are the
-    only ones whose columns this change is known to move.
+    `lost_by_model` maps a model name to the columns it is losing, whether from its
+    own diff or inherited through a `SELECT *`. Only fixtures standing in for a
+    model in that map are compared: those are the only columns known to move.
+
+    A unit test hangs off the model it tests as a direct child, so the changed model
+    plus its downstream set covers every one of them with no second walk.
     """
-    if not removed_columns:
-        # An added column does not break a fixture: dbt compares only the names
-        # the fixture lists, so an extra one in the model is ignored. Measured
-        # against dbt 1.11.7 -- adding a column to stg_orders left both unit
-        # tests in tests/dbt_project passing.
-        return []
-
     impacts: list[DownstreamImpact] = []
     seen: set[str] = set()
-    removed_lower = {col.lower(): col for col in removed_columns}
     for owner_nid in owner_node_ids:
         for child in child_map.get(owner_nid) or []:
             if child in seen:
@@ -397,7 +401,8 @@ def _unit_test_impacts(
                 continue
             seen.add(child)
             for fixture in unit_test.fixtures:
-                if fixture.model != changed_model:
+                removed = lost_by_model.get(fixture.model)
+                if not removed:
                     continue
                 if fixture.columns is None:
                     impacts.append(
@@ -413,11 +418,7 @@ def _unit_test_impacts(
                         )
                     )
                     continue
-                named = sorted(
-                    original
-                    for lowered, original in removed_lower.items()
-                    if lowered in fixture.columns
-                )
+                named = sorted(col for col in removed if col.lower() in fixture.columns)
                 if named:
                     impacts.append(
                         DownstreamImpact(
@@ -436,7 +437,7 @@ def _inherited_impact(
     base_columns_of: Callable[[str], list[str] | None],
     current_columns_of: Callable[[str], list[str] | None],
     changed_models: dict[str, str],
-) -> DownstreamImpact | None:
+) -> tuple[DownstreamImpact | None, list[str]]:
     """Predict what happens to a downstream model whose own file did not change.
 
     `select * from {{ ref(x) }}` compiles to the same bytes before and after x
@@ -452,17 +453,19 @@ def _inherited_impact(
     drop and SAFE where it cannot -- silence would be the wrong answer, and so
     would a guess.
 
-    Returns None when there is nothing to report: the model has its own entry in
-    the diff already, or its own verdict comes back safe.
+    Returns (impact, lost). The impact is None when there is nothing to report --
+    the model has its own entry in the diff already, or its own verdict comes back
+    safe -- but `lost` is filled in either way, because a downstream model can lose
+    a column safely and still break the data tests that read it.
     """
     if ds_node.name in changed_models:
-        return None  # it changed on its own; it has a verdict of its own
+        return None, []  # it changed on its own; it has a verdict of its own
 
     ds_base = base_columns_of(ds_node.name)
     ds_current = current_columns_of(ds_node.name)
     lost = sorted(set(ds_base) - set(ds_current)) if ds_base and ds_current else []
     if ds_base is not None and ds_current is not None and not lost:
-        return None  # resolved on both sides and losing nothing
+        return None, []  # resolved on both sides and losing nothing
 
     ds_pred = predict_ddl(
         model_name=ds_node.name,
@@ -473,7 +476,7 @@ def _inherited_impact(
         status="modified",
     )
     if ds_pred.safety == Safety.SAFE:
-        return None
+        return None, lost
 
     detail = (
         f"loses {', '.join(lost)} from upstream"
@@ -483,13 +486,122 @@ def _inherited_impact(
     operations = ", ".join(
         f"{op.operation} {op.column or ''}".strip() for op in ds_pred.operations
     )
-    return DownstreamImpact(
-        model_name=ds_node.name,
-        materialization=ds_node.materialization,
-        on_schema_change=ds_node.on_schema_change,
-        risk="inherited_drop" if ds_pred.safety == Safety.DESTRUCTIVE else "inherited_change",
-        reason=f"file unchanged, {detail} -- {operations or ds_pred.safety.value}",
+    return (
+        DownstreamImpact(
+            model_name=ds_node.name,
+            materialization=ds_node.materialization,
+            on_schema_change=ds_node.on_schema_change,
+            risk="inherited_drop" if ds_pred.safety == Safety.DESTRUCTIVE else "inherited_change",
+            reason=f"file unchanged, {detail} -- {operations or ds_pred.safety.value}",
+        ),
+        lost,
     )
+
+
+def _data_test_impacts(
+    lost_by_model: dict[str, list[str]],
+    owner_node_ids: list[str],
+    child_map: dict[str, list[str]],
+    data_test_index: dict,
+    test_sql_index: dict[str, Path],
+) -> list[DownstreamImpact]:
+    """Report data tests that read a column being removed.
+
+    A `not_null` on a dropped column is not a failing assertion, it is a broken
+    query -- dbt cannot even bind it:
+
+        Binder Error: Referenced column "customer_id" not found in FROM clause!
+
+    A generic test names its column in the manifest, so that answers it outright
+    and no file is read. A singular test names nothing there, so its compiled SQL
+    is searched for the dropped names -- the same check `broken_ref` runs against
+    a downstream model, and it reads only the current side for the same reason:
+    the question is what the SQL names, not whether the file changed.
+
+    Data tests hang off every model they read as a direct child, so the changed
+    model plus its downstream set covers them with no second walk.
+    """
+    impacts: list[DownstreamImpact] = []
+    seen: set[str] = set()
+    patterns = _column_patterns(lost_by_model)
+    for owner_nid in owner_node_ids:
+        for child in child_map.get(owner_nid) or []:
+            if child in seen:
+                continue
+            data_test = data_test_index.get(child)
+            if data_test is None:
+                continue
+            seen.add(child)
+
+            named = sorted(
+                col
+                for model, declared in data_test.columns_by_model.items()
+                for col in lost_by_model.get(model) or []
+                if col.lower() in declared
+            )
+            if named:
+                impacts.append(
+                    DownstreamImpact(
+                        model_name=data_test.name,
+                        materialization="data_test",
+                        on_schema_change=None,
+                        risk="data_test_failure",
+                        reason=f"tests dropped column(s): {', '.join(named)}",
+                    )
+                )
+                continue
+
+            # Models this test reads that the manifest says nothing about, column
+            # wise: a singular test, or a generic one with no column_name.
+            undescribed = [
+                model
+                for model in data_test.depends_on_models
+                if lost_by_model.get(model) and model not in data_test.columns_by_model
+            ]
+            if not undescribed:
+                continue
+
+            sql = None
+            sql_path = test_sql_index.get(data_test.name)
+            if sql_path is not None:
+                try:
+                    sql = sql_path.read_text(encoding="utf-8")
+                except (OSError, UnicodeDecodeError):
+                    sql = None
+            if sql is None:
+                impacts.append(
+                    DownstreamImpact(
+                        model_name=data_test.name,
+                        materialization="data_test",
+                        on_schema_change=None,
+                        risk="data_test_unreadable",
+                        reason=(
+                            "names no column in the manifest and its compiled SQL was not "
+                            "found, so dbt-plan cannot tell whether it reads the dropped "
+                            "column(s)"
+                        ),
+                    )
+                )
+                continue
+            in_sql = sorted(
+                {
+                    col
+                    for model in undescribed
+                    for col in lost_by_model[model]
+                    if patterns[col].search(sql)
+                }
+            )
+            if in_sql:
+                impacts.append(
+                    DownstreamImpact(
+                        model_name=data_test.name,
+                        materialization="data_test",
+                        on_schema_change=None,
+                        risk="data_test_failure",
+                        reason=f"its SQL names dropped column(s): {', '.join(in_sql)}",
+                    )
+                )
+    return impacts
 
 
 def analyze_cascade_impacts(
@@ -502,6 +614,8 @@ def analyze_cascade_impacts(
     compiled_sql_index: dict[str, Path],
     child_map: dict[str, list[str]] | None = None,
     unit_test_index: dict | None = None,
+    data_test_index: dict | None = None,
+    test_sql_index: dict[str, Path] | None = None,
     base_columns_of: Callable[[str], list[str] | None] | None = None,
     current_columns_of: Callable[[str], list[str] | None] | None = None,
 ) -> tuple[list[DDLPrediction], dict[str, list[str]]]:
@@ -517,6 +631,9 @@ def analyze_cascade_impacts(
         compiled_sql_index: model_name → Path to compiled SQL file.
         child_map: manifest child_map, needed to reach non-model children.
         unit_test_index: node_id → UnitTestNode. Omitted, unit tests are skipped.
+        data_test_index: node_id → DataTestNode. Omitted, data tests are skipped.
+        test_sql_index: test name → compiled SQL, for tests the manifest does not
+            describe by column.
         base_columns_of, current_columns_of: resolve a model name to its columns
             on each side, following `ref()` so a `SELECT *` expands. Omitted, the
             unchanged-file check below is skipped.
@@ -526,6 +643,8 @@ def analyze_cascade_impacts(
     """
     child_map = child_map or {}
     unit_test_index = unit_test_index or {}
+    data_test_index = data_test_index or {}
+    test_sql_index = test_sql_index or {}
     updated = list(predictions)
     downstream_map: dict[str, list[str]] = {}
 
@@ -570,24 +689,17 @@ def analyze_cascade_impacts(
         if not cascade_removed and not cascade_added:
             continue
 
-        # Pre-compile regex patterns for column matching (avoid per-iteration compile)
-        col_patterns = (
-            {
-                col: re.compile(r"\b" + re.escape(col) + r"\b", re.IGNORECASE)
-                for col in cascade_removed
-            }
-            if cascade_removed
-            else {}
+        # Every model this change removes a column from, keyed by name: the changed
+        # model, plus any downstream one that inherits the loss through a SELECT *.
+        # The tests are checked against the whole map in one pass at the end, so a
+        # test is only ever compared with the columns of the model it actually reads.
+        lost_by_model: dict[str, list[str]] = (
+            {pred.model_name: cascade_removed} if cascade_removed else {}
         )
+        col_patterns = _column_patterns(lost_by_model)
 
         downstream_to_check = [] if ignore_incremental else downstream_nids
-        impacts: list[DownstreamImpact] = _unit_test_impacts(
-            pred.model_name,
-            [node_id, *downstream_to_check],
-            cascade_removed,
-            child_map,
-            unit_test_index,
-        )
+        impacts: list[DownstreamImpact] = []
         for ds_nid in downstream_to_check:
             ds_node = node_index.get(ds_nid.split(".")[-1])
             if not ds_node:
@@ -648,11 +760,21 @@ def analyze_cascade_impacts(
             # no entry for an identical file, and broken_ref looks for the column by
             # name in SQL that never names it.
             if cascade_removed and base_columns_of and current_columns_of:
-                inherited = _inherited_impact(
+                inherited, ds_lost = _inherited_impact(
                     ds_node, base_columns_of, current_columns_of, changed_models=model_node_ids
                 )
                 if inherited is not None:
                     impacts.append(inherited)
+                if ds_lost:
+                    # It may lose the column harmlessly -- a table is rebuilt -- and
+                    # still break every test that reads it.
+                    lost_by_model[ds_node.name] = ds_lost
+
+        test_owners = [node_id, *downstream_to_check]
+        impacts += _unit_test_impacts(lost_by_model, test_owners, child_map, unit_test_index)
+        impacts += _data_test_impacts(
+            lost_by_model, test_owners, child_map, data_test_index, test_sql_index
+        )
 
         if impacts:
             # Escalate to the worst risk found; cascade never downgrades a verdict.

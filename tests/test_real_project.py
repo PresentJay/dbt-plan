@@ -134,12 +134,17 @@ class TestRealNodeIndex:
         assert index["fct_orders"].on_schema_change == "sync_all_columns"
         assert index["stg_orders"].on_schema_change == "ignore"
 
-    def test_node_columns_empty(self, real_manifest):
-        """Real manifest has no column definitions (empty columns dict)."""
+    def test_node_columns_come_from_the_schema_file_or_not_at_all(self, real_manifest):
+        """The fixture has both cases on purpose, so both paths are exercised.
+
+        A column only appears in `node["columns"]` once something in a schema file
+        mentions it -- attaching a test counts. stg_orders has tests, so it has the
+        fallback available; the other two have no schema entry at all.
+        """
         index = build_node_index(real_manifest)
-        # The manifest has "columns": {} for all models — no column docs
-        assert index["stg_orders"].columns == ()
+        assert index["stg_orders"].columns == ("order_id", "customer_id")
         assert index["fct_orders"].columns == ()
+        assert index["dim_books"].columns == ()
 
     def test_downstream_from_stg_orders(self, real_manifest):
         """stg_orders downstream includes dim_books and fct_orders."""

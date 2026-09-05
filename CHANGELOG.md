@@ -7,6 +7,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **Data tests broken by a dropped column are now reported.** (#85, #86) This closes
+  a false all-clear, and the most common one left: unit tests are rare, `not_null`
+  is in nearly every dbt project.
+
+  A `not_null` on a dropped column is not a failing assertion, it is a query dbt
+  cannot bind:
+
+  ```
+  Failure in test not_null_stg_orders_customer_id (models/schema.yml)
+    Binder Error: Referenced column "customer_id" not found in FROM clause!
+    Candidate bindings: "order_id"
+  ```
+
+  0.12.0 reported `SAFE  stg_orders (view, ignore)` and exited 0.
+
+  A generic test names its column in the manifest, so `not_null`, `unique` and
+  `accepted_values` are answered without reading a file. `relationships` is the one
+  built-in that reads a second model, and the far side is named only in its kwargs;
+  that is matched too. A singular test names nothing in the manifest, so its
+  compiled SQL is searched — which meant indexing `target/compiled/<project>/tests/`,
+  outside the `models/` tree dbt-plan scans. A test whose SQL cannot be found is
+  reported as unreadable rather than passed over.
+
+  Tests on a model that inherits the loss through a `SELECT *` are caught as well.
+  Neither this nor #24 covered that alone: a downstream `table` is rebuilt safely, so
+  the inherited-loss check stays quiet, while the `not_null` on it still cannot bind.
+
+
 ## [0.12.0] - 2026-09-05
 
 ### Added
