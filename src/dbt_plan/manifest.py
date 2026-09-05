@@ -3,9 +3,42 @@
 from __future__ import annotations
 
 import json
+import re
 from collections import deque
 from dataclasses import dataclass
 from pathlib import Path
+
+
+@dataclass(frozen=True)
+class UnitTestFixture:
+    """One hand-written table inside a unit test: an `expect` block or a `given` input.
+
+    dbt checks every fixture's column names against the real relation it stands
+    for and errors out on a name that is not there, so a fixture is broken by an
+    upstream column drop the same way a SELECT is:
+
+        Invalid column name: 'customer_id' in unit test fixture for 'stg_orders'.
+        Accepted columns for 'stg_orders' are: ['order_id', 'store_id', 'order_date']
+
+    `columns` is None when the fixture is not readable from manifest.json alone --
+    a `fixture:` file reference or a SQL block. That is the honest answer: it may
+    or may not break, and saying nothing would read as "fine".
+    """
+
+    label: str  # "expect", or "given for stg_orders"
+    model: str  # the model whose columns this fixture has to match
+    columns: frozenset[str] | None  # lowercased, None if unreadable
+    unreadable_reason: str = ""  # only set when columns is None
+
+
+@dataclass(frozen=True)
+class UnitTestNode:
+    """A dbt unit test (1.8+), which names the columns it expects by hand."""
+
+    node_id: str  # "unit_test.my_project.stg_orders.test_stg_orders_shape"
+    name: str  # "test_stg_orders_shape"
+    model: str  # the model under test, "stg_orders"
+    fixtures: tuple[UnitTestFixture, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -20,7 +53,7 @@ class ModelNode:
 
 
 def load_manifest(manifest_path: str | Path) -> dict:
-    """Load and parse manifest.json, keeping only nodes and child_map.
+    """Load and parse manifest.json, keeping only the sections dbt-plan reads.
 
     Parses the full JSON then extracts only the needed sections.
     Discards unused sections (macros, sources, docs, etc.) to reduce
@@ -33,9 +66,104 @@ def load_manifest(manifest_path: str | Path) -> dict:
         "nodes": full.get("nodes") or {},
         "child_map": full.get("child_map") or {},
         "metadata": full.get("metadata") or {},
+        "unit_tests": full.get("unit_tests") or {},
     }
     del full
     return result
+
+
+def _fixture_columns(block: dict) -> tuple[frozenset[str] | None, str]:
+    """Read the column names one unit test fixture pins down.
+
+    Returns (columns, reason). `columns` is None when the block cannot be read
+    from the manifest, and `reason` then says why -- never treat that as clean.
+    """
+    if block.get("fixture"):
+        return None, f"comes from fixture '{block['fixture']}'"
+
+    rows = block.get("rows")
+    fmt = block.get("format") or "dict"
+
+    if fmt == "dict":
+        if not isinstance(rows, list) or not rows:
+            return None, "has no inline rows to read column names from"
+        columns: set[str] = set()
+        for row in rows:
+            if not isinstance(row, dict):
+                return None, "has rows that are not name/value pairs"
+            columns.update(str(key).lower() for key in row)
+        return frozenset(columns), ""
+
+    if fmt == "csv":
+        # Inline CSV carries its header on the first line; a `fixture:` CSV was
+        # already handled above.
+        if not isinstance(rows, str) or not rows.strip():
+            return None, "is CSV with no inline header to read"
+        header = rows.strip().splitlines()[0]
+        return frozenset(c.strip().lower() for c in header.split(",") if c.strip()), ""
+
+    # format: sql, or something dbt added after this was written.
+    return None, f"is in '{fmt}' format, which dbt-plan does not read"
+
+
+_REF_CALL = re.compile(r"^\s*ref\s*\((.*)\)\s*$", re.DOTALL)
+_QUOTED = re.compile(r"""['\"]([^'\"]+)['\"]""")
+
+
+def _input_model(input_expr: str) -> str:
+    """The model a unit test's `given` input stands in for, or "" if it is not one.
+
+    dbt stores the literal Jinja call: `ref('stg_orders')`, or with a package,
+    `ref('a_package', 'stg_orders')` -- the model is the last quoted name either
+    way. `source(...)` inputs return "", since sources are outside dbt-plan's scope.
+    """
+    call = _REF_CALL.match(input_expr or "")
+    if not call:
+        return ""
+    names = _QUOTED.findall(call.group(1))
+    return names[-1] if names else ""
+
+
+def build_unit_test_index(manifest: dict) -> dict[str, UnitTestNode]:
+    """Build a node_id -> UnitTestNode index over the manifest's unit tests."""
+    index: dict[str, UnitTestNode] = {}
+    for node_id, node in (manifest.get("unit_tests") or {}).items():
+        config = node.get("config") or {}
+        if config.get("enabled") is False:
+            continue
+        tested_model = node.get("model") or ""
+
+        fixtures: list[UnitTestFixture] = []
+        expect_cols, expect_reason = _fixture_columns(node.get("expect") or {})
+        fixtures.append(
+            UnitTestFixture(
+                label="expect",
+                model=tested_model,
+                columns=expect_cols,
+                unreadable_reason=expect_reason,
+            )
+        )
+        for given in node.get("given") or []:
+            input_model = _input_model(given.get("input") or "")
+            if not input_model:
+                continue  # a source, or something that is not a ref()
+            given_cols, given_reason = _fixture_columns(given)
+            fixtures.append(
+                UnitTestFixture(
+                    label=f"given for {input_model}",
+                    model=input_model,
+                    columns=given_cols,
+                    unreadable_reason=given_reason,
+                )
+            )
+
+        index[node_id] = UnitTestNode(
+            node_id=node_id,
+            name=node.get("name") or node_id.split(".")[-1],
+            model=tested_model,
+            fixtures=tuple(fixtures),
+        )
+    return index
 
 
 def build_node_index(manifest: dict, *, include_packages: bool = False) -> dict[str, ModelNode]:

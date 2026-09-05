@@ -24,13 +24,36 @@ class DDLOperation:
 
 @dataclass(frozen=True)
 class DownstreamImpact:
-    """Predicted impact on a downstream model."""
+    """Predicted impact on a downstream node.
+
+    Usually a model. Unit tests reuse this with `materialization="unit_test"`,
+    because what they need reporting -- a name, a risk and a reason -- is the
+    same three things, and neither field below is rendered anywhere.
+    """
 
     model_name: str
     materialization: str
     on_schema_change: str | None
-    risk: str  # "build_failure", "broken_ref"
+    risk: str  # a key of RISK_SAFETY
     reason: str  # human-readable explanation
+
+
+# What each cascade risk is worth on its own. The formatter colours by this and
+# the escalation in analyze_cascade_impacts reads it, so a risk added to only
+# one of the two is how a red finding ends up wearing a yellow icon.
+RISK_SAFETY: dict[str, Safety] = {
+    "broken_ref": Safety.DESTRUCTIVE,
+    "build_failure": Safety.WARNING,
+    "unit_test_failure": Safety.WARNING,
+    "unit_test_unreadable": Safety.WARNING,
+}
+
+_SAFETY_RANK = {Safety.SAFE: 0, Safety.WARNING: 1, Safety.DESTRUCTIVE: 2}
+
+
+def worst_safety(safeties: list[Safety]) -> Safety:
+    """The most severe of several verdicts. Cascade escalates, never downgrades."""
+    return max(safeties, key=_SAFETY_RANK.__getitem__)
 
 
 @dataclass(frozen=True)
@@ -331,6 +354,78 @@ def predict_ddl(
     )
 
 
+def _unit_test_impacts(
+    changed_model: str,
+    owner_node_ids: list[str],
+    removed_columns: list[str],
+    child_map: dict[str, list[str]],
+    unit_test_index: dict,
+) -> list[DownstreamImpact]:
+    """Report unit tests whose hand-written fixtures name a column this change removes.
+
+    dbt validates every fixture's column names against the real relation it stands
+    for, so a dropped column fails the test at `dbt build` -- as an `expect` block
+    on the changed model itself, and as a `given` input anywhere downstream that
+    supplies the changed model's rows.
+
+    A unit test hangs off the model it tests as a direct child, so the owners are
+    the changed model plus everything downstream of it; no second walk. Only
+    fixtures standing in for `changed_model` are compared, since those are the
+    only ones whose columns this change is known to move.
+    """
+    if not removed_columns:
+        # An added column does not break a fixture: dbt compares only the names
+        # the fixture lists, so an extra one in the model is ignored. Measured
+        # against dbt 1.11.7 -- adding a column to stg_orders left both unit
+        # tests in tests/dbt_project passing.
+        return []
+
+    impacts: list[DownstreamImpact] = []
+    seen: set[str] = set()
+    removed_lower = {col.lower(): col for col in removed_columns}
+    for owner_nid in owner_node_ids:
+        for child in child_map.get(owner_nid) or []:
+            if child in seen:
+                continue
+            unit_test = unit_test_index.get(child)
+            if unit_test is None:
+                continue
+            seen.add(child)
+            for fixture in unit_test.fixtures:
+                if fixture.model != changed_model:
+                    continue
+                if fixture.columns is None:
+                    impacts.append(
+                        DownstreamImpact(
+                            model_name=unit_test.name,
+                            materialization="unit_test",
+                            on_schema_change=None,
+                            risk="unit_test_unreadable",
+                            reason=(
+                                f"{fixture.label} {fixture.unreadable_reason}, so dbt-plan "
+                                f"cannot tell whether it names the dropped column(s)"
+                            ),
+                        )
+                    )
+                    continue
+                named = sorted(
+                    original
+                    for lowered, original in removed_lower.items()
+                    if lowered in fixture.columns
+                )
+                if named:
+                    impacts.append(
+                        DownstreamImpact(
+                            model_name=unit_test.name,
+                            materialization="unit_test",
+                            on_schema_change=None,
+                            risk="unit_test_failure",
+                            reason=f"{fixture.label} names dropped column(s): {', '.join(named)}",
+                        )
+                    )
+    return impacts
+
+
 def analyze_cascade_impacts(
     predictions: list[DDLPrediction],
     model_node_ids: dict[str, str],
@@ -339,8 +434,10 @@ def analyze_cascade_impacts(
     node_index: dict,
     base_node_index: dict,
     compiled_sql_index: dict[str, Path],
+    child_map: dict[str, list[str]] | None = None,
+    unit_test_index: dict | None = None,
 ) -> tuple[list[DDLPrediction], dict[str, list[str]]]:
-    """Analyze cascade impacts of column changes on downstream models.
+    """Analyze cascade impacts of column changes on downstream nodes.
 
     Args:
         predictions: DDL predictions for changed models.
@@ -350,10 +447,14 @@ def analyze_cascade_impacts(
         node_index: current manifest model node lookup (name → ModelNode).
         base_node_index: base manifest model node lookup (name → ModelNode).
         compiled_sql_index: model_name → Path to compiled SQL file.
+        child_map: manifest child_map, needed to reach non-model children.
+        unit_test_index: node_id → UnitTestNode. Omitted, unit tests are skipped.
 
     Returns:
         (updated_predictions, downstream_map)
     """
+    child_map = child_map or {}
+    unit_test_index = unit_test_index or {}
     updated = list(predictions)
     downstream_map: dict[str, list[str]] = {}
 
@@ -362,19 +463,18 @@ def analyze_cascade_impacts(
         if not node_id:
             continue
         downstream_nids = all_downstream.get(node_id, [])
-        if not downstream_nids:
-            continue
+        # A model with nothing downstream still carries its own unit tests, so
+        # this does not return early -- only the report line is skipped.
+        if downstream_nids:
+            downstream_map[pred.model_name] = [nid.split(".")[-1] for nid in downstream_nids]
 
-        downstream_names = [nid.split(".")[-1] for nid in downstream_nids]
-        downstream_map[pred.model_name] = downstream_names
-
-        # Skip cascade for incremental+ignore: no physical schema change occurs,
-        # so downstream models are not affected by column changes in the SQL
-        if (
+        # incremental+ignore alters nothing physical, so nothing downstream of
+        # it moves. Its own unit tests still do: they run the model's SELECT
+        # against fixtures, not the merge, so they see the dropped column.
+        ignore_incremental = (
             pred.materialization == "incremental"
             and (pred.on_schema_change or "ignore") == "ignore"
-        ):
-            continue
+        )
 
         # Compute SQL-level column diff for cascade analysis
         # (predictor doesn't populate columns_removed for table/view,
@@ -409,8 +509,15 @@ def analyze_cascade_impacts(
             else {}
         )
 
-        impacts: list[DownstreamImpact] = []
-        for ds_nid in downstream_nids:
+        downstream_to_check = [] if ignore_incremental else downstream_nids
+        impacts: list[DownstreamImpact] = _unit_test_impacts(
+            pred.model_name,
+            [node_id, *downstream_to_check],
+            cascade_removed,
+            child_map,
+            unit_test_index,
+        )
+        for ds_nid in downstream_to_check:
             ds_node = node_index.get(ds_nid.split(".")[-1])
             if not ds_node:
                 ds_node = base_node_index.get(ds_nid.split(".")[-1])
@@ -466,14 +573,10 @@ def analyze_cascade_impacts(
                         )
 
         if impacts:
-            # Escalate safety based on cascade risk
-            cascade_safety = pred.safety
-            if any(imp.risk == "broken_ref" for imp in impacts):
-                cascade_safety = Safety.DESTRUCTIVE
-            elif any(imp.risk == "build_failure" for imp in impacts):
-                if cascade_safety == Safety.SAFE:
-                    cascade_safety = Safety.WARNING
-
+            # Escalate to the worst risk found; cascade never downgrades a verdict.
+            cascade_safety = worst_safety(
+                [pred.safety, *(RISK_SAFETY.get(imp.risk, Safety.WARNING) for imp in impacts)]
+            )
             updated[i] = replace(pred, safety=cascade_safety, downstream_impacts=impacts)
 
     return updated, downstream_map

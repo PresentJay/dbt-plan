@@ -96,7 +96,7 @@ class TestLoadManifest:
         assert result["metadata"] == {}
 
     def test_load_manifest_filters_extra_keys(self, tmp_path):
-        """load_manifest keeps only nodes and child_map, discarding macros/sources/etc."""
+        """load_manifest keeps only what it reads, discarding macros/sources/etc."""
         manifest_path = tmp_path / "manifest.json"
         data = {
             "nodes": {"model.p.m": {"name": "m", "config": {}}},
@@ -108,7 +108,7 @@ class TestLoadManifest:
         }
         manifest_path.write_text(json.dumps(data))
         result = load_manifest(str(manifest_path))
-        assert set(result.keys()) == {"nodes", "child_map", "metadata"}
+        assert set(result.keys()) == {"nodes", "child_map", "metadata", "unit_tests"}
         assert "macros" not in result
         assert "sources" not in result
         assert "docs" not in result

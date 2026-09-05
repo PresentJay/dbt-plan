@@ -14,3 +14,7 @@ tests/dbt_project/logs/
 tests/dbt_project/.dbt-plan/
 tests/dbt_project/target/run_results.json
 tests/dbt_project/target/partial_parse.msgpack
+
+# dbt parse/compile scratch, and the duckdb file a persistent target leaves behind
+tests/dbt_project/target/perf_info.json
+*.duckdb
