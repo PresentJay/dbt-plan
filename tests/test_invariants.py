@@ -122,6 +122,46 @@ class TestNoWarehouseConnection:
             )
 
 
+def test_cascade_risks_match_safety_table() -> None:
+    """A misspelled destructive risk must not silently fall back to WARNING.
+
+    Check both branches of conditional risks and reject unused table entries,
+    so adding a new cascade finding requires a corresponding severity.
+    """
+    from dbt_plan.predictor import RISK_SAFETY
+
+    def risk_names(node: ast.expr, path: Path) -> set[str]:
+        if isinstance(node, ast.Constant) and isinstance(node.value, str):
+            return {node.value}
+        if isinstance(node, ast.IfExp):
+            return risk_names(node.body, path) | risk_names(node.orelse, path)
+        pytest.fail(
+            f"{path.name}:{node.lineno}: cannot statically determine cascade risk; "
+            "extend this invariant when introducing a new risk expression"
+        )
+
+    risks: set[str] = set()
+    for path in sorted(SRC.parent.rglob("*.py")):
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Call):
+                continue
+            func = node.func
+            name = func.attr if isinstance(func, ast.Attribute) else getattr(func, "id", None)
+            if name != "DownstreamImpact":
+                continue
+            risk = next((kw.value for kw in node.keywords if kw.arg == "risk"), None)
+            assert risk is not None, (
+                f"{path.name}:{node.lineno}: pass risk by keyword so it can be checked"
+            )
+            risks.update(risk_names(risk, path))
+
+    assert risks == set(RISK_SAFETY), (
+        f"Cascade risks missing from RISK_SAFETY: {sorted(risks - RISK_SAFETY.keys())}; "
+        f"unused RISK_SAFETY entries: {sorted(RISK_SAFETY.keys() - risks)}"
+    )
+
+
 class TestSubprocessSurface:
     """The tool shells out for git and dbt compile. Nothing else, and never
     through a shell -- `shell=True` on a config-supplied command would turn
