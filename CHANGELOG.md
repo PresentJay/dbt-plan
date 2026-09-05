@@ -7,6 +7,44 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **`dbt-plan run --against main`.** (#114) The baseline was HEAD of the current
+  branch, so a change you had already committed was not in the comparison:
+
+  ```
+  $ git commit -am "drop status"
+  $ dbt-plan run
+  dbt-plan -- no model changes detected
+  ```
+
+  That is a `DROP COLUMN` against a table with data in it, reported as nothing --
+  and "before opening a pull request", which is what the command is for and what
+  the instructions `dbt-plan agent-setup` writes tell an agent to do, is exactly
+  when the interesting changes are committed already. `action.yml` had this right
+  all along; the local command did not.
+
+  `--against` compares with the **branch point**, not the tip, so nothing other
+  people merged while the branch was open is reported as yours.
+
+  The default is unchanged, because changing it would mean checking out another
+  commit on every run and moving someone's HEAD uninvited. What is new is that the
+  default says what it is:
+
+  ```
+  Baseline: your last commit (a1b2c3d). Anything already committed on this branch
+  is not compared -- pass --against main for that.
+  ```
+
+  The HEAD restore is structural, like the stash restore next to it, and HEAD comes
+  back *before* the stash is popped so the work lands on the tree it came from.
+
+### Fixed
+- **`dbt-plan run --select` documented the graph operators it already supported.**
+  (part of #116) 0.13.0 taught `--select` dbt's `model+` syntax and updated only the
+  `check` parser's help. `run` hands the value straight to the same code, so the
+  feature worked and the help said otherwise.
+
+
 ### Documentation
 - **`docs/use-cases.md` now reports what dbt-plan says on jaffle_shop.** (#98) Every
   other example on that page uses a project written to show the tool working. This

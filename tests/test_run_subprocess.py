@@ -517,12 +517,17 @@ class TestShellInjectionSafety:
         compile_result.returncode = 1
         compile_result.stderr = "unknown arg: |"
 
-        mock_run.side_effect = [version_result, git_status, compile_result]
+        # `run` reads the short HEAD between status and compile, to say which
+        # baseline it is using -- see the default branch of `--against`.
+        head = MagicMock()
+        head.returncode = 0
+        head.stdout = "a1b2c3d\n"
+        mock_run.side_effect = [version_result, git_status, head, compile_result]
 
         _do_run(args)
 
         # Verify the compile call passed pipe as literal arg (list form, no shell)
-        compile_call = mock_run.call_args_list[2]
+        compile_call = mock_run.call_args_list[3]
         assert compile_call[0][0] == ["dbt", "compile", "|", "tee", "log.txt"]
 
     @patch("subprocess.run")
@@ -541,11 +546,14 @@ class TestShellInjectionSafety:
         compile_result.returncode = 1
         compile_result.stderr = "unknown arg: >"
 
-        mock_run.side_effect = [version_result, git_status, compile_result]
+        head = MagicMock()
+        head.returncode = 0
+        head.stdout = "a1b2c3d\n"
+        mock_run.side_effect = [version_result, git_status, head, compile_result]
 
         _do_run(args)
 
-        compile_call = mock_run.call_args_list[2]
+        compile_call = mock_run.call_args_list[3]
         assert compile_call[0][0] == ["dbt", "compile", ">", "/dev/null"]
 
     @patch("subprocess.run")
@@ -564,11 +572,14 @@ class TestShellInjectionSafety:
         compile_result.returncode = 1
         compile_result.stderr = "unknown arg"
 
-        mock_run.side_effect = [version_result, git_status, compile_result]
+        head = MagicMock()
+        head.returncode = 0
+        head.stdout = "a1b2c3d\n"
+        mock_run.side_effect = [version_result, git_status, head, compile_result]
 
         _do_run(args)
 
-        compile_call = mock_run.call_args_list[2]
+        compile_call = mock_run.call_args_list[3]
         # The dangerous command is NOT executed — it's just a literal arg to dbt
         assert compile_call[0][0] == ["dbt", "compile", ";", "rm", "-rf", "/"]
 
@@ -594,11 +605,14 @@ class TestShellInjectionSafety:
         compile_result.returncode = 1
         compile_result.stderr = "error"
 
-        mock_run.side_effect = [version_result, git_status, compile_result]
+        head = MagicMock()
+        head.returncode = 0
+        head.stdout = "a1b2c3d\n"
+        mock_run.side_effect = [version_result, git_status, head, compile_result]
 
         _do_run(args)
 
-        compile_call = mock_run.call_args_list[2]
+        compile_call = mock_run.call_args_list[3]
         # shlex splits $(cat /etc/passwd) into two tokens, but neither is executed
         assert compile_call[0][0] == ["dbt", "compile", "$(cat", "/etc/passwd)"]
 
@@ -667,7 +681,24 @@ class TestGitNotFound:
 
 
 class TestFullRunStructure:
-    """Verify the full _do_run call sequence with mocked subprocess."""
+    """Verify the full _do_run call sequence with mocked subprocess.
+
+    Asserted as an *order*, not as positions. These tests used to index into the
+    list, so adding one git call to `run` broke five of them at once while every
+    property they were defending still held.
+    """
+
+    @staticmethod
+    def _order(call_sequence, *commands):
+        """Assert `commands` appear in the sequence, in this order, ignoring the rest."""
+        remaining = list(call_sequence)
+        for command in commands:
+            match = next(
+                (i for i, cmd in enumerate(remaining) if isinstance(cmd, list) and cmd == command),
+                None,
+            )
+            assert match is not None, f"{command} not called after the ones before it"
+            remaining = remaining[match + 1 :]
 
     @patch("dbt_plan.cli._do_check")
     @patch("dbt_plan.cli._do_snapshot")
@@ -676,7 +707,7 @@ class TestFullRunStructure:
     def test_happy_path_with_changes(
         self, mock_config_load, mock_run, mock_snapshot, mock_check, tmp_path
     ):
-        """Full run with uncommitted changes: version -> status -> stash -> compile -> snapshot -> pop -> compile -> check."""
+        """version -> status -> stash -> compile -> snapshot -> pop -> compile -> check."""
         mock_config_load.return_value = _mock_config("dbt compile")
         mock_check.return_value = 0
         args = _make_run_args(str(tmp_path), compile_command="dbt compile")
@@ -699,28 +730,22 @@ class TestFullRunStructure:
         exit_code = _do_run(args)
         assert exit_code == 0
 
-        # Verify the expected call sequence
-        assert call_sequence[0] == ["dbt", "--version"]
-        assert call_sequence[1] == ["git", "status", "--porcelain"]
+        push = next(c for c in call_sequence if isinstance(c, list) and c[0:2] == ["git", "stash"])
+        assert "push" in push
 
-        # stash push
-        assert call_sequence[2][0:2] == ["git", "stash"]
-        assert "push" in call_sequence[2]
+        self._order(
+            call_sequence,
+            ["dbt", "--version"],
+            ["git", "status", "--porcelain"],
+            push,
+            # The exact stash entry is recorded so the restore cannot pop another.
+            ["git", "rev-parse", "stash@{0}"],
+            ["dbt", "compile"],  # baseline
+            ["git", "rev-parse", "stash@{0}"],  # identity re-checked before popping
+            ["git", "stash", "pop"],
+            ["dbt", "compile"],  # current
+        )
 
-        # baseline compile
-        # the exact stash entry is recorded so the restore cannot pop another
-        assert call_sequence[3] == ["git", "rev-parse", "stash@{0}"]
-
-        assert call_sequence[4] == ["dbt", "compile"]
-
-        # identity re-checked, then popped (after snapshot)
-        assert call_sequence[5] == ["git", "rev-parse", "stash@{0}"]
-        assert call_sequence[6] == ["git", "stash", "pop"]
-
-        # current compile
-        assert call_sequence[7] == ["dbt", "compile"]
-
-        # snapshot and check were called
         mock_snapshot.assert_called_once()
         mock_check.assert_called_once()
 
@@ -751,16 +776,17 @@ class TestFullRunStructure:
         exit_code = _do_run(args)
         assert exit_code == 1
 
-        # No stash commands
-        stash_cmds = [c for c in call_sequence if isinstance(c, list) and "stash" in c]
-        assert stash_cmds == []
+        # Nothing was stashed, so nothing may be popped -- popping without pushing
+        # would restore an entry the user made themselves.
+        assert [c for c in call_sequence if isinstance(c, list) and "stash" in c] == []
 
-        # Only: version, status, compile (baseline), compile (current)
-        assert len(call_sequence) == 4
-        assert call_sequence[0] == ["dbt", "--version"]
-        assert call_sequence[1] == ["git", "status", "--porcelain"]
-        assert call_sequence[2] == ["dbt", "compile"]
-        assert call_sequence[3] == ["dbt", "compile"]
+        self._order(
+            call_sequence,
+            ["dbt", "--version"],
+            ["git", "status", "--porcelain"],
+            ["dbt", "compile"],  # baseline
+            ["dbt", "compile"],  # current
+        )
 
 
 # ===========================================================================

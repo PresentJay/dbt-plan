@@ -1187,8 +1187,13 @@ After changing any model SQL, materialization, or `on_schema_change` setting, an
 opening or approving a pull request:
 
 ```bash
-dbt-plan run
+dbt-plan run --against main
 ```
+
+`--against main` compares with where this branch left `main`. Without it the baseline is
+your last commit, so anything you have already committed -- which, by the time you are
+opening a pull request, is most of it -- is not compared at all. Replace `main` with
+whatever this repository's default branch is called.
 
 That compiles the baseline and the current state, then compares them. It shells out to
 `dbt compile`, so it needs the same warehouse credentials `dbt compile` normally needs.
@@ -1305,6 +1310,7 @@ def _do_run(args: argparse.Namespace) -> int:
     verbose = getattr(args, "verbose", False)
     dialect = getattr(args, "dialect", None)
     select = getattr(args, "select", None)
+    against = getattr(args, "against", None)
 
     # Resolve compile command: CLI flag > config (env + file)
     config = Config.load(project_dir)
@@ -1374,14 +1380,47 @@ def _do_run(args: argparse.Namespace) -> int:
         return 2
     has_changes = bool(git_status.stdout.strip())
 
-    # 2-4. Borrow a clean tree for the baseline; the restore is structural.
-    from dbt_plan.stash import StashError, clean_worktree
+    # 2. Say what the baseline is. Without `--against`, it is your last commit --
+    # so a change you already committed is not in the comparison at all, and the
+    # only way to notice used to be reading the source.
+    from dbt_plan.stash import CheckoutError, StashError, borrowed_head, clean_worktree, merge_base
 
+    baseline_ref = None
+    if against:
+        try:
+            baseline_ref = merge_base(project_dir, against)
+        except CheckoutError as e:
+            print(f"Error: {e}", file=sys.stderr)
+            return 2
+        _log(f"Baseline: where this branch left {against} ({baseline_ref[:12]})")
+    else:
+        head = subprocess.run(
+            ["git", "rev-parse", "--short", "HEAD"],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            cwd=str(project_dir),
+        )
+        head_id = head.stdout.strip() or "HEAD"
+        _log(
+            f"Baseline: your last commit ({head_id}). Anything already committed on "
+            f"this branch is not compared -- pass --against main for that."
+        )
+
+    # 3-4. Borrow a clean tree, and HEAD if asked. Both restores are structural,
+    # and HEAD comes back before the stash is popped so the work lands on the
+    # tree it came from.
     if has_changes:
         _log("Stashing uncommitted changes...")
     try:
-        with clean_worktree(project_dir, has_changes=has_changes) as stash:
-            _log("Compiling baseline (current branch HEAD)...")
+        # Order matters, and `with` gives it for free: borrowed_head exits first,
+        # so HEAD is back before the stash is popped.
+        with (
+            clean_worktree(project_dir, has_changes=has_changes) as stash,
+            borrowed_head(project_dir, baseline_ref),
+        ):
+            _log("Compiling baseline...")
             compile_base = subprocess.run(
                 compile_argv,
                 capture_output=True,
@@ -1398,13 +1437,16 @@ def _do_run(args: argparse.Namespace) -> int:
                 return 2
 
             _log("Saving snapshot...")
-            snapshot_args = argparse.Namespace(
-                project_dir=str(project_dir),
-                target_dir="target",
-            )
-            _do_snapshot(snapshot_args)
+            _do_snapshot(argparse.Namespace(project_dir=str(project_dir), target_dir="target"))
         if stash.stashed and not stash.restore_failed:
             _log("Restored your changes.")
+    except CheckoutError as e:
+        print(
+            f"Error: could not check out the baseline: {e}\n"
+            "  Your working tree and HEAD are where you left them.",
+            file=sys.stderr,
+        )
+        return 2
     except StashError as e:
         print(
             "Error: could not stash your uncommitted changes, so a clean "
@@ -1613,10 +1655,23 @@ def main() -> None:
         help="Disable colored output",
     )
     run_cmd.add_argument(
+        "--against",
+        default=None,
+        metavar="REF",
+        help=(
+            "Compare against where this branch left REF, rather than your last commit. "
+            "`--against main` is what 'before you push' usually means: without it, "
+            "anything you have already committed is not in the comparison."
+        ),
+    )
+    run_cmd.add_argument(
         "-s",
         "--select",
         default=None,
-        help="Only check specific models (comma-separated)",
+        help=(
+            "Only check these models. Comma-separated, with dbt's graph operators: "
+            "`fct_orders`, `fct_orders+` (and downstream), `+fct_orders` (and upstream)."
+        ),
     )
     run_cmd.add_argument(
         "-v",

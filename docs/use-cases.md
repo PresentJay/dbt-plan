@@ -189,12 +189,26 @@ and no query bill for running it on all 40 pull requests you opened this week.
 ### 4. Before you push
 
 ```bash
-dbt-plan run     # compile baseline, compile current, check — one command
+dbt-plan run --against main   # compare with where this branch left main
+dbt-plan run                  # compare with your last commit
 ```
 
-It stashes uncommitted work to build the baseline and restores it afterwards. If
-anything fails in between, the restore still runs and tells you where your
-changes are.
+The default baseline is your last commit, so **anything you have already committed
+on the branch is not in the comparison**. That is the right answer while you are
+editing and the wrong one before you push, which is why the command says which
+baseline it used:
+
+```
+[dbt-plan run] Baseline: your last commit (a1b2c3d). Anything already committed on
+this branch is not compared -- pass --against main for that.
+```
+
+`--against` compares with the *branch point*, not the tip of `main`, so nothing
+other people merged while your branch was open is reported as yours.
+
+Either way it stashes uncommitted work to build the baseline and restores it
+afterwards, and `--against` puts HEAD back before the stash is popped. If anything
+fails in between, both restores still run and tell you where your changes are.
 
 ### 5. Reviewing a change you cannot run
 
