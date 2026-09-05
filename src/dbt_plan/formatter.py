@@ -28,6 +28,13 @@ _BOLD = "\033[1m"
 _MAX_DOWNSTREAM_NAMES = 5  # Truncate long downstream lists for readability
 
 
+def _exposure_line(exposure) -> str:
+    """`name (type) -- owner`, dropping whichever half dbt does not carry."""
+    parts = f"{exposure.name} ({exposure.type})" if exposure.type else exposure.name
+    owner = exposure.owner()
+    return f"{parts} -- owner: {owner}" if owner else parts
+
+
 def _format_downstream_line(downstream: list[str]) -> str:
     """Format downstream model list, truncating if too long."""
     total = len(downstream)
@@ -118,6 +125,8 @@ def format_text(result: CheckResult, *, color: bool | None = None) -> str:
                 impact.risk.upper(), RISK_SAFETY.get(impact.risk, Safety.WARNING)
             )
             lines.append(f"  >> {risk_label}  {impact.model_name}: {impact.reason}")
+        for exposure in pred.downstream_exposures:
+            lines.append(f"  -- EXPOSURE  {_exposure_line(exposure)}")
         lines.append("")
 
     if result.parse_failures:
@@ -193,6 +202,8 @@ def format_github(result: CheckResult) -> str:
             lines.append(
                 f"- {risk_icon} **{impact.risk.upper()}** `{impact.model_name}`: {impact.reason}"
             )
+        for exposure in pred.downstream_exposures:
+            lines.append(f"- **EXPOSURE** {_exposure_line(exposure)}")
         lines.append("")
 
     if result.parse_failures:
@@ -242,6 +253,16 @@ def format_json(result: CheckResult) -> str:
         downstream = result.downstream_map.get(pred.model_name, [])
         if downstream:
             model["downstream"] = downstream
+        if pred.downstream_exposures:
+            model["downstream_exposures"] = [
+                {
+                    "name": exp.name,
+                    "type": exp.type,
+                    "owner": exp.owner(),
+                    "url": exp.url,
+                }
+                for exp in pred.downstream_exposures
+            ]
         if pred.downstream_impacts:
             model["downstream_impacts"] = [
                 {

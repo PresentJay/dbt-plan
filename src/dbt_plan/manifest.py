@@ -42,6 +42,48 @@ class UnitTestNode:
 
 
 @dataclass(frozen=True)
+class ExposureNode:
+    """A dbt exposure: something outside the project that reads a model.
+
+    An exposure declares its dependencies at model granularity -- there are no
+    columns in it -- so dbt-plan can never say a dashboard breaks. What it can
+    say is which ones read a model that is losing a column, and who owns them.
+    """
+
+    node_id: str  # "exposure.my_project.orders_dashboard"
+    name: str  # "orders_dashboard"
+    type: str  # "dashboard", "notebook", "analysis", "ml", "application"
+    owner_name: str = ""
+    owner_email: str = ""
+    url: str = ""
+
+    def owner(self) -> str:
+        """The owner as one readable string, empty when dbt has neither field."""
+        if self.owner_name and self.owner_email:
+            return f"{self.owner_name} <{self.owner_email}>"
+        return self.owner_name or self.owner_email
+
+
+def build_exposure_index(manifest: dict) -> dict[str, ExposureNode]:
+    """Build a node_id -> ExposureNode index over the manifest's exposures."""
+    index: dict[str, ExposureNode] = {}
+    for node_id, node in (manifest.get("exposures") or {}).items():
+        config = node.get("config") or {}
+        if config.get("enabled") is False:
+            continue
+        owner = node.get("owner") or {}
+        index[node_id] = ExposureNode(
+            node_id=node_id,
+            name=node.get("name") or node_id.split(".")[-1],
+            type=node.get("type") or "",
+            owner_name=owner.get("name") or "",
+            owner_email=owner.get("email") or "",
+            url=node.get("url") or "",
+        )
+    return index
+
+
+@dataclass(frozen=True)
 class ModelNode:
     """A dbt model node from manifest.json."""
 
@@ -67,6 +109,7 @@ def load_manifest(manifest_path: str | Path) -> dict:
         "child_map": full.get("child_map") or {},
         "metadata": full.get("metadata") or {},
         "unit_tests": full.get("unit_tests") or {},
+        "exposures": full.get("exposures") or {},
     }
     del full
     return result
