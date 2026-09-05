@@ -426,6 +426,13 @@ class TestCompiledUnitTestSqlIsNotAModel:
         )
         assert diff_compiled_dirs(base, current) == []
 
+    def test_a_uncompiled_model_is_not_masked_by_a_same_named_unit_test(self, tmp_path):
+        """The compiled-stem set is a false-safe guard; a unit test must not fill it."""
+        from dbt_plan.diff import iter_model_sql
+
+        root = self._tree(tmp_path, "schema.yml/models/stg_orders.sql")
+        assert {f.stem for f in iter_model_sql(root)} == set()
+
     def test_a_model_directory_ending_in_sql_is_still_scanned(self, tmp_path):
         """Only `.yml`/`.yaml` segments are dbt's marker; nothing else is filtered."""
         from dbt_plan.diff import iter_model_sql

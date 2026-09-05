@@ -391,12 +391,9 @@ def _make_table_resolver(compiled_dir, relation_index: dict[str, str], dialect: 
     propagates instead of turning into a shorter, wrong column list.
     """
     from dbt_plan.columns import extract_columns
+    from dbt_plan.diff import iter_model_sql
 
-    sql_by_model = (
-        {f.stem: f for f in compiled_dir.rglob("*.sql") if not f.is_symlink()}
-        if compiled_dir
-        else {}
-    )
+    sql_by_model = {f.stem: f for f in iter_model_sql(compiled_dir)} if compiled_dir else {}
     cache: dict[str, list[str] | None] = {}
     in_progress: set[str] = set()
 
@@ -593,7 +590,7 @@ def _do_check(args: argparse.Namespace) -> int:
     # makes it ordinary. It matters because a model missing from *both* compiled
     # directories yields no diff entry, so it is never examined -- and with
     # nothing else changed that used to print "no model changes" and exit 0.
-    compiled_stems = {f.stem for f in current_compiled.rglob("*.sql") if not f.is_symlink()}
+    compiled_stems = {f.stem for f in iter_model_sql(current_compiled)}
     uncompiled_models = sorted(
         name
         for name in node_index
