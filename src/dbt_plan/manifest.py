@@ -6,7 +6,7 @@ import json
 import re
 from collections import deque
 from dataclasses import dataclass, field
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 _VERSION_TAIL = re.compile(r"^v[0-9]+$")
 
@@ -200,9 +200,35 @@ def load_manifest(manifest_path: str | Path) -> dict:
         "metadata": full.get("metadata") or {},
         "unit_tests": full.get("unit_tests") or {},
         "exposures": full.get("exposures") or {},
+        "source_dirs": _source_dirs(full),
     }
     del full
     return result
+
+
+def _source_dirs(manifest: dict) -> tuple[str, ...]:
+    """Top-level directories this project's own source files were declared in.
+
+    `model-paths`, `macro-paths`, `test-paths` and the rest, as written on disk
+    rather than as configured -- every node records where it came from:
+
+        "original_file_path": "transformations/stg_orders.sql"
+
+    Package files are excluded: their mtimes move when `dbt deps` runs, not when
+    anyone edits this project. Only names are kept, so the macro bodies this
+    walks past are not retained.
+    """
+    project = (manifest.get("metadata") or {}).get("project_name")
+    dirs: dict[str, None] = {}
+    for section in ("nodes", "macros"):
+        for node_id, node in (manifest.get(section) or {}).items():
+            parts = node_id.split(".")
+            if project and len(parts) > 1 and parts[1] != project:
+                continue
+            declared = node.get("original_file_path")
+            if isinstance(declared, str) and declared:
+                dirs[PurePosixPath(declared).parts[0]] = None
+    return tuple(dirs)
 
 
 def _fixture_columns(block: dict) -> tuple[frozenset[str] | None, str]:

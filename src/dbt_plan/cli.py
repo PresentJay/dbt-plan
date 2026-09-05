@@ -6,6 +6,7 @@ import argparse
 import json
 import shutil
 import sys
+from collections.abc import Iterable, Sequence
 from pathlib import Path, PurePosixPath
 from typing import NamedTuple
 
@@ -66,6 +67,58 @@ def _manifest_layout(target_dir: Path) -> tuple[str | None, tuple[str, ...]]:
         if isinstance(declared, str) and declared:
             model_dirs[PurePosixPath(declared).parts[0]] = None
     return project, tuple(model_dirs)
+
+
+# A source written within this many seconds of the manifest is treated as older
+# than it. dbt writes the manifest after reading every source, so the real gap is
+# never that small; the tolerance is for filesystems whose mtimes are coarse.
+_STALE_TOLERANCE_SECONDS = 1.0
+
+
+def _stale_sources(
+    project_dir: Path, manifest_path: Path, source_dirs: Sequence[str], limit: int = 5
+) -> list[str]:
+    """Source files modified after the manifest that claims to describe them.
+
+    dbt-plan reads `target/`, and nothing in `target/` says whether it is current.
+    When `dbt compile` fails, the compiled SQL is whatever was there before, the
+    diff comes out empty, and an empty diff reads as "nothing changed" -- so a
+    dropped column can be reported as a clean run.
+
+    A source newer than the manifest is the signal that costs nothing to check.
+    It is a heuristic in one direction only: a `git checkout` moves mtimes without
+    changing content, which reports a stale target that really is stale. A file
+    deleted since the compile is not caught, because a deletion leaves no mtime.
+
+    Returns at most `limit` paths, relative to the project; naming a couple is
+    enough to point somebody at the compile.
+    """
+    try:
+        cutoff = manifest_path.stat().st_mtime + _STALE_TOLERANCE_SECONDS
+    except OSError:
+        return []
+
+    newer: list[str] = []
+    candidates = [project_dir / name for name in source_dirs]
+    candidates.append(project_dir / "dbt_project.yml")
+    for root in candidates:
+        if root.is_file():
+            paths: Iterable[Path] = [root]
+        elif root.is_dir():
+            paths = (p for p in root.rglob("*") if p.is_file() and not p.is_symlink())
+        else:
+            continue
+        for path in paths:
+            try:
+                if path.stat().st_mtime > cutoff:
+                    # Forward slashes on every platform: this is read next to the
+                    # manifest's own `original_file_path`, which is always posix.
+                    newer.append(path.relative_to(project_dir).as_posix())
+            except OSError:
+                continue
+            if len(newer) >= limit:
+                return sorted(newer)
+    return sorted(newer)
 
 
 def _find_compiled_dir(target_dir: Path) -> CompiledLayout | None:
@@ -406,7 +459,7 @@ def _exit_code_for(result: CheckResult, warning_exit_code: int) -> int:
     # the diff but absent from the manifest, and a model in the manifest that
     # the compile never produced. Either way the tool did not look, so it must
     # not answer "safe". Ranked below destructive so a real finding still exits 1.
-    if result.skipped_models or result.uncompiled_models:
+    if result.skipped_models or result.uncompiled_models or result.stale_sources:
         return warning_exit_code
     return 0
 
@@ -758,8 +811,14 @@ def _do_check(args: argparse.Namespace) -> int:
     if uncompiled_models:
         _log(f"Uncompiled: {len(uncompiled_models)} manifest model(s) have no compiled SQL")
 
+    # Nothing in target/ says whether it is current. A source newer than the
+    # manifest means it may not be, and every verdict below rests on it.
+    stale_sources = _stale_sources(project_dir, manifest_path, manifest.get("source_dirs") or ())
+    if stale_sources:
+        _log(f"Stale: {', '.join(stale_sources)} newer than {manifest_path.name}")
+
     if not model_diffs:
-        empty = CheckResult(uncompiled_models=uncompiled_models)
+        empty = CheckResult(uncompiled_models=uncompiled_models, stale_sources=stale_sources)
         if fmt == "json":
             print(format_json(empty))
         elif fmt == "github":
@@ -1047,6 +1106,7 @@ def _do_check(args: argparse.Namespace) -> int:
         parse_failures,
         skipped_models,
         uncompiled_models,
+        stale_sources,
         acknowledge_models=config.acknowledge_models,
     )
     if fmt == "json":

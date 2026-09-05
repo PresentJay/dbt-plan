@@ -759,3 +759,46 @@ class TestARenamedModelPath:
         result = _dbt_plan(["check", "--project-dir", str(renamed_paths_project), "--no-color"])
         assert "no model changes detected" in result.stdout, result.stdout
         assert result.returncode == 0
+
+
+class TestAFailedCompileIsNotACleanRun:
+    """The #106 case, against real dbt."""
+
+    def test_a_change_that_never_compiled_is_not_reported_as_no_changes(self, dbt_project):
+        import subprocess
+
+        _dbt_compile(dbt_project)
+        _dbt_plan(["snapshot", "--project-dir", str(dbt_project)])
+
+        # Drop a column, and break the parse so nothing recompiles.
+        (dbt_project / "models" / "staging" / "stg_orders.sql").write_text(
+            _STG_ORDERS_WITHOUT_CUSTOMER_ID
+        )
+        with (dbt_project / "models" / "schema.yml").open("a", encoding="utf-8") as f:
+            f.write("\nmodels:\n  - name: [not valid\n")
+
+        failed = subprocess.run(
+            [_DBT, "compile", "--profiles-dir", ".", "--target-path", "target"],
+            cwd=dbt_project,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            timeout=60,
+        )
+        assert failed.returncode != 0, "the compile was supposed to fail"
+
+        result = _dbt_plan(["check", "--project-dir", str(dbt_project), "--no-color"])
+        assert "no model changes detected" not in result.stdout
+        assert "target/ may be out of date" in result.stdout, result.stdout
+        assert "stg_orders.sql" in result.stdout
+        assert result.returncode == 2, result.stdout
+
+    def test_a_fresh_compile_says_nothing_about_staleness(self, dbt_project):
+        """The check has to be quiet in the ordinary case or it is worthless."""
+        _dbt_compile(dbt_project)
+        _dbt_plan(["snapshot", "--project-dir", str(dbt_project)])
+        _dbt_compile(dbt_project)
+
+        result = _dbt_plan(["check", "--project-dir", str(dbt_project), "--no-color"])
+        assert "out of date" not in result.stdout
+        assert result.returncode == 0, result.stdout

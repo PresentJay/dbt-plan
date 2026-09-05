@@ -74,6 +74,11 @@ class CheckResult:
     # from both compiled directories produces no diff entry at all, so it is
     # silently never examined.
     uncompiled_models: list[str] = field(default_factory=list)
+    # Source files newer than the manifest describing them, which means `target/`
+    # may not reflect the code. Every verdict rests on it, so this is reported
+    # even when nothing else is -- an empty diff from a stale compile reads as
+    # "nothing changed".
+    stale_sources: list[str] = field(default_factory=list)
     # Reviewed-and-accepted models. Kept here rather than on DDLPrediction so
     # the predictor stays a pure function of config x column diff, with no
     # knowledge of CI policy.
@@ -90,12 +95,16 @@ def _has_nothing_to_report(result: CheckResult) -> bool:
     how a check that never looked at a model comes out green. Predictions are not
     the only finding: a model missing from the manifest, one that failed to parse,
     and one the compile never produced all have to survive to the output.
+
+    A stale `target/` is the strongest of these, because an empty diff is exactly
+    what a failed compile produces.
     """
     return not (
         result.predictions
         or result.parse_failures
         or result.skipped_models
         or result.uncompiled_models
+        or result.stale_sources
     )
 
 
@@ -146,6 +155,15 @@ def format_text(result: CheckResult, *, color: bool | None = None) -> str:
         for exposure in pred.downstream_exposures:
             lines.append(f"  -- EXPOSURE  {_exposure_line(exposure)}")
         lines.append("")
+
+    if result.stale_sources:
+        names = ", ".join(result.stale_sources)
+        warn = _colored("WARNING", Safety.WARNING) if use_color else "WARNING"
+        lines.append(
+            f"{warn}: target/ may be out of date -- {names} "
+            f"{'is' if len(result.stale_sources) == 1 else 'are'} newer than the manifest. "
+            f"Recompile, or this report describes code you no longer have."
+        )
 
     if result.parse_failures:
         names = ", ".join(result.parse_failures)
@@ -226,6 +244,14 @@ def format_github(result: CheckResult) -> str:
         for exposure in pred.downstream_exposures:
             lines.append(f"- **EXPOSURE** {_exposure_line(exposure)}")
         lines.append("")
+
+    if result.stale_sources:
+        names = ", ".join(result.stale_sources)
+        lines.append(
+            f"> **WARNING**: `target/` may be out of date -- {names} "
+            f"{'is' if len(result.stale_sources) == 1 else 'are'} newer than the manifest. "
+            f"Recompile, or this report describes code you no longer have."
+        )
 
     if result.parse_failures:
         names = ", ".join(result.parse_failures)
@@ -312,6 +338,7 @@ def format_json(result: CheckResult) -> str:
         "summary": summary,
         "models": models,
         "parse_failures": result.parse_failures,
+        "stale_sources": result.stale_sources,
         "skipped_models": result.skipped_models,
         "uncompiled_models": result.uncompiled_models,
     }

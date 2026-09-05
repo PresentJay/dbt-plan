@@ -55,10 +55,10 @@ class TestJsonSchemaStability:
     def test_top_level_keys_always_present(self):
         """Every JSON output carries the same top-level keys, findings or not.
 
-        uncompiled_models joined the set in 0.7.0. Additive, so a consumer reading
-        the older four keys is unaffected -- but it is part of the contract now and
-        must be emitted even when empty, or a consumer cannot tell "none" from
-        "this dbt-plan is too old to know".
+        uncompiled_models joined the set in 0.7.0 and stale_sources after it. Both
+        are additive, so a consumer reading the older keys is unaffected -- but each
+        is part of the contract once shipped and must be emitted even when empty, or
+        a consumer cannot tell "none" from "this dbt-plan is too old to know".
         """
         result = CheckResult()
         data = _parse(result)
@@ -66,6 +66,7 @@ class TestJsonSchemaStability:
             "summary",
             "models",
             "parse_failures",
+            "stale_sources",
             "skipped_models",
             "uncompiled_models",
         }
