@@ -210,6 +210,41 @@ output is designed to make the risk legible to someone in that position:
 
 ---
 
+## What it says on a project you can go and look at
+
+Everything else on this page uses a project written to show the tool working.
+This section is [jaffle_shop](https://github.com/dbt-labs/jaffle_shop_duckdb) at
+HEAD, five models, unmodified except for the change named in each row. dbt 1.11.7,
+dbt-plan 0.13.0.
+
+| change | output | exit | what it said |
+|---|---|---|---|
+| rename `first_name` in `stg_customers` | 6 lines | 1 | `DESTRUCTIVE` + `BROKEN_REF customers` |
+| drop `status` from `stg_orders` | 7 lines | 1 | `DESTRUCTIVE` + `BROKEN_REF orders` + `DATA_TEST_FAILURE` |
+| a macro drops a column, no model file touched | 7 lines | 1 | `DESTRUCTIVE` + `BROKEN_REF orders` + `DATA_TEST_FAILURE` |
+| add a `where` clause, no column change | 5 lines | 0 | `SAFE` |
+| reformat a model | 5 lines | 0 | `SAFE` |
+| touch a mart, no column change | 4 lines | 0 | `SAFE` |
+| nothing changed | 1 line | 0 | `no model changes detected` |
+
+No false positives and no misses. Both destructive predictions were checked against
+`dbt build`, which failed exactly where they said it would:
+
+```
+Binder Error: Values list "customers" does not have a column named "first_name"
+ERROR accepted_values_stg_orders_status__placed__shipped__completed__return_pending__returned
+```
+
+`dbt-plan check` took **0.12-0.17s**. `dbt compile` on the same project took 2.46s,
+so the check is about 5% of a compile you were already paying for.
+
+Two things this does not tell you. jaffle_shop has no incremental models, so every
+model-level verdict was `SAFE` and every finding came from cascade -- the DDL rules
+table got no exercise here at all. And with five models, nothing came close to the
+point where a long cascade list becomes hard to read.
+
+---
+
 ## What it will get wrong
 
 Worth knowing before you put it in front of your team.
@@ -228,6 +263,14 @@ the tool working as intended; see [design notes](design-notes.md).
 
 **It says nothing about data.** A change can be perfectly safe by DDL and still
 be catastrophically wrong. dbt-plan will pass it.
+
+**It cannot tell whether `target/` is current.** If `dbt compile` fails, the
+compiled SQL dbt-plan reads is whatever was there before, and an empty diff reads
+as "nothing changed". Measured on jaffle_shop: drop a column, break the parse,
+`dbt compile` exits 2, and `dbt-plan check` reports `no model changes detected` and
+exits 0. Chain the two commands -- `dbt compile && dbt-plan check` -- or use
+`dbt-plan run`, which compiles and stops on a failure. Tracked in
+[#106](https://github.com/PresentJay/dbt-plan/issues/106).
 
 For a genuine false positive you have accepted, `--acknowledge` keeps it in the
 report while letting the build through; `ignore_models` hides it entirely.
