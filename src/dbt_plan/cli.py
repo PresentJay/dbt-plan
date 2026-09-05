@@ -1466,6 +1466,7 @@ def _do_run(args: argparse.Namespace) -> int:
     verbose = getattr(args, "verbose", False)
     dialect = getattr(args, "dialect", None)
     select = getattr(args, "select", None)
+    acknowledge = getattr(args, "acknowledge", None)
     against = getattr(args, "against", None)
 
     # Resolve compile command: CLI flag > config (env + file)
@@ -1651,6 +1652,7 @@ def _do_run(args: argparse.Namespace) -> int:
         verbose=verbose,
         dialect=dialect,
         select=select,
+        acknowledge=acknowledge,
     )
     return _do_check(check_args)
 
@@ -1833,6 +1835,16 @@ def main() -> None:
         help=(
             "Only check these models. Comma-separated, with dbt's graph operators: "
             "`fct_orders`, `fct_orders+` (and downstream), `+fct_orders` (and upstream)."
+        ),
+    )
+    run_cmd.add_argument(
+        "--acknowledge",
+        default=None,
+        metavar="MODELS",
+        help=(
+            "Comma-separated models whose destructive change has been reviewed. "
+            "They are still reported, but stop failing the build. "
+            "Also settable via DBT_PLAN_ACKNOWLEDGE or acknowledge_models in .dbt-plan.yml"
         ),
     )
     run_cmd.add_argument(
