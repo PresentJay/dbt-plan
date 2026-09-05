@@ -19,9 +19,12 @@ It does not execute SQL, simulate `dbt run`, or connect to a warehouse. It does 
 `--full-refresh` behavior (a runtime flag), seed/source changes, or pre/post-hook DDL.
 
 Note on credentials: dbt-plan itself never connects, but producing its input requires
-`dbt compile`, which does connect. In CI, run compile where credentials already exist;
-dbt-plan then reads the artifacts. `dbt compile` reads no tables, so a login with warehouse
-USAGE is usually enough unless project macros introspect.
+`dbt compile`. Under dbt Core that connects, so in CI run compile where credentials already
+exist and dbt-plan reads the artifacts; a login with warehouse USAGE is usually enough
+unless project macros introspect. Under the Fusion engine `dbt compile` needs no connection
+at all, which is what makes a credential-free check on a fork's pull request possible.
+Models using introspective macros still fail to compile there, and dbt-plan reports them as
+an incomplete compile rather than analysing what is left in silence.
 
 ## Risk rules
 

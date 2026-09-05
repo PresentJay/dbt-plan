@@ -53,14 +53,31 @@ Reproduce it with `bash examples/sample-project/run-example.sh`.
 
 ## Four situations where nothing else fits
 
-### 1. A pull request from a fork
+### 1. A pull request from a fork, on Fusion
 
 A contributor forks your dbt project and opens a pull request. Warehouse
 credentials are not available to that workflow, and should not be — that is the
 whole point of the restriction.
 
-Every tool in the table above is unavailable here. dbt-plan is unaffected,
-because it only ever reads files:
+Every warehouse-connected tool is unavailable here. Whether dbt-plan is depends
+on which engine compiles the project, and the difference is not cosmetic.
+
+**On dbt Core this does not work.** dbt-plan itself never connects, but producing
+its input does: `dbt compile` connects, and a fork pull request has no secrets to
+connect with. `dbt-plan ci-setup` generates a workflow that says so plainly rather
+than failing later with a driver error.
+
+**On the Fusion engine it does.** Fusion compiles without a warehouse connection.
+Verified against a Snowflake profile pointing at an account that does not exist:
+
+```
+dbt-fusion 2.0.0-preview.218
+Finished 'compile' successfully for target 'dev' [3.1s]
+Processed: 3 models | 3 total | 3 success
+```
+
+Three models compiled, `manifest.json` written, nothing dialled out. So this runs
+with no credentials at all:
 
 ```yaml
 on: pull_request          # not pull_request_target — no secrets, deliberately
@@ -68,6 +85,8 @@ on: pull_request          # not pull_request_target — no secrets, deliberately
 jobs:
   plan:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read      # no secrets needed, so none are granted
     steps:
       - uses: actions/checkout@v4
         with: { fetch-depth: 0 }
@@ -82,6 +101,34 @@ jobs:
 
       - run: dbt-plan check   # exit 1 blocks the merge
 ```
+
+#### The boundary: introspective macros
+
+A macro that queries the warehouse — `run_query`, `get_column_values`,
+`adapter.get_columns_in_relation` — needs a connection even under Fusion, and the
+models using it fail to compile:
+
+```
+[error] [DbConnectionFailed (dbt1300)]: [Snowflake] 261004 (08004): failed to auth
+  --> models/marts/introspective.sql:2:22
+Summary: 4 total | 3 success | 1 error
+```
+
+Only those models fail; the rest still compile. dbt-plan does not quietly analyse
+what is left — it names what is missing:
+
+```
+DESTRUCTIVE  fct_orders (incremental, sync_all_columns)
+  DROP COLUMN  store_id
+
+WARNING: The compile is incomplete -- 1 model(s) in the manifest have no compiled
+         SQL: introspective
+```
+
+So on a fork pull request you get a real verdict on everything that compiled, and
+an explicit statement about everything that did not. That is the same boundary
+`ci-setup` already names when it explains least privilege: `dbt compile` reads no
+tables unless your macros introspect.
 
 ### 2. A required check on every pull request
 
