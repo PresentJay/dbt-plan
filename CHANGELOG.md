@@ -7,6 +7,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **Versioned models are analysed instead of skipped.** (#53) Two versions of a
+  model share one dbt name, and the node_id carries the version where every other
+  model carries its name -- `model.p.fct_orders.v2`. dbt-plan read that last
+  segment as the model name, so:
+
+  ```
+  dbt-plan -- 0 model(s) changed
+  WARNING: Skipped 1 model(s) not found in manifest: fct_orders_v2
+  WARNING: The compile is incomplete -- 1 model(s) in the manifest have no
+           compiled SQL: fct_orders
+  ```
+
+  A `sync_all_columns` DROP COLUMN went entirely unanalysed under those two
+  warnings. It now reports
+  `DESTRUCTIVE fct_orders_v2 (incremental, sync_all_columns)` and exits 1.
+
+  The index is keyed by the name the compiled file was written under throughout,
+  since the diff is a comparison of files. `defined_in:` is honoured -- the node's
+  own `path` is the authority, with the derived `<name>_v<n>` kept as an alias so
+  both spellings resolve. Two versions no longer collapse into one entry either;
+  they can differ in materialization and `on_schema_change`, and only the first
+  used to be indexed.
+
+
 ### Added
 - **A change an enforced contract will reject is now reported.** (#87) dbt-plan read
   no contract information at all -- `grep -rn contract src/dbt_plan/` returned one

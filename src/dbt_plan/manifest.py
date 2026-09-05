@@ -8,6 +8,31 @@ from collections import deque
 from dataclasses import dataclass, field
 from pathlib import Path
 
+_VERSION_TAIL = re.compile(r"^v[0-9]+$")
+
+
+def model_key(node_id: str) -> str:
+    """The name a model's compiled SQL is written under, derived from its node_id.
+
+    Everything else in dbt-plan is keyed by that name, because the diff is a
+    comparison of files. For an ordinary model it is the last segment of the
+    node_id, but a versioned model carries the version there instead:
+
+        model.p.fct_orders      -> fct_orders     -> fct_orders.sql
+        model.p.fct_orders.v2   -> fct_orders_v2  -> fct_orders_v2.sql
+
+    Reading `v2` as the model name is what made a versioned model report as
+    missing from the manifest and then go unanalysed entirely.
+
+    `defined_in:` can name the file something else. `build_node_index` reads the
+    node's own `path` for that reason and registers this as an alias, so the two
+    spellings both resolve.
+    """
+    parts = node_id.split(".")
+    if len(parts) >= 4 and _VERSION_TAIL.match(parts[-1]):
+        return f"{parts[-2]}_{parts[-1]}"
+    return parts[-1]
+
 
 @dataclass(frozen=True)
 class UnitTestFixture:
@@ -75,7 +100,7 @@ def build_data_test_index(manifest: dict) -> dict[str, DataTestNode]:
         column_name = node.get("column_name")
         attached = node.get("attached_node")
         if column_name and attached:
-            columns.setdefault(attached.split(".")[-1], set()).add(str(column_name).lower())
+            columns.setdefault(model_key(attached), set()).add(str(column_name).lower())
 
         metadata = node.get("test_metadata") or {}
         if metadata.get("name") == "relationships":
@@ -88,7 +113,7 @@ def build_data_test_index(manifest: dict) -> dict[str, DataTestNode]:
                 columns.setdefault(far_model, set()).add(str(far_column).lower())
 
         depends = tuple(
-            nid.split(".")[-1]
+            model_key(nid)
             for nid in ((node.get("depends_on") or {}).get("nodes") or [])
             if nid.startswith("model.")
         )
@@ -151,6 +176,7 @@ class ModelNode:
     name: str  # "int_order_enriched"
     materialization: str  # "table", "view", "incremental", "ephemeral"
     on_schema_change: str | None  # "ignore", "fail", "append_new_columns", "sync_all_columns"
+    version: str | None = None  # set only for a versioned model; `name` already carries it
     columns: tuple[str, ...] = ()  # from manifest column definitions (fallback for SELECT *)
     # `contract: {enforced: true}`. When set, dbt requires every column to be
     # declared, so `columns` above stops being documentation and becomes the shape
@@ -274,7 +300,12 @@ def build_unit_test_index(manifest: dict) -> dict[str, UnitTestNode]:
 
 
 def build_node_index(manifest: dict, *, include_packages: bool = False) -> dict[str, ModelNode]:
-    """Build a name → ModelNode index for O(1) lookups.
+    """Build a compiled-SQL-name → ModelNode index for O(1) lookups.
+
+    Keyed by the name the model's compiled file is written under, because every
+    lookup against this index starts from a file in the diff. For an ordinary
+    model that is the dbt model name; for a versioned one it is `<name>_v<n>`,
+    or whatever `defined_in:` says. See `model_key`.
 
     Args:
         include_packages: If False (default), only include models from the
@@ -311,22 +342,30 @@ def build_node_index(manifest: dict, *, include_packages: bool = False) -> dict[
         # Filter out package models unless include_packages=True
         if root_project and node_id.split(".")[1] != root_project:
             continue
-        name = node.get("name")
+        if not node.get("name"):
+            continue
         config = node.get("config") or {}
         # Skip disabled models (dbt won't run them, no DDL will occur)
         if config.get("enabled") is False:
             continue
-        if name and name not in index:
+
+        # The file dbt wrote is the authority; the node_id is the fallback for a
+        # manifest that predates `path`, and an alias when `defined_in:` renames.
+        path = node.get("path")
+        key = Path(path).stem if path else model_key(node_id)
+        version = node.get("version")
+        entry = ModelNode(
+            node_id=node_id,
+            name=key,
+            materialization=config.get("materialized") or "table",
+            on_schema_change=config.get("on_schema_change"),
+            version=str(version) if version is not None else None,
             # Extract column names from manifest (used as fallback for SELECT *)
-            manifest_cols = tuple(c.lower() for c in (node.get("columns") or {}))
-            index[name] = ModelNode(
-                node_id=node_id,
-                name=name,
-                materialization=config.get("materialized") or "table",
-                on_schema_change=config.get("on_schema_change"),
-                columns=manifest_cols,
-                contract_enforced=bool((config.get("contract") or {}).get("enforced")),
-            )
+            columns=tuple(c.lower() for c in (node.get("columns") or {})),
+            contract_enforced=bool((config.get("contract") or {}).get("enforced")),
+        )
+        for alias in (key, model_key(node_id)):
+            index.setdefault(alias, entry)
     return index
 
 

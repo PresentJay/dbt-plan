@@ -526,3 +526,73 @@ class TestAnEnforcedContract:
         )
         assert "CONTRACT VIOLATION" not in result.stdout
         assert result.returncode == 0, result.stdout
+
+
+_VERSIONED_V2 = """{{{{ config(materialized='incremental', on_schema_change='sync_all_columns') }}}}
+
+SELECT 1 AS order_id{extra}
+"""
+
+
+@pytest.fixture
+def versioned_project(tmp_path):
+    """Two versions of one model, which share a dbt name and differ only by file."""
+    project = tmp_path / "versioned_project"
+    (project / "models").mkdir(parents=True)
+    (project / "dbt_project.yml").write_text(
+        "name: versioned_project\nversion: '1.0.0'\nprofile: versioned_profile\n"
+        'model-paths: ["models"]\ntarget-path: "target"\n'
+    )
+    (project / "profiles.yml").write_text(
+        "versioned_profile:\n  target: dev\n  outputs:\n    dev:\n"
+        '      type: duckdb\n      path: ":memory:"\n'
+    )
+    (project / "models" / "fct_orders_v1.sql").write_text(
+        _VERSIONED_V2.format(extra=",\n    'cust_abc' AS customer_id")
+    )
+    (project / "models" / "fct_orders_v2.sql").write_text(
+        _VERSIONED_V2.format(extra=",\n    'cust_abc' AS customer_id")
+    )
+    (project / "models" / "schema.yml").write_text(
+        """version: 2
+models:
+  - name: fct_orders
+    latest_version: 2
+    config:
+      materialized: incremental
+      on_schema_change: sync_all_columns
+    versions:
+      - v: 1
+      - v: 2
+"""
+    )
+    return project
+
+
+class TestVersionedModelsAreAnalysed:
+    def test_a_drop_in_one_version_is_reported_against_that_version(self, versioned_project):
+        _dbt_compile(versioned_project)
+        _dbt_plan(["snapshot", "--project-dir", str(versioned_project)])
+        (versioned_project / "models" / "fct_orders_v2.sql").write_text(
+            _VERSIONED_V2.format(extra="")
+        )
+        _dbt_compile(versioned_project)
+
+        result = _dbt_plan(["check", "--project-dir", str(versioned_project), "--no-color"])
+        assert "DESTRUCTIVE  fct_orders_v2 (incremental, sync_all_columns)" in result.stdout
+        assert "DROP COLUMN  customer_id" in result.stdout
+        # Neither warning that used to stand in for the analysis.
+        assert "not found in manifest" not in result.stdout
+        assert "compile is incomplete" not in result.stdout
+        # v1 was not touched.
+        assert "fct_orders_v1" not in result.stdout
+        assert result.returncode == 1, result.stdout
+
+    def test_an_untouched_versioned_project_is_quiet(self, versioned_project):
+        _dbt_compile(versioned_project)
+        _dbt_plan(["snapshot", "--project-dir", str(versioned_project)])
+        _dbt_compile(versioned_project)
+
+        result = _dbt_plan(["check", "--project-dir", str(versioned_project), "--no-color"])
+        assert result.returncode == 0, result.stdout
+        assert "no model changes detected" in result.stdout
