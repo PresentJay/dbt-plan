@@ -1,5 +1,20 @@
 version: 2
 
+# Data tests, in both forms. A generic test names its column in the manifest; the
+# singular one in ../tests/ names nothing there and has to be read from its
+# compiled SQL, which dbt writes outside the models tree.
+
+models:
+  - name: stg_orders
+    columns:
+      - name: order_id
+        tests: [not_null, unique]
+      - name: customer_id
+        tests:
+          - not_null
+          - accepted_values:
+              values: ['cust_abc']
+
 # Downstream nodes that are not models. dbt-plan walks child_map into both of
 # these, so they exist here to keep that walk honest against a real manifest
 # rather than a hand-written fixture.

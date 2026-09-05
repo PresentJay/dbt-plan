@@ -42,6 +42,27 @@ class ModelDiff:
     current_sql: str | None = None  # cached content to avoid re-reading
 
 
+def iter_non_model_sql(compiled_root: Path, models_dir_name: str) -> Iterator[Path]:
+    """Yield the compiled SQL of everything under `compiled_root` that is not a model.
+
+    Data tests and unit tests, in the two places dbt writes them:
+
+        target/compiled/p/tests/singular_customer_tier.sql        <- test-paths
+        target/compiled/p/models/schema.yml/not_null_orders_x.sql <- declared in YAML
+
+    Neither is inside the `models/` tree that `iter_model_sql` walks, so this is
+    its complement -- the same rule read the other way round.
+    """
+    for f in compiled_root.rglob("*.sql"):
+        if f.is_symlink():
+            continue
+        parts = f.relative_to(compiled_root).parts
+        under_yaml = any(part.endswith((".yml", ".yaml")) for part in parts[:-1])
+        if parts[0] == models_dir_name and not under_yaml:
+            continue
+        yield f
+
+
 def diff_compiled_dirs(
     base_dir: str | Path,
     current_dir: str | Path,

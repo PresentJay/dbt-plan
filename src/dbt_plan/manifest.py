@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import re
 from collections import deque
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 
@@ -39,6 +39,66 @@ class UnitTestNode:
     name: str  # "test_stg_orders_shape"
     model: str  # the model under test, "stg_orders"
     fixtures: tuple[UnitTestFixture, ...] = ()
+
+
+@dataclass(frozen=True)
+class DataTestNode:
+    """A dbt data test: generic (`not_null`) or singular (a `.sql` file in `tests/`).
+
+    A generic test names its column in the manifest, so `columns_by_model` answers
+    it outright. A singular test, and a generic one with no `column_name` such as
+    `dbt_utils.expression_is_true`, names nothing there -- for those the models it
+    depends on are recorded instead, and the caller reads its compiled SQL.
+    """
+
+    node_id: str  # "test.my_project.not_null_stg_orders_customer_id.af79d5e4b5"
+    name: str  # "not_null_stg_orders_customer_id"
+    columns_by_model: dict[str, frozenset[str]] = field(default_factory=dict)
+    depends_on_models: tuple[str, ...] = ()
+
+
+def build_data_test_index(manifest: dict) -> dict[str, DataTestNode]:
+    """Build a node_id -> DataTestNode index over the manifest's data tests.
+
+    Data tests live in `nodes` next to the models, unlike unit tests, so nothing
+    extra has to be kept at load time.
+    """
+    index: dict[str, DataTestNode] = {}
+    for node_id, node in (manifest.get("nodes") or {}).items():
+        if not node_id.startswith("test."):
+            continue
+        config = node.get("config") or {}
+        if config.get("enabled") is False:
+            continue
+
+        columns: dict[str, set[str]] = {}
+        column_name = node.get("column_name")
+        attached = node.get("attached_node")
+        if column_name and attached:
+            columns.setdefault(attached.split(".")[-1], set()).add(str(column_name).lower())
+
+        metadata = node.get("test_metadata") or {}
+        if metadata.get("name") == "relationships":
+            # The only built-in test that reads a second model. It is a child of
+            # both, and the far side is named only here.
+            kwargs = metadata.get("kwargs") or {}
+            far_model = _input_model(kwargs.get("to") or "")
+            far_column = kwargs.get("field")
+            if far_model and far_column:
+                columns.setdefault(far_model, set()).add(str(far_column).lower())
+
+        depends = tuple(
+            nid.split(".")[-1]
+            for nid in ((node.get("depends_on") or {}).get("nodes") or [])
+            if nid.startswith("model.")
+        )
+        index[node_id] = DataTestNode(
+            node_id=node_id,
+            name=node.get("name") or node_id.split(".")[-1],
+            columns_by_model={model: frozenset(cols) for model, cols in columns.items()},
+            depends_on_models=depends,
+        )
+    return index
 
 
 @dataclass(frozen=True)

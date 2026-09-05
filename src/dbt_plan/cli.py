@@ -435,8 +435,9 @@ def _do_check(args: argparse.Namespace) -> int:
 
     from dbt_plan.columns import extract_cast_types, extract_columns
     from dbt_plan.config import Config
-    from dbt_plan.diff import diff_compiled_dirs, iter_model_sql
+    from dbt_plan.diff import diff_compiled_dirs, iter_model_sql, iter_non_model_sql
     from dbt_plan.manifest import (
+        build_data_test_index,
         build_exposure_index,
         build_node_index,
         build_unit_test_index,
@@ -836,9 +837,14 @@ def _do_check(args: argparse.Namespace) -> int:
 
     # 3c. Build compiled SQL index once (O(1) lookup instead of rglob per downstream)
     compiled_sql_index: dict[str, Path] = {}
+    test_sql_index: dict[str, Path] = {}
     if current_compiled:
         for sql_file in iter_model_sql(current_compiled):
             compiled_sql_index[sql_file.stem] = sql_file
+        # Singular tests compile outside the models tree, so they are indexed from
+        # the project root of target/compiled rather than from current_compiled.
+        for sql_file in iter_non_model_sql(current_compiled.parent, current_compiled.name):
+            test_sql_index[sql_file.stem] = sql_file
 
     # 3d. Cascade impact analysis (extracted to predictor module)
     predictions, downstream_map = analyze_cascade_impacts(
@@ -851,6 +857,8 @@ def _do_check(args: argparse.Namespace) -> int:
         compiled_sql_index=compiled_sql_index,
         child_map=child_map,
         unit_test_index=build_unit_test_index(manifest),
+        data_test_index=build_data_test_index(manifest),
+        test_sql_index=test_sql_index,
         base_columns_of=base_table_columns,
         current_columns_of=current_table_columns,
     )

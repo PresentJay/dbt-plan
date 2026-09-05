@@ -179,8 +179,15 @@ def _dbt_run(project_dir: Path) -> subprocess.CompletedProcess:
     )
 
 
-def _dbt_build(project_dir: Path, select: str) -> subprocess.CompletedProcess:
-    """Run dbt build, which is where a broken unit test actually surfaces."""
+def _dbt_build(
+    project_dir: Path, select: str, exclude: str | None = None
+) -> subprocess.CompletedProcess:
+    """Run dbt build, which is where a broken test actually surfaces.
+
+    `exclude` matters because dbt stops at the first failure and skips the rest:
+    with both a unit test and a generic test broken by the same change, only one
+    of them ever runs.
+    """
     return subprocess.run(
         [
             _DBT,
@@ -191,6 +198,7 @@ def _dbt_build(project_dir: Path, select: str) -> subprocess.CompletedProcess:
             "target",
             "--select",
             select,
+            *(["--exclude", exclude] if exclude else []),
         ],
         cwd=project_dir,
         capture_output=True,
@@ -376,3 +384,63 @@ class TestADownstreamStarLosesAColumn:
         (star_project / "models" / "stg_orders.sql").write_text(_STAR_STG_ORDERS.format(extra=""))
         assert _dbt_run(star_project).returncode == 0
         assert _fct_orders_columns(star_project) == ["order_id", "status"]
+
+
+class TestDataTestsAreReachedByCascade:
+    """tests/dbt_project declares generic tests and one singular test."""
+
+    @pytest.fixture
+    def project_without_customer_id(self, dbt_project):
+        _dbt_compile(dbt_project)
+        _dbt_plan(["snapshot", "--project-dir", str(dbt_project)])
+        (dbt_project / "models" / "staging" / "stg_orders.sql").write_text(
+            _STG_ORDERS_WITHOUT_CUSTOMER_ID
+        )
+        _dbt_compile(dbt_project)
+        return dbt_project
+
+    def test_dbt_build_cannot_even_bind_the_generic_test(self, project_without_customer_id):
+        """The claim dbt-plan makes below is this, measured."""
+        result = _dbt_build(
+            project_without_customer_id, "stg_orders", exclude="test_stg_orders_shape"
+        )
+        assert result.returncode != 0
+        assert "not_null_stg_orders_customer_id" in result.stdout
+        assert 'Referenced column "customer_id" not found' in result.stdout
+
+    def test_check_names_the_generic_tests_and_the_singular_one(self, project_without_customer_id):
+        result = _dbt_plan(
+            ["check", "--project-dir", str(project_without_customer_id), "--no-color"]
+        )
+        assert "DATA_TEST_FAILURE" in result.stdout, result.stdout
+        assert "not_null_stg_orders_customer_id: tests dropped column(s): customer_id" in (
+            result.stdout
+        )
+        assert "accepted_values_stg_orders_customer_id__cust_abc" in result.stdout
+        # The singular test names no column in the manifest; its SQL is the answer.
+        assert (
+            "no_order_without_a_customer: its SQL names dropped column(s): customer_id"
+            in result.stdout
+        )
+        # And a test on a column that survives stays out of it.
+        assert "not_null_stg_orders_order_id" not in result.stdout
+        assert result.returncode == 2, result.stdout
+
+    def test_an_added_column_leaves_every_test_alone(self, dbt_project):
+        _dbt_compile(dbt_project)
+        _dbt_plan(["snapshot", "--project-dir", str(dbt_project)])
+        (dbt_project / "models" / "staging" / "stg_orders.sql").write_text(
+            """{{ config(materialized='view') }}
+
+SELECT
+    1 AS order_id,
+    'store_001' AS store_id,
+    '2024-01-01' AS order_date,
+    'cust_abc' AS customer_id,
+    'web' AS channel
+"""
+        )
+        _dbt_compile(dbt_project)
+
+        result = _dbt_plan(["check", "--project-dir", str(dbt_project), "--no-color"])
+        assert "DATA_TEST" not in result.stdout, result.stdout
