@@ -231,7 +231,7 @@ def _do_snapshot(args: argparse.Namespace) -> None:
             file=sys.stderr,
         )
 
-    print(f"Snapshot saved to {base_dir}")
+    print(f"Snapshot saved to {base_dir}", file=sys.stderr)
 
 
 _SAMPLE_CONFIG = """\

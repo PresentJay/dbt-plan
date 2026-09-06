@@ -85,7 +85,8 @@ class TestDbtE2E:
         # Snapshot
         result = _dbt_plan(["snapshot", "--project-dir", str(dbt_project)])
         assert result.returncode == 0
-        assert "Snapshot saved" in result.stdout
+        assert "Snapshot saved" in result.stderr
+        assert "Snapshot saved" not in result.stdout
 
         # Check (no changes)
         result = _dbt_plan(["check", "--project-dir", str(dbt_project)])

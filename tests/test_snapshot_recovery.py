@@ -466,7 +466,8 @@ class TestSnapshotDirIsFile:
             _do_snapshot(_snapshot_args(project_dir))
             # If it succeeds, verify the snapshot was created properly
             captured = capsys.readouterr()
-            assert "Snapshot saved" in captured.out
+            assert "Snapshot saved" in captured.err
+            assert "Snapshot saved" not in captured.out
             assert (project_dir / ".dbt-plan" / "base" / "compiled").is_dir()
             snapshot_succeeded = True
         except (NotADirectoryError, OSError):
