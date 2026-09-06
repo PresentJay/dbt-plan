@@ -127,8 +127,14 @@ def plan(
                     }
                 )
 
+    verdict = _VERDICTS[result.returncode]
+    # warning_exit_code can be configured as 0 for CI, so a zero return code is
+    # only safe when the structured report confirms that nothing was refused.
+    if verdict == "safe" and refusals:
+        verdict = "review_required"
+
     return {
-        "verdict": _VERDICTS[result.returncode],
+        "verdict": verdict,
         "exit_code": result.returncode,
         "summary": report.get("summary", {}),
         "models": report.get("models", []),

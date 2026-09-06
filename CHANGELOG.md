@@ -8,6 +8,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
+- **The MCP server no longer reports `safe` when a configured zero warning exit
+  code accompanies refusals.** (#135) The response preserves the CLI exit code, but
+  derives `review_required` from the structured report whenever dbt-plan declined to
+  judge part of the project.
+
 - **A view whose SQL will not parse no longer exits 0.** (#131) A parse failure was
   recorded only for materializations other than `table` and `view`, on the reasoning
   that `CREATE OR REPLACE` is safe whatever the columns are. That is true of the model

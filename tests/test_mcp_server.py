@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from subprocess import CompletedProcess
 
 import pytest
 
@@ -73,6 +74,26 @@ class TestVerdicts:
 
 class TestRefusalsSurvive:
     """Each of these would be reported as `safe` by a wrapper that collapsed them."""
+
+    def test_warning_exit_code_zero_does_not_override_a_refusal(self, monkeypatch):
+        report = {
+            "parse_failures": ["unreadable_orders"],
+            "models": [],
+            "summary": {},
+        }
+        monkeypatch.setattr(
+            mcp_server,
+            "_run_cli",
+            lambda _args: CompletedProcess([], 0, stdout=json.dumps(report), stderr=""),
+        )
+
+        out = mcp_server.plan("project")
+
+        assert out["exit_code"] == 0
+        assert out["verdict"] == "review_required"
+        assert out["refusals"] == [
+            {"reason": "columns_unreadable", "models": ["unreadable_orders"]}
+        ]
 
     def test_an_incomplete_compile_is_reported_not_hidden(self, tmp_path):
         m = _manifest({"fct_orders": {}, "never_compiled": {}})
