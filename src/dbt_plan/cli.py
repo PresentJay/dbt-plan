@@ -1007,13 +1007,12 @@ def _do_check(args: argparse.Namespace) -> int:
         _log(f"  base_cols={base_cols}")
         _log(f"  current_cols={current_cols}")
 
-        # Track parse failures only for models where it matters
-        # (table/view are always safe via CREATE OR REPLACE, so parse failure is irrelevant)
-        if (
-            diff.status == "modified"
-            and node.materialization not in ("table", "view")
-            and (base_cols is None or current_cols is None)
-        ):
+        # A parse failure is recorded for every materialization. It used to be
+        # skipped for table and view, on the reasoning that CREATE OR REPLACE is
+        # safe whatever the columns are -- true of the model itself, and false of
+        # everything reading it. Unknown columns mean cascade cannot see a dropped
+        # one, so the run must not exit 0 while the report says SAFE. See #131.
+        if diff.status == "modified" and (base_cols is None or current_cols is None):
             parse_failures.append(diff.model_name)
             if base_cols == ["*"] or current_cols == ["*"]:
                 _log(
