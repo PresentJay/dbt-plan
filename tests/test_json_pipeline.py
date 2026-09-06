@@ -7,10 +7,12 @@ suitable for jq queries, schema validators, and round-trip reconstruction.
 from __future__ import annotations
 
 import json
+import re
 import subprocess
+from pathlib import Path
 
 from dbt_plan.formatter import CheckResult, format_json
-from dbt_plan.predictor import DDLOperation, DDLPrediction, DownstreamImpact, Safety
+from dbt_plan.predictor import RISK_SAFETY, DDLOperation, DDLPrediction, DownstreamImpact, Safety
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -187,6 +189,12 @@ class TestJsonSchemaStability:
         data = _parse(result)
         assert data["parse_failures"] == ["broken_sql"]
         assert data["skipped_models"] == ["orphan"]
+
+    def test_documented_cascade_risks_match_the_runtime_vocabulary(self):
+        docs = (Path(__file__).parents[1] / "docs" / "configuration.md").read_text()
+        section = docs.split("#### Cascade risk vocabulary", 1)[1].split("### ", 1)[0]
+        documented = set(re.findall(r"^\| `([^`]+)` \|", section, re.MULTILINE))
+        assert documented == set(RISK_SAFETY)
 
 
 # ===========================================================================
