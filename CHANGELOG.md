@@ -8,6 +8,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
+- **A view whose SQL will not parse no longer exits 0.** (#131) A parse failure was
+  recorded only for materializations other than `table` and `view`, on the reasoning
+  that `CREATE OR REPLACE` is safe whatever the columns are. That is true of the model
+  and false of everything reading it: with the column sets unknown, cascade cannot see
+  which column was dropped, so `BROKEN_REF` never fired and the run exited 0 while the
+  report said `SAFE`.
+
+  ```
+  stg_f:  SELECT id, customer_id, {% if x %}a{% endif %} FROM raw.orders
+       -> SELECT id, {% if x %}a{% endif %} FROM raw.orders
+  fct_f:  SELECT customer_id FROM stg_f
+  ```
+
+  Same SQL as a `view`: `SAFE`, exit 0, nothing about `fct_f`. As an `incremental`:
+  `Could not extract columns`, exit 2. Only the materialization differed, and
+  `view`/`table` are what most dbt projects are made of.
+
+  The model's own verdict still reads `SAFE` -- `CREATE OR REPLACE VIEW` is what dbt
+  will run. The refusal is reported beside it, so "this DDL is safe and I cannot tell
+  you what it does to anything downstream" stays sayable, and the exit code follows the
+  refusal rather than the verdict.
+
 - **A deleted model is reported.** (#127) `dbt compile` never removes what it wrote
   before, so a model deleted from the source left its compiled SQL in `target/`, the
   diff found identical bytes on both sides, and `check` said `no model changes
