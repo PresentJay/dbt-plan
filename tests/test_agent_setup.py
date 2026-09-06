@@ -9,10 +9,13 @@ notably the two config edits that silence a real finding.
 from __future__ import annotations
 
 import argparse
+import ast
+from pathlib import Path
 
 import pytest
 
 from dbt_plan.cli import _AGENTS_GUIDE, _AGENTS_MARKER, _do_agent_setup
+from dbt_plan.predictor import RISK_SAFETY, predict_ddl
 
 
 def _run(project_dir):
@@ -95,6 +98,46 @@ class TestIdempotency:
 
 
 class TestGuidanceContent:
+    def test_documents_every_cascade_risk(self, tmp_path):
+        content = _run(tmp_path).read_text(encoding="utf-8")
+        for risk in RISK_SAFETY:
+            assert risk.upper() in content, f"cascade risk not explained: {risk}"
+
+    def test_documents_operation_labels_from_source(self, tmp_path):
+        """Adding an operation must also update the consumer's reading guide.
+
+        Check the label before its parenthesized detail or colon, including the
+        literal prefix of f-strings whose remaining text names models or columns.
+        """
+        content = _run(tmp_path).read_text(encoding="utf-8").casefold()
+        src = Path(__file__).resolve().parent.parent / "src" / "dbt_plan"
+        for path in src.glob("*.py"):
+            for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
+                if not (
+                    isinstance(node, ast.Call)
+                    and isinstance(node.func, ast.Name)
+                    and node.func.id == "DDLOperation"
+                    and node.args
+                ):
+                    continue
+                label = node.args[0]
+                if isinstance(label, ast.JoinedStr):
+                    label = label.values[0]
+                if isinstance(label, ast.Constant) and isinstance(label.value, str):
+                    prefix = label.value.split("(", 1)[0].split(":", 1)[0].strip()
+                    assert prefix.casefold() in content, f"operation not explained: {prefix}"
+
+    def test_explains_materialized_view_refusal(self, tmp_path):
+        content = _run(tmp_path).read_text(encoding="utf-8")
+        prediction = predict_ddl("orders", "materialized_view", None, ["id", "total"], ["id"])
+        assert prediction.operations[0].operation in content
+        assert "explicitly set" in content
+
+    def test_distinguishes_exposures_from_failures(self, tmp_path):
+        content = _run(tmp_path).read_text(encoding="utf-8")
+        assert "EXPOSURE" in content
+        assert "not a failure" in content
+
     def test_names_the_command_to_run(self):
         assert "dbt-plan run" in _AGENTS_GUIDE
 

@@ -1397,20 +1397,38 @@ dbt-plan itself never connects to the warehouse and never runs SQL.
 ### Reading the result
 
 - `0` — every change is safe.
-- `1` — destructive: a column is being dropped, or a model removed.
-- `2` — dbt-plan could not answer. Either it could not read a model, or it never saw one.
-  A human has to look.
+- `1` — destructive: a column is being dropped, a model removed, or a downstream
+  reference broken.
+- `2` — review needed: dbt-plan found a possible build/test failure or could not fully
+  assess the change. A human has to look. Invalid input or a command error also exits `2`.
 
 A warning is not automatically a blocker; it means "explain this before merging."
 
-`2` covers several situations, and they need different responses:
+Read the messages as well as the exit code: downstream findings can escalate an otherwise
+safe model, and configured exit codes or acknowledged findings can change the exit status.
+These messages need different responses:
 
 | Message | What it means | What to do |
 |---|---|---|
 | "review required" | a model's columns could not be extracted | read that model's SQL yourself |
 | "columns came from the manifest, not the SQL" | the SQL was `SELECT *`, so documented columns stood in for it — on both sides, which is why the diff came out empty | give the model an explicit column list, or document its columns fully in `schema.yml` |
 | "TYPE CHANGED" | an explicit `CAST` on a column changed between revisions | decide whether the new type can hold the existing data |
-| "UNKNOWN materialization" | a materialization dbt-plan has no rule for, with no `on_schema_change` set | set `on_schema_change` if your materialization honours it; otherwise review by hand |
+| "UNKNOWN materialization" | a materialization dbt-plan has no rule for, with no `on_schema_change` explicitly set by you; dbt's injected default does not count | set `on_schema_change` only if your materialization honours it; otherwise review by hand |
+| "REVIEW REQUIRED (materialized_view is driven by on_configuration_change, which dbt-plan does not model)" | a materialized view's schema-change behaviour is outside the prediction rules | review the adapter's `on_configuration_change` behaviour; do not add `on_schema_change` just to silence it |
+| "UNKNOWN on_schema_change" | the configured schema-change policy has no prediction rule | check the setting and review the materialization's implementation |
+| "MATERIALIZATION CHANGED" / "on_schema_change CHANGED" | the model's configuration changed between revisions | review how the new configuration treats the existing relation |
+| "BUILD FAILURE" / "BUILD_FAILURE" | schema drift meets `on_schema_change: fail`, on this model or downstream | resolve the schema drift before building |
+| "CONTRACT VIOLATION" | produced columns disagree with an enforced contract's names or explicit cast types | reconcile the SQL and the intended contract; do not disable enforcement to pass |
+| "BROKEN_REF" | downstream SQL refers to a column being removed | update the downstream reference together with the schema change |
+| "INHERITED_DROP" | an unchanged downstream `SELECT *` inherits a destructive column loss | review and coordinate the downstream drop too |
+| "INHERITED_CHANGE" | an unchanged downstream `SELECT *` inherits a change that needs review, or its columns cannot be resolved | inspect the downstream schema and materialization; unchanged SQL does not mean unchanged output |
+| "DATA_TEST_FAILURE" | a data test names a dropped column in its metadata or SQL | update the test to match the intended schema change |
+| "DATA_TEST_UNREADABLE" | a potentially affected data test has no column metadata or readable compiled SQL to inspect | compile the test and inspect its column references; this is not evidence that it passes |
+| "UNIT_TEST_FAILURE" | a unit test's `given` or `expect` fixture names a dropped column | update the fixture and expected output to match the intended change |
+| "UNIT_TEST_UNREADABLE" | a potentially affected unit test uses SQL or a fixture whose columns dbt-plan cannot inspect | review those fixture columns by hand |
+| "EXPOSURE" | a downstream dashboard or other consumer, with its owner when available; not a failure or an independent severity change | coordinate the schema change with the listed owner |
+| "SELECT * came from dbt_utils.star() returning nothing" | the macro could not find its relation when compiling | compile where the relation exists, or list the columns explicitly |
+| "target/ may be out of date" | model source files are newer than the manifest | recompile before trusting the report |
 | "not found in manifest" | the compiled SQL and the manifest disagree | the manifest is stale — recompile |
 | "the compile is incomplete" | a model in the manifest produced no compiled SQL | **fix the compile, then rerun** |
 
@@ -1446,13 +1464,14 @@ Risk is materialization crossed with `on_schema_change`:
 
 | Config | Result |
 |---|---|
-| `table` / `view` | `CREATE OR REPLACE` — safe |
-| `incremental` + `ignore` | no DDL — safe |
+| `table` / `view` | `CREATE OR REPLACE TABLE` / `CREATE OR REPLACE VIEW` — safe before downstream and contract checks |
+| `incremental` + `ignore` | NO DDL — safe |
 | `incremental` + `append_new_columns` | ADD COLUMN only — safe |
-| `incremental` + `fail` | run fails on schema drift — warning |
-| `incremental` + `sync_all_columns` | ADD and DROP COLUMN — destructive if a column was removed |
+| `incremental` + `append_new_columns`, column removed | STALE COLUMNS (not populated) — the old columns remain in the table; review their consumers |
+| `incremental` + `fail` | BUILD FAILURE on schema drift — warning |
+| `incremental` + `sync_all_columns` | ADD COLUMN and DROP COLUMN — destructive if a column was removed; COLUMNS REORDERED alone is a warning |
 | `snapshot` | review required — warning |
-| model deleted | destructive |
+| model deleted | MODEL REMOVED — destructive; an ephemeral model has no physical object |
 
 When dbt-plan cannot extract columns it reports "review required" rather than "safe", and
 when it never received a model at all it says so rather than staying quiet. False warnings
