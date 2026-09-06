@@ -113,11 +113,42 @@ class TestADeletedModelIsReported:
 
     def test_no_base_manifest_means_no_synthesis(self, tmp_path, capsys):
         """Without the base side there is nothing to compare against -- and nothing
-        to invent."""
+        to invent. It must not come out safe either: say that and exit 2 (#155)."""
         project = _project(tmp_path, base_models=["keep", "doomed"], current_models=["keep"])
         (project / ".dbt-plan" / "base" / "manifest.json").unlink()
-        _check(project)
-        assert "MODEL REMOVED" not in capsys.readouterr().out
+        assert _check(project) == 2
+        out = capsys.readouterr().out
+        assert "MODEL REMOVED" not in out
+        assert "manifest" in out.lower()
+
+
+class TestTheBaseManifestIsNotReadBestEffort:
+    """#155 -- a base manifest that cannot be read must never end in exit 0.
+
+    MODEL REMOVED is the rule most at stake: corruption, or a missing baseline,
+    turns `base_node_index` into `{}` and the deletion is silently dropped.
+    """
+
+    def test_corrupt_base_manifest_still_exits_2(self, tmp_path, capsys):
+        project = _project(tmp_path, base_models=["keep", "doomed"], current_models=["keep"])
+        (project / ".dbt-plan" / "base" / "manifest.json").write_text("{broken", encoding="utf-8")
+        assert _check(project) == 2
+        out = capsys.readouterr().out
+        assert "MODEL REMOVED" not in out
+        assert "manifest" in out.lower()
+
+    def test_corrupt_base_manifest_warns_even_when_a_model_is_still_reported(
+        self, tmp_path, capsys
+    ):
+        project = _project(tmp_path, base_models=["keep", "doomed"], current_models=["keep"])
+        (project / ".dbt-plan" / "base" / "compiled" / "models" / "keep.sql").write_text(
+            "SELECT 1 AS a", encoding="utf-8"
+        )
+        (project / ".dbt-plan" / "base" / "manifest.json").write_text("{broken", encoding="utf-8")
+        assert _check(project) == 2
+        out = capsys.readouterr().out
+        assert "keep" in out
+        assert "manifest" in out.lower()
 
 
 class TestARemovedDownstreamCannotBreak:

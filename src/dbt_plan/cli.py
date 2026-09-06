@@ -478,7 +478,12 @@ def _exit_code_for(result: CheckResult, warning_exit_code: int) -> int:
     # the diff but absent from the manifest, and a model in the manifest that
     # the compile never produced. Either way the tool did not look, so it must
     # not answer "safe". Ranked below destructive so a real finding still exits 1.
-    if result.skipped_models or result.uncompiled_models or result.stale_sources:
+    if (
+        result.skipped_models
+        or result.uncompiled_models
+        or result.stale_sources
+        or result.baseline_problem
+    ):
         return warning_exit_code
     return 0
 
@@ -838,12 +843,26 @@ def _do_check(args: argparse.Namespace) -> int:
         return 2
 
     base_manifest_path = base_dir / "manifest.json"
+    baseline_problem: str | None = None
     base_manifest = None
     if base_manifest_path.exists():
         try:
             base_manifest = load_manifest(base_manifest_path)
         except (json.JSONDecodeError, OSError, UnicodeDecodeError):
-            pass  # base manifest is best-effort
+            # A manifest that exists and will not parse is a corrupted snapshot:
+            # it is not the revision it claims to be, and walking past it in
+            # silence produces a confident wrong answer (see #155).
+            baseline_problem = "corrupt"
+            _log(
+                "Base manifest exists but will not parse; deleted-model detection is off. "
+                "Re-run 'dbt-plan snapshot'."
+            )
+    elif base_dir.exists():
+        # No base manifest: an older snapshot (taken before the manifest was
+        # copied) or an interrupted one. Recoverable, but deletions cannot be
+        # seen, so it is not a reason to answer safe either.
+        baseline_problem = "missing"
+        _log("Base manifest missing; deleted-model detection is off. Re-run 'dbt-plan snapshot'.")
 
     # The manifest names the adapter that produced the project, so it decides the
     # dialect when nobody else did -- a BigQuery project used to be parsed as
@@ -939,7 +958,11 @@ def _do_check(args: argparse.Namespace) -> int:
         _log(f"Stale: {', '.join(stale_sources)} newer than {manifest_path.name}")
 
     if not model_diffs:
-        empty = CheckResult(uncompiled_models=uncompiled_models, stale_sources=stale_sources)
+        empty = CheckResult(
+            uncompiled_models=uncompiled_models,
+            stale_sources=stale_sources,
+            baseline_problem=baseline_problem,
+        )
         if fmt == "json":
             print(format_json(empty))
         elif fmt == "github":
@@ -1243,6 +1266,7 @@ def _do_check(args: argparse.Namespace) -> int:
         uncompiled_models,
         stale_sources,
         acknowledge_models=config.acknowledge_models,
+        baseline_problem=baseline_problem,
     )
     if fmt == "json":
         print(format_json(check_result))

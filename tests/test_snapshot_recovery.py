@@ -82,11 +82,13 @@ def _setup_target(project_dir: Path, models_sql: dict[str, str], manifest: dict)
 class TestCorruptedManifest:
     """Base manifest contains invalid JSON — _do_check should not crash."""
 
-    def test_corrupted_base_manifest_falls_back_gracefully(self, tmp_path, capsys):
-        """Corrupted base manifest.json ({broken) should be silently skipped.
+    def test_corrupted_base_manifest_is_reported_not_walked_past(self, tmp_path, capsys):
+        """A base manifest that will not parse is not the revision it claims to be.
 
-        _do_check wraps base manifest loading in try/except (json.JSONDecodeError, OSError).
-        The check should still succeed using only the current manifest.
+        It must not be skipped in silence: deleted-model detection is off, so a
+        check that exits 0 would be a confident wrong answer (#155). The model
+        diffs that can still be computed are still shown -- the report just has to
+        say the baseline is unusable and refuse to exit clean.
         """
         project_dir = tmp_path / "project"
         project_dir.mkdir()
@@ -106,8 +108,8 @@ class TestCorruptedManifest:
         captured = capsys.readouterr()
         result = json.loads(captured.out)
 
-        # Should not crash — falls back to current manifest only
-        assert exit_code == 0
+        assert exit_code == 2
+        assert result["baseline_problem"] == "corrupt"
         assert result["summary"]["total"] == 1
         assert result["models"][0]["model_name"] == "dim_user"
         assert result["models"][0]["safety"] == "safe"
@@ -147,8 +149,13 @@ class TestCorruptedManifest:
 class TestEmptyManifest:
     """Base manifest.json is an empty string — json.JSONDecodeError should be caught."""
 
-    def test_empty_base_manifest_falls_back(self, tmp_path, capsys):
-        """Empty base manifest.json should be silently skipped (json.JSONDecodeError)."""
+    def test_empty_base_manifest_is_a_corrupt_baseline(self, tmp_path, capsys):
+        """Empty base manifest.json cannot claim to describe the baseline stats.
+
+        Empty input is not JSON, so it is the corrupt case (#155), not a missing
+        one: the snapshot is not the revision it claims to be, and a check that
+        exits 0 on it would be a confident wrong answer.
+        """
         project_dir = tmp_path / "project"
         project_dir.mkdir()
 
@@ -165,8 +172,8 @@ class TestEmptyManifest:
         captured = capsys.readouterr()
         result = json.loads(captured.out)
 
-        # Should not crash
-        assert exit_code == 0
+        assert exit_code == 2
+        assert result["baseline_problem"] in ("missing", "corrupt")
         assert result["summary"]["total"] == 1
 
     def test_empty_current_manifest_returns_error(self, tmp_path, capsys):
@@ -618,7 +625,13 @@ class TestBaseManifestMissing:
     """Base snapshot has compiled SQL but no manifest.json at all."""
 
     def test_check_works_without_base_manifest(self, tmp_path, capsys):
-        """Check should still work using only the current manifest."""
+        """The model diff can still be read, but the check must not exit 0.
+
+        With the base manifest gone, deleted-model detection is off and the
+        baseline is not the revision it claims to be, so the report has to say so
+        and the exit code has to refuse to pass (see #155). The diff itself is
+        computed from the compiled SQL and is still reported.
+        """
         project_dir = tmp_path / "project"
         project_dir.mkdir()
 
@@ -635,7 +648,8 @@ class TestBaseManifestMissing:
         captured = capsys.readouterr()
         result = json.loads(captured.out)
 
-        assert exit_code == 0
+        assert exit_code == 2
+        assert result["baseline_problem"] == "missing"
         assert result["summary"]["total"] == 1
         assert result["models"][0]["model_name"] == "dim_user"
 
