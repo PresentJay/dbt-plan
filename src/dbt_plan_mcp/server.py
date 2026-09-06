@@ -67,16 +67,27 @@ def plan(
     project_dir: str,
     dialect: str | None = None,
     select: str | None = None,
+    target_dir: str = "target",
 ) -> dict[str, Any]:
     """Compare compiled SQL against the baseline and report what dbt would do.
 
     Args:
-        project_dir: dbt project directory, the one containing `target/`.
+        project_dir: dbt project directory, the one containing the target directory.
         dialect: sqlglot dialect for parsing compiled SQL. Defaults to the
             configured value, or snowflake.
         select: Comma-separated model names to restrict the check to.
+        target_dir: dbt target directory, relative to `project_dir` (default: `target`).
     """
-    args = ["check", "--project-dir", project_dir, "--format", "json", "--no-color"]
+    args = [
+        "check",
+        "--project-dir",
+        project_dir,
+        "--target-dir",
+        target_dir,
+        "--format",
+        "json",
+        "--no-color",
+    ]
     if dialect:
         args += ["--dialect", dialect]
     if select:
@@ -142,13 +153,14 @@ def plan(
         "against. Run this on the revision you are changing from."
     )
 )
-def snapshot(project_dir: str) -> dict[str, Any]:
-    """Save `target/compiled` and `manifest.json` as the comparison baseline.
+def snapshot(project_dir: str, target_dir: str = "target") -> dict[str, Any]:
+    """Save compiled SQL and `manifest.json` as the comparison baseline.
 
     Args:
-        project_dir: dbt project directory, the one containing `target/`.
+        project_dir: dbt project directory, the one containing the target directory.
+        target_dir: dbt target directory, relative to `project_dir` (default: `target`).
     """
-    result = _run_cli(["snapshot", "--project-dir", project_dir])
+    result = _run_cli(["snapshot", "--project-dir", project_dir, "--target-dir", target_dir])
     if result.returncode != 0:
         return {
             "ok": False,
