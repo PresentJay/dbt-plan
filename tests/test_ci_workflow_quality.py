@@ -18,6 +18,15 @@ import pytest
 from dbt_plan.cli import _CI_WORKFLOW, _do_ci_setup
 
 _REPOSITORY_CI_WORKFLOW = Path(__file__).parents[1] / ".github" / "workflows" / "ci.yml"
+_EXAMPLE_CI_WORKFLOW = Path(__file__).parents[1] / "examples" / "ci-workflow" / "dbt-plan.yml"
+_DEFAULT_DBT_PATH_FILTERS = [
+    "models/**",
+    "macros/**",
+    "snapshots/**",
+    "seeds/**",
+    "packages.yml",
+    "dbt_project.yml",
+]
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -29,6 +38,23 @@ def _run_ci_setup(project_dir):
     args = argparse.Namespace(project_dir=str(project_dir))
     _do_ci_setup(args)
     return project_dir / ".github" / "workflows" / "dbt-plan.yml"
+
+
+def _pull_request_paths(workflow: str) -> list[str]:
+    """Extract the workflow pull_request path filters without adding PyYAML."""
+    block_match = re.search(r"^  pull_request:\n    paths:\n((?:      - .+\n)+)", workflow, re.M)
+    if block_match:
+        paths = []
+        for line in block_match.group(1).splitlines():
+            item = line.strip().removeprefix("-").strip()
+            if len(item) >= 2 and item[0] == item[-1] == "'":
+                item = item[1:-1].replace("''", "'")
+            paths.append(item)
+        return paths
+
+    inline_match = re.search(r"paths:\s*\[(.*?)\]", workflow)
+    assert inline_match, "pull_request paths not found"
+    return [item.strip().strip("'\"") for item in inline_match.group(1).split(",") if item.strip()]
 
 
 # ---------------------------------------------------------------------------
@@ -66,6 +92,40 @@ class TestGeneratedYamlValid:
 
 
 class TestWorkflowStructure:
+    def test_pull_request_paths_include_default_dbt_inputs(self):
+        """Default dbt path filters include every dbt input that can affect compiled SQL."""
+        assert _pull_request_paths(_CI_WORKFLOW) == _DEFAULT_DBT_PATH_FILTERS
+
+    def test_pull_request_paths_are_not_only_old_three_path_set(self):
+        """The workflow no longer only watches models, macros, and dbt_project.yml."""
+        assert _pull_request_paths(_CI_WORKFLOW) != [
+            "models/**",
+            "macros/**",
+            "dbt_project.yml",
+        ]
+
+    def test_ci_setup_uses_renamed_dbt_project_paths(self, tmp_path):
+        """Configured dbt path settings become matching pull_request path filters."""
+        (tmp_path / "dbt_project.yml").write_text(
+            "name: p\n"
+            'model-paths: ["transformations"]\n'
+            'macro-paths: ["custom_macros"]\n'
+            'snapshot-paths: ["history_snapshots"]\n'
+            'seed-paths: ["seed_data"]\n',
+            encoding="utf-8",
+        )
+
+        workflow = _run_ci_setup(tmp_path).read_text(encoding="utf-8")
+
+        assert _pull_request_paths(workflow) == [
+            "transformations/**",
+            "custom_macros/**",
+            "history_snapshots/**",
+            "seed_data/**",
+            "packages.yml",
+            "dbt_project.yml",
+        ]
+
     def test_pull_request_paths_include_models(self):
         """on.pull_request.paths includes models/**."""
         assert "models/**" in _CI_WORKFLOW
@@ -97,6 +157,13 @@ class TestWorkflowStructure:
         assert block, "permissions block not found"
         scopes = dict(re.findall(r"(\S+):\s*(\S+)", block.group(1)))
         assert scopes == {"contents": "read"}, f"expected only contents: read, got {scopes}"
+
+
+class TestExampleWorkflow:
+    def test_example_pull_request_paths_match_default_generated_paths(self):
+        """The committed example watches the same default dbt inputs as ci-setup."""
+        content = _EXAMPLE_CI_WORKFLOW.read_text(encoding="utf-8")
+        assert _pull_request_paths(content) == _DEFAULT_DBT_PATH_FILTERS
 
 
 class TestRepositoryCiJobs:

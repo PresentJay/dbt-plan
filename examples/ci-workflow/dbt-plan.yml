@@ -20,6 +20,9 @@ on:
     paths:
       - 'models/**'
       - 'macros/**'
+      - 'snapshots/**'
+      - 'seeds/**'
+      - 'packages.yml'
       - 'dbt_project.yml'
 
 # Cancel in-progress runs for same PR
