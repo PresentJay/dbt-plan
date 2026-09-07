@@ -93,9 +93,7 @@ class TestRefusalsSurvive:
 
         assert out["verdict"] == "review_required"
         assert out["exit_code"] == 0
-        assert out["refusals"] == [
-            {"reason": "columns_unreadable", "models": ["fct_orders"]}
-        ]
+        assert out["refusals"] == [{"reason": "columns_unreadable", "models": ["fct_orders"]}]
 
     def test_an_incomplete_compile_is_reported_not_hidden(self, tmp_path):
         m = _manifest({"fct_orders": {}, "never_compiled": {}})
