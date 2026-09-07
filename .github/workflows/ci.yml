@@ -28,6 +28,8 @@ jobs:
       - run: pip install -e ".[dev]"
       - run: ruff check src/ tests/
       - run: ruff format --check src/ tests/
+      - name: Test CI feedback controls
+        run: node --test .github/scripts/ci-feedback.test.cjs
 
   test:
     runs-on: ubuntu-latest

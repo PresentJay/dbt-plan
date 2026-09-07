@@ -1,0 +1,81 @@
+name: CI feedback
+
+on:
+  pull_request_target:
+    types: [opened, reopened, synchronize, ready_for_review]
+  issue_comment:
+    types: [created]
+  workflow_run:
+    workflows: [CI]
+    types: [requested, in_progress, completed]
+  workflow_dispatch:
+    inputs:
+      pr:
+        description: Pull request number to refresh
+        required: true
+        type: string
+
+# This workflow controls CI through the API; it never runs PR code. Both
+# checkouts explicitly use this repository's default branch, including when a
+# workflow_run or issue_comment event was caused by an untrusted contributor.
+permissions: {}
+
+jobs:
+  resolve:
+    if: >-
+      github.event_name != 'issue_comment' ||
+      (github.event.issue.pull_request && github.event.comment.user.type != 'Bot' &&
+       startsWith(github.event.comment.body, '/ci'))
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      actions: read
+      pull-requests: read
+    outputs:
+      prs: ${{ steps.resolve.outputs.result }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: ${{ github.repository }}
+          ref: ${{ github.event.repository.default_branch }}
+          persist-credentials: false
+          sparse-checkout: .github/scripts
+      - uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v8
+        id: resolve
+        with:
+          script: |
+            const { resolve } = require('./.github/scripts/ci-feedback.cjs');
+            return await resolve({ github, context });
+
+  report:
+    needs: resolve
+    if: needs.resolve.outputs.prs != '[]' && needs.resolve.outputs.prs != ''
+    strategy:
+      fail-fast: false
+      matrix:
+        pr: ${{ fromJSON(needs.resolve.outputs.prs) }}
+    concurrency:
+      group: ci-feedback-${{ matrix.pr }}
+      cancel-in-progress: false
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      actions: write
+      issues: write
+      pull-requests: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: ${{ github.repository }}
+          ref: ${{ github.event.repository.default_branch }}
+          persist-credentials: false
+          sparse-checkout: .github/scripts
+      - uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v8
+        env:
+          PR_NUMBER: ${{ matrix.pr }}
+        with:
+          script: |
+            const { report } = require('./.github/scripts/ci-feedback.cjs');
+            await report({ github, context, number: Number(process.env.PR_NUMBER) });
