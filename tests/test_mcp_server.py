@@ -85,6 +85,27 @@ class TestVerdicts:
 class TestRefusalsSurvive:
     """Each of these would be reported as `safe` by a wrapper that collapsed them."""
 
+    def test_zero_exit_with_refusals_requires_review(self, monkeypatch):
+        report = {
+            "parse_failures": ["fct_orders"],
+            "skipped_models": [],
+            "uncompiled_models": [],
+            "models": [],
+            "summary": {},
+        }
+        result = type(
+            "Result",
+            (),
+            {"returncode": 0, "stdout": json.dumps(report), "stderr": ""},
+        )()
+        monkeypatch.setattr(mcp_server, "_run_cli", lambda _args: result)
+
+        out = mcp_server.plan(".")
+
+        assert out["verdict"] == "review_required"
+        assert out["exit_code"] == 0
+        assert out["refusals"] == [{"reason": "columns_unreadable", "models": ["fct_orders"]}]
+
     def test_an_incomplete_compile_is_reported_not_hidden(self, tmp_path):
         m = _manifest({"fct_orders": {}, "never_compiled": {}})
         _write(tmp_path, {"fct_orders": "SELECT a, b FROM raw"}, m)
