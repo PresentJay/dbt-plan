@@ -333,6 +333,80 @@ class TestCascadeImpactFormatting:
         assert model["downstream_impacts"][0]["risk"] == "broken_ref"
         assert model["downstream_impacts"][0]["model_name"] == "fct_metrics"
 
+    def test_long_data_test_names_are_shortened_only_in_human_output(self):
+        full_name = (
+            "accepted_values_stg_orders_status__placed__shipped__completed"
+            "__return_pending__returned"
+        )
+        impact = DownstreamImpact(
+            model_name=full_name,
+            materialization="data_test",
+            on_schema_change=None,
+            risk="data_test_failure",
+            reason="tests dropped column(s): status",
+        )
+        result = self._make_cascade_result()
+        result.predictions[0].downstream_impacts[:] = [impact]
+
+        text = format_text(result, color=False)
+        github = format_github(result)
+        data = json.loads(format_json(result))
+
+        assert full_name not in text
+        assert full_name not in github
+        assert "accepted_values_stg_orders_status__...ng__returned" in text
+        assert "accepted_values_stg_orders_status__...ng__returned" in github
+        assert data["models"][0]["downstream_impacts"][0]["model_name"] == full_name
+
+    def test_shortened_data_test_names_keep_distinguishing_columns(self):
+        impacts = [
+            DownstreamImpact(
+                model_name=(
+                    f"accepted_values_stg_orders_{column}__placed__shipped__completed"
+                    "__return_pending__returned"
+                ),
+                materialization="data_test",
+                on_schema_change=None,
+                risk="data_test_failure",
+                reason=f"tests dropped column(s): {column}",
+            )
+            for column in ("status_code", "status_text")
+        ]
+        result = self._make_cascade_result()
+        result.predictions[0].downstream_impacts[:] = impacts
+
+        output = format_text(result, color=False)
+
+        assert "accepted_values_stg_orders_status_c...ng__returned" in output
+        assert "accepted_values_stg_orders_status_t...ng__returned" in output
+
+    def test_colliding_shortened_names_fall_back_to_full_names(self):
+        prefix = "accepted_values_stg_orders_status_"
+        suffix = "__pending__returned"
+        names = [
+            f"{prefix}{middle}{suffix}"
+            for middle in (
+                "placed__shipped__completed__return",
+                "placed__processing__completed__return",
+            )
+        ]
+        impacts = [
+            DownstreamImpact(
+                model_name=name,
+                materialization="data_test",
+                on_schema_change=None,
+                risk="data_test_failure",
+                reason="tests dropped column(s): status",
+            )
+            for name in names
+        ]
+        result = self._make_cascade_result()
+        result.predictions[0].downstream_impacts[:] = impacts
+
+        output = format_text(result, color=False)
+
+        assert all(name in output for name in names)
+
     def test_summary_line_includes_cascade_count(self):
         """Summary line shows cascade risk count when present."""
         result = self._make_cascade_result()

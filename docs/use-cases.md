@@ -249,6 +249,11 @@ Binder Error: Values list "customers" does not have a column named "first_name"
 ERROR accepted_values_stg_orders_status__placed__shipped__completed__return_pending__returned
 ```
 
+Text and GitHub output shorten that generated name to
+`accepted_values_stg_orders_status__...ng__returned`, keeping both ends; JSON
+keeps the exact name for automation. If distinct names would shorten to the same
+label, the human-readable formats keep them in full.
+
 `dbt-plan check` took **0.12-0.17s**. `dbt compile` on the same project took 2.46s,
 so the check is about 5% of a compile you were already paying for.
 

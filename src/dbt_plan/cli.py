@@ -193,8 +193,8 @@ def _do_snapshot(args: argparse.Namespace) -> None:
     compiled_dir = found[0] if found else None
     if compiled_dir is None:
         print(
-            "Error: No compiled SQL found. "
-            "Run 'dbt compile' first to generate compiled SQL in the target/ directory.",
+            f"Error: No compiled SQL found in {target_dir}. "
+            "Run 'dbt compile' first to generate compiled SQL there.",
             file=sys.stderr,
         )
         sys.exit(2)
@@ -225,7 +225,7 @@ def _do_snapshot(args: argparse.Namespace) -> None:
         shutil.copy2(manifest_src, base_dir / "manifest.json")
     else:
         print(
-            "Warning: manifest.json not found in target/. "
+            f"Warning: manifest.json not found in {target_dir}. "
             "Run 'dbt compile' to generate it. "
             "Without it, 'dbt-plan check' will fail.",
             file=sys.stderr,
@@ -801,8 +801,8 @@ def _do_check(args: argparse.Namespace) -> int:
     _log(f"Current compiled: {current_compiled} (model dirs: {', '.join(model_dirs)})")
     if current_compiled is None:
         print(
-            "Error: No compiled SQL found. "
-            "Run 'dbt compile' first to generate compiled SQL in the target/ directory.",
+            f"Error: No compiled SQL found in {target_dir}. "
+            "Run 'dbt compile' first to generate compiled SQL there.",
             file=sys.stderr,
         )
         return 2
@@ -1421,20 +1421,38 @@ dbt-plan itself never connects to the warehouse and never runs SQL.
 ### Reading the result
 
 - `0` — every change is safe.
-- `1` — destructive: a column is being dropped, or a model removed.
-- `2` — dbt-plan could not answer. Either it could not read a model, or it never saw one.
-  A human has to look.
+- `1` — destructive: a column is being dropped, a model removed, or a downstream
+  reference broken.
+- `2` — review needed: dbt-plan found a possible build/test failure or could not fully
+  assess the change. A human has to look. Invalid input or a command error also exits `2`.
 
 A warning is not automatically a blocker; it means "explain this before merging."
 
-`2` covers several situations, and they need different responses:
+Read the messages as well as the exit code: downstream findings can escalate an otherwise
+safe model, and configured exit codes or acknowledged findings can change the exit status.
+These messages need different responses:
 
 | Message | What it means | What to do |
 |---|---|---|
 | "review required" | a model's columns could not be extracted | read that model's SQL yourself |
 | "columns came from the manifest, not the SQL" | the SQL was `SELECT *`, so documented columns stood in for it — on both sides, which is why the diff came out empty | give the model an explicit column list, or document its columns fully in `schema.yml` |
 | "TYPE CHANGED" | an explicit `CAST` on a column changed between revisions | decide whether the new type can hold the existing data |
-| "UNKNOWN materialization" | a materialization dbt-plan has no rule for, with no `on_schema_change` set | set `on_schema_change` if your materialization honours it; otherwise review by hand |
+| "UNKNOWN materialization" | a materialization dbt-plan has no rule for, with no `on_schema_change` explicitly set by you; dbt's injected default does not count | set `on_schema_change` only if your materialization honours it; otherwise review by hand |
+| "REVIEW REQUIRED (materialized_view is driven by on_configuration_change, which dbt-plan does not model)" | a materialized view's schema-change behaviour is outside the prediction rules | review the adapter's `on_configuration_change` behaviour; do not add `on_schema_change` just to silence it |
+| "UNKNOWN on_schema_change" | the configured schema-change policy has no prediction rule | check the setting and review the materialization's implementation |
+| "MATERIALIZATION CHANGED" / "on_schema_change CHANGED" | the model's configuration changed between revisions | review how the new configuration treats the existing relation |
+| "BUILD FAILURE" / "BUILD_FAILURE" | schema drift meets `on_schema_change: fail`, on this model or downstream | resolve the schema drift before building |
+| "CONTRACT VIOLATION" | produced columns disagree with an enforced contract's names or explicit cast types | reconcile the SQL and the intended contract; do not disable enforcement to pass |
+| "BROKEN_REF" | downstream SQL refers to a column being removed | update the downstream reference together with the schema change |
+| "INHERITED_DROP" | an unchanged downstream `SELECT *` inherits a destructive column loss | review and coordinate the downstream drop too |
+| "INHERITED_CHANGE" | an unchanged downstream `SELECT *` inherits a change that needs review, or its columns cannot be resolved | inspect the downstream schema and materialization; unchanged SQL does not mean unchanged output |
+| "DATA_TEST_FAILURE" | a data test names a dropped column in its metadata or SQL | update the test to match the intended schema change |
+| "DATA_TEST_UNREADABLE" | a potentially affected data test has no column metadata or readable compiled SQL to inspect | compile the test and inspect its column references; this is not evidence that it passes |
+| "UNIT_TEST_FAILURE" | a unit test's `given` or `expect` fixture names a dropped column | update the fixture and expected output to match the intended change |
+| "UNIT_TEST_UNREADABLE" | a potentially affected unit test uses SQL or a fixture whose columns dbt-plan cannot inspect | review those fixture columns by hand |
+| "EXPOSURE" | a downstream dashboard or other consumer, with its owner when available; not a failure or an independent severity change | coordinate the schema change with the listed owner |
+| "SELECT * came from dbt_utils.star() returning nothing" | the macro could not find its relation when compiling | compile where the relation exists, or list the columns explicitly |
+| "target/ may be out of date" | model source files are newer than the manifest | recompile before trusting the report |
 | "not found in manifest" | the compiled SQL and the manifest disagree | the manifest is stale — recompile |
 | "the compile is incomplete" | a model in the manifest produced no compiled SQL | **fix the compile, then rerun** |
 
@@ -1470,13 +1488,14 @@ Risk is materialization crossed with `on_schema_change`:
 
 | Config | Result |
 |---|---|
-| `table` / `view` | `CREATE OR REPLACE` — safe |
-| `incremental` + `ignore` | no DDL — safe |
+| `table` / `view` | `CREATE OR REPLACE TABLE` / `CREATE OR REPLACE VIEW` — safe before downstream and contract checks |
+| `incremental` + `ignore` | NO DDL — safe |
 | `incremental` + `append_new_columns` | ADD COLUMN only — safe |
-| `incremental` + `fail` | run fails on schema drift — warning |
-| `incremental` + `sync_all_columns` | ADD and DROP COLUMN — destructive if a column was removed |
+| `incremental` + `append_new_columns`, column removed | STALE COLUMNS (not populated) — the old columns remain in the table; review their consumers |
+| `incremental` + `fail` | BUILD FAILURE on schema drift — warning |
+| `incremental` + `sync_all_columns` | ADD COLUMN and DROP COLUMN — destructive if a column was removed; COLUMNS REORDERED alone is a warning |
 | `snapshot` | review required — warning |
-| model deleted | destructive |
+| model deleted | MODEL REMOVED — destructive; an ephemeral model has no physical object |
 
 When dbt-plan cannot extract columns it reports "review required" rather than "safe", and
 when it never received a model at all it says so rather than staying quiet. False warnings
@@ -1525,6 +1544,7 @@ def _do_run(args: argparse.Namespace) -> int:
     The compile command can be customized via:
       --compile-command flag, DBT_PLAN_COMPILE_COMMAND env var, or
       compile_command in .dbt-plan.yml (default: "dbt compile").
+    The dbt output directory can be customized with --target-dir (default: "target").
 
     Returns:
         Exit code from check (0=safe, 1=destructive, 2=warning/error).
@@ -1535,6 +1555,7 @@ def _do_run(args: argparse.Namespace) -> int:
     from dbt_plan.config import Config
 
     project_dir = Path(args.project_dir)
+    target_dir = getattr(args, "target_dir", "target")
     fmt = getattr(args, "format", None) or "text"
     no_color = getattr(args, "no_color", False)
     verbose = getattr(args, "verbose", False)
@@ -1674,7 +1695,7 @@ def _do_run(args: argparse.Namespace) -> int:
                 return 2
 
             _log("Saving snapshot...")
-            _do_snapshot(argparse.Namespace(project_dir=str(project_dir), target_dir="target"))
+            _do_snapshot(argparse.Namespace(project_dir=str(project_dir), target_dir=target_dir))
         if stash.stashed and not stash.restore_failed:
             _log("Restored your changes.")
     except CheckoutError as e:
@@ -1718,7 +1739,7 @@ def _do_run(args: argparse.Namespace) -> int:
     _log("Checking for DDL risks...")
     check_args = argparse.Namespace(
         project_dir=str(project_dir),
-        target_dir="target",
+        target_dir=target_dir,
         base_dir=".dbt-plan/base",
         manifest=None,
         format=fmt,
@@ -1880,6 +1901,9 @@ def main() -> None:
         help="One-command check: compile baseline → compile current → check (requires dbt)",
     )
     run_cmd.add_argument("--project-dir", default=".", help="dbt project directory (default: .)")
+    run_cmd.add_argument(
+        "--target-dir", default="target", help="dbt target directory (default: target)"
+    )
     run_cmd.add_argument(
         "--format",
         choices=["text", "github", "json"],

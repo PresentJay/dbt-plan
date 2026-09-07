@@ -91,6 +91,11 @@ class TestInvocations:
     def test_the_action_actually_invokes_dbt_plan(self):
         assert len(_INVOCATION.findall(ACTION_TEXT)) >= 3
 
+    def test_target_dir_is_forwarded_to_every_dbt_plan_call(self):
+        assert "target-dir:" in ACTION_TEXT
+        assert ACTION_TEXT.count('dbt-plan snapshot --target-dir "$TARGET_DIR"') == 1
+        assert ACTION_TEXT.count('dbt-plan check --target-dir "$TARGET_DIR"') == 3
+
     def test_every_invocation_survives_argument_parsing(self, tmp_path):
         for raw in _INVOCATION.findall(ACTION_TEXT):
             # Shell variables stand in for caller-supplied values.

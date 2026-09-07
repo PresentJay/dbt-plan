@@ -61,12 +61,12 @@ def _make_check_args(project_dir, fmt="text", no_color=True, manifest=None, sele
     )
 
 
-def _make_snapshot_args(project_dir):
+def _make_snapshot_args(project_dir, target_dir="target"):
     import argparse
 
     return argparse.Namespace(
         project_dir=str(project_dir),
-        target_dir="target",
+        target_dir=target_dir,
     )
 
 
@@ -114,20 +114,21 @@ class TestSnapshotPathValidation:
         assert project_dir.exists()
 
     def test_snapshot_missing_manifest_warns(self, tmp_path, capsys):
-        """Snapshot prints warning when manifest.json is missing from target/."""
+        """Snapshot names the configured directory when manifest.json is missing."""
         project_dir = tmp_path / "project"
         project_dir.mkdir()
 
-        compiled = project_dir / "target" / "compiled" / "proj" / "models"
+        target = project_dir / "build"
+        compiled = target / "compiled" / "proj" / "models"
         compiled.mkdir(parents=True)
         (compiled / "m.sql").write_text("SELECT 1")
         # No manifest.json created
 
-        args = _make_snapshot_args(project_dir)
+        args = _make_snapshot_args(project_dir, target_dir="build")
         _do_snapshot(args)
 
         captured = capsys.readouterr()
-        assert "Warning: manifest.json not found" in captured.err
+        assert f"Warning: manifest.json not found in {target}" in captured.err
         assert "Snapshot saved to" in captured.out
 
     def test_snapshot_happy_path(self, tmp_path, capsys):
@@ -1101,6 +1102,7 @@ class TestRun:
 
         args = argparse.Namespace(
             project_dir=str(tmp_path),
+            target_dir="build",
             format=None,
             no_color=True,
             verbose=False,
@@ -1123,13 +1125,16 @@ class TestRun:
 
         with (
             patch("subprocess.run", side_effect=run_command),
-            patch("dbt_plan.cli._do_snapshot"),
+            patch("dbt_plan.cli._do_snapshot") as snapshot,
             patch("dbt_plan.cli._do_check", return_value=0) as check,
         ):
             exit_code = _do_run(args)
 
         assert exit_code == 0
+        snapshot.assert_called_once()
+        assert snapshot.call_args.args[0].target_dir == "build"
         check.assert_called_once()
+        assert check.call_args.args[0].target_dir == "build"
         assert check.call_args.args[0].acknowledge == "model_a,model_b"
 
     def test_run_missing_dbt_returns_2(self, tmp_path, capsys, monkeypatch):
@@ -1231,6 +1236,30 @@ class TestSelectWarning:
         assert "matched no changed models" in err
 
 
+class TestTargetDir:
+    def test_check_missing_compiled_reports_target_dir(self, tmp_path, capsys):
+        """A custom target directory is named in the missing-compiled error."""
+        import argparse
+
+        project_dir = tmp_path / "project"
+        (project_dir / ".dbt-plan" / "base" / "compiled").mkdir(parents=True)
+        args = argparse.Namespace(
+            project_dir=str(project_dir),
+            target_dir="build",
+            base_dir=".dbt-plan/base",
+            manifest=None,
+            format="text",
+            no_color=True,
+            select=None,
+            verbose=False,
+            dialect=None,
+        )
+
+        assert _do_check(args) == 2
+        err = capsys.readouterr().err
+        assert f"No compiled SQL found in {project_dir / 'build'}" in err
+
+
 class TestMainDispatch:
     def test_run_help_includes_common_check_flags_but_keeps_compile_command_run_only(self, capsys):
         """check and run share common check flags without leaking run-only flags."""
@@ -1248,6 +1277,7 @@ class TestMainDispatch:
 
         for flag in [
             "--project-dir",
+            "--target-dir",
             "--format",
             "--no-color",
             "--select",

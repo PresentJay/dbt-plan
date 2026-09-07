@@ -21,6 +21,9 @@ inputs:
   project-dir:
     description: dbt project directory.
     default: .
+  target-dir:
+    description: dbt target directory, relative to project-dir.
+    default: target
   dialect:
     description: sqlglot dialect used to parse compiled SQL.
     default: snowflake
@@ -71,6 +74,7 @@ runs:
       env:
         BASE_REF: ${{ inputs.base-ref }}
         COMPILE: ${{ inputs.compile-command }}
+        TARGET_DIR: ${{ inputs.target-dir }}
       run: |
         set -eu
         if [ -z "$BASE_REF" ]; then
@@ -84,7 +88,7 @@ runs:
         git rev-parse HEAD > "$RUNNER_TEMP/dbt-plan-head"
         git checkout --detach --quiet "$BASE_REF"
         eval "$COMPILE"
-        dbt-plan snapshot
+        dbt-plan snapshot --target-dir "$TARGET_DIR"
 
     - name: Compile current
       shell: bash
@@ -103,10 +107,11 @@ runs:
       env:
         DIALECT: ${{ inputs.dialect }}
         SUMMARY: ${{ inputs.summary }}
+        TARGET_DIR: ${{ inputs.target-dir }}
       run: |
         set -u
         report="$RUNNER_TEMP/dbt-plan-report.json"
-        dbt-plan check --dialect "$DIALECT" --format json > "$report"
+        dbt-plan check --target-dir "$TARGET_DIR" --dialect "$DIALECT" --format json > "$report"
         code=$?
         case "$code" in
           0) verdict=safe ;;
@@ -115,9 +120,9 @@ runs:
           *) echo "::error::dbt-plan exited $code"; cat "$report"; exit "$code" ;;
         esac
         if [ "$SUMMARY" = "true" ]; then
-          dbt-plan check --dialect "$DIALECT" --format github >> "$GITHUB_STEP_SUMMARY" || true
+          dbt-plan check --target-dir "$TARGET_DIR" --dialect "$DIALECT" --format github >> "$GITHUB_STEP_SUMMARY" || true
         fi
-        dbt-plan check --dialect "$DIALECT" --no-color || true
+        dbt-plan check --target-dir "$TARGET_DIR" --dialect "$DIALECT" --no-color || true
         {
           echo "verdict=$verdict"
           echo "exit-code=$code"
