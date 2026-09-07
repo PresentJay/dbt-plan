@@ -27,6 +27,8 @@ _BOLD = "\033[1m"
 
 _MAX_DOWNSTREAM_NAMES = 5  # Truncate long downstream lists for readability
 _MAX_IMPACT_LINES = 10  # Beyond this a pull request comment is unreadable
+_MAX_DATA_TEST_NAME = 50
+_DATA_TEST_NAME_TAIL = 12
 
 
 def _impacts_to_show(impacts: list) -> tuple[list, int]:
@@ -48,6 +50,27 @@ def _exposure_line(exposure) -> str:
     parts = f"{exposure.name} ({exposure.type})" if exposure.type else exposure.name
     owner = exposure.owner()
     return f"{parts} -- owner: {owner}" if owner else parts
+
+
+def _display_impact_name(impact) -> str:
+    """Shorten generated data-test names without changing their stable identifier."""
+    name = impact.model_name
+    if not impact.risk.startswith("data_test_") or len(name) <= _MAX_DATA_TEST_NAME:
+        return name
+    head = _MAX_DATA_TEST_NAME - len("...") - _DATA_TEST_NAME_TAIL
+    return f"{name[:head]}...{name[-_DATA_TEST_NAME_TAIL:]}"
+
+
+def _display_impact_names(impacts: list) -> list[str]:
+    """Keep full identifiers when distinct names would shorten identically."""
+    candidates = [_display_impact_name(impact) for impact in impacts]
+    originals: dict[str, set[str]] = {}
+    for candidate, impact in zip(candidates, impacts, strict=True):
+        originals.setdefault(candidate, set()).add(impact.model_name)
+    return [
+        impact.model_name if len(originals[candidate]) > 1 else candidate
+        for candidate, impact in zip(candidates, impacts, strict=True)
+    ]
 
 
 def _format_downstream_line(downstream: list[str]) -> str:
@@ -145,11 +168,11 @@ def format_text(result: CheckResult, *, color: bool | None = None) -> str:
             lines.append(_format_downstream_line(downstream))
         # Cascade impacts
         shown, held_back = _impacts_to_show(pred.downstream_impacts)
-        for impact in shown:
+        for impact, display_name in zip(shown, _display_impact_names(shown), strict=True):
             risk_label = _colored(
                 impact.risk.upper(), RISK_SAFETY.get(impact.risk, Safety.WARNING)
             )
-            lines.append(f"  >> {risk_label}  {impact.model_name}: {impact.reason}")
+            lines.append(f"  >> {risk_label}  {display_name}: {impact.reason}")
         if held_back:
             lines.append(f"  >> ... and {held_back} more -- use --format json for all of them")
         for exposure in pred.downstream_exposures:
@@ -234,10 +257,10 @@ def format_github(result: CheckResult) -> str:
         if downstream:
             lines.append("- " + _format_downstream_line(downstream).lstrip())
         shown, held_back = _impacts_to_show(pred.downstream_impacts)
-        for impact in shown:
+        for impact, display_name in zip(shown, _display_impact_names(shown), strict=True):
             risk_icon = _SAFETY_ICON[RISK_SAFETY.get(impact.risk, Safety.WARNING)]
             lines.append(
-                f"- {risk_icon} **{impact.risk.upper()}** `{impact.model_name}`: {impact.reason}"
+                f"- {risk_icon} **{impact.risk.upper()}** `{display_name}`: {impact.reason}"
             )
         if held_back:
             lines.append(f"- ... and {held_back} more -- use `--format json` for all of them")

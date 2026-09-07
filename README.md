@@ -104,6 +104,9 @@ list naming everything dbt-plan declined to judge. That separation is the point:
 reading "safe" may still glance at the diff, an agent reading it proceeds, so a
 non-empty `refusals` must never be collapsed into the verdict.
 
+Both tools accept `target_dir` when dbt writes artifacts outside the default `target/`,
+for example `plan(project_dir=".", target_dir="build")`.
+
 The server is a separate package from the analysis core. The core is offline and
 synchronous by design and `tests/test_invariants.py` fails the build on an `asyncio` or
 network import anywhere inside it; an MCP server is both, so keeping them apart is what
@@ -239,6 +242,7 @@ credentials to code from any fork.
 | `compile-command` | `dbt compile` | Runs twice, once per revision. |
 | `base-ref` | the PR base | The revision to compare against. |
 | `project-dir` | `.` | dbt project directory. |
+| `target-dir` | `target` | dbt artifact directory relative to `project-dir`; set this when dbt writes to a custom path such as `build`. |
 | `dialect` | the manifest's `adapter_type`, else `snowflake` | sqlglot dialect for parsing compiled SQL. Set this only to override what your project already says. |
 | `version` | latest | Pin a dbt-plan release. |
 | `fail-on` | `destructive` | Or `warning`, or `never`. |

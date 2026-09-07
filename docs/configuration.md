@@ -66,6 +66,24 @@ GitHub Actions에서 PR 라벨과 연동하려면 워크플로가 라벨을 읽�
     DBT_PLAN_ACKNOWLEDGE: ${{ contains(github.event.pull_request.labels.*.name, 'ddl-reviewed') && needs.detect.outputs.models || '' }}
 ```
 
+### `dbt-plan run`
+
+Compiles the baseline and current state, then checks the DDL impact. `--target-dir` is passed to
+both the baseline snapshot and the final check for projects that use a non-default output
+directory in `dbt_project.yml` or dbt configuration.
+
+```bash
+dbt-plan run [--project-dir DIR] [--target-dir DIR] [--against REF]
+```
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--project-dir` | `.` | dbt project root directory |
+| `--target-dir` | `target` | dbt compile output directory |
+| `--against` | (last commit) | Compare with where the branch diverged from the ref |
+
+When compiled SQL is missing, the error message shows the actual target directory that was searched.
+
 ### `dbt-plan --version`
 
 ```bash

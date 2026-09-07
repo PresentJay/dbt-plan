@@ -193,8 +193,8 @@ def _do_snapshot(args: argparse.Namespace) -> None:
     compiled_dir = found[0] if found else None
     if compiled_dir is None:
         print(
-            "Error: No compiled SQL found. "
-            "Run 'dbt compile' first to generate compiled SQL in the target/ directory.",
+            f"Error: No compiled SQL found in {target_dir}. "
+            "Run 'dbt compile' first to generate compiled SQL there.",
             file=sys.stderr,
         )
         sys.exit(2)
@@ -225,7 +225,7 @@ def _do_snapshot(args: argparse.Namespace) -> None:
         shutil.copy2(manifest_src, base_dir / "manifest.json")
     else:
         print(
-            "Warning: manifest.json not found in target/. "
+            f"Warning: manifest.json not found in {target_dir}. "
             "Run 'dbt compile' to generate it. "
             "Without it, 'dbt-plan check' will fail.",
             file=sys.stderr,
@@ -796,8 +796,8 @@ def _do_check(args: argparse.Namespace) -> int:
     _log(f"Current compiled: {current_compiled} (model dirs: {', '.join(model_dirs)})")
     if current_compiled is None:
         print(
-            "Error: No compiled SQL found. "
-            "Run 'dbt compile' first to generate compiled SQL in the target/ directory.",
+            f"Error: No compiled SQL found in {target_dir}. "
+            "Run 'dbt compile' first to generate compiled SQL there.",
             file=sys.stderr,
         )
         return 2
@@ -1501,6 +1501,7 @@ def _do_run(args: argparse.Namespace) -> int:
     The compile command can be customized via:
       --compile-command flag, DBT_PLAN_COMPILE_COMMAND env var, or
       compile_command in .dbt-plan.yml (default: "dbt compile").
+    The dbt output directory can be customized with --target-dir (default: "target").
 
     Returns:
         Exit code from check (0=safe, 1=destructive, 2=warning/error).
@@ -1511,6 +1512,7 @@ def _do_run(args: argparse.Namespace) -> int:
     from dbt_plan.config import Config
 
     project_dir = Path(args.project_dir)
+    target_dir = getattr(args, "target_dir", "target")
     fmt = getattr(args, "format", None) or "text"
     no_color = getattr(args, "no_color", False)
     verbose = getattr(args, "verbose", False)
@@ -1650,7 +1652,7 @@ def _do_run(args: argparse.Namespace) -> int:
                 return 2
 
             _log("Saving snapshot...")
-            _do_snapshot(argparse.Namespace(project_dir=str(project_dir), target_dir="target"))
+            _do_snapshot(argparse.Namespace(project_dir=str(project_dir), target_dir=target_dir))
         if stash.stashed and not stash.restore_failed:
             _log("Restored your changes.")
     except CheckoutError as e:
@@ -1694,7 +1696,7 @@ def _do_run(args: argparse.Namespace) -> int:
     _log("Checking for DDL risks...")
     check_args = argparse.Namespace(
         project_dir=str(project_dir),
-        target_dir="target",
+        target_dir=target_dir,
         base_dir=".dbt-plan/base",
         manifest=None,
         format=fmt,
@@ -1856,6 +1858,9 @@ def main() -> None:
         help="One-command check: compile baseline → compile current → check (requires dbt)",
     )
     run_cmd.add_argument("--project-dir", default=".", help="dbt project directory (default: .)")
+    run_cmd.add_argument(
+        "--target-dir", default="target", help="dbt target directory (default: target)"
+    )
     run_cmd.add_argument(
         "--format",
         choices=["text", "github", "json"],
