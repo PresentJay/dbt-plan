@@ -33,7 +33,7 @@ dbt-plan check [--project-dir DIR] [--target-dir DIR] [--base-dir DIR] [--manife
 | `--target-dir` | `target` | dbt compile 출력 디렉토리 |
 | `--base-dir` | `.dbt-plan/base` | snapshot 디렉토리 |
 | `--manifest` | `{target-dir}/manifest.json` | manifest.json 경로 |
-| `--format` | `text` | 출력 포맷 (`text` / `github`) |
+| `--format` | `text` | 출력 포맷 (`text` / `github` / `json`) |
 | `--acknowledge` | (없음) | 검토를 마친 파괴적 변경 모델 (쉼표 구분) |
 
 #### 파괴적 변경 승인 (`--acknowledge`)
@@ -148,3 +148,155 @@ SAFE  dim_customers (table)
 ✅ **SAFE** `dim_customers` (table)
 - CREATE OR REPLACE TABLE
 ```
+
+### JSON
+
+Use `--format json` when another program needs the complete result. This example
+was produced by snapshotting the fixture project, removing `customer_id` from
+the compiled `stg_orders` model, and running `dbt-plan check --format json`:
+
+```json
+{
+  "summary": {
+    "total": 1,
+    "safe": 0,
+    "warning": 1,
+    "destructive": 0,
+    "cascade_risks": 5
+  },
+  "models": [
+    {
+      "model_name": "stg_orders",
+      "materialization": "view",
+      "on_schema_change": null,
+      "safety": "warning",
+      "operations": [
+        {
+          "operation": "CREATE OR REPLACE VIEW",
+          "column": null
+        }
+      ],
+      "columns_added": [],
+      "columns_removed": [],
+      "acknowledged": false,
+      "downstream": ["dim_books", "fct_orders"],
+      "downstream_exposures": [
+        {
+          "name": "orders_dashboard",
+          "type": "dashboard",
+          "owner": "Data Team <data@example.com>",
+          "url": "https://example.com/dashboards/orders"
+        }
+      ],
+      "downstream_impacts": [
+        {
+          "model_name": "test_stg_orders_shape",
+          "risk": "unit_test_failure",
+          "reason": "expect names dropped column(s): customer_id"
+        },
+        {
+          "model_name": "test_dim_books_groups_by_store",
+          "risk": "unit_test_failure",
+          "reason": "given for stg_orders names dropped column(s): customer_id"
+        },
+        {
+          "model_name": "accepted_values_stg_orders_customer_id__cust_abc",
+          "risk": "data_test_failure",
+          "reason": "tests dropped column(s): customer_id"
+        },
+        {
+          "model_name": "no_order_without_a_customer",
+          "risk": "data_test_failure",
+          "reason": "its SQL names dropped column(s): customer_id"
+        },
+        {
+          "model_name": "not_null_stg_orders_customer_id",
+          "risk": "data_test_failure",
+          "reason": "tests dropped column(s): customer_id"
+        }
+      ]
+    }
+  ],
+  "parse_failures": [],
+  "stale_sources": [],
+  "skipped_models": [],
+  "uncompiled_models": []
+}
+```
+
+#### Field reference
+
+The top-level keys below are always present. Their arrays are empty when there are no
+matching findings.
+
+| Field | Type | Meaning |
+|------|------|---------|
+| `summary` | object | Counts for the complete check. |
+| `models` | array | One entry per changed model. |
+| `parse_failures` | string array | Models whose compiled SQL could not be parsed. |
+| `stale_sources` | string array | Source files newer than the manifest. |
+| `skipped_models` | string array | Compiled models not found in the manifest. |
+| `uncompiled_models` | string array | Manifest models with no compiled SQL. |
+
+An additional top-level `baseline_problem` string is present only when the
+snapshot manifest is missing (`"missing"`) or cannot be read (`"corrupt"`).
+Deleted-model and baseline-configuration checks cannot be trusted in that state;
+recreate the snapshot from the intended baseline revision before relying on the
+report. The field is omitted when the baseline is readable.
+
+Refusal fields must be inspected even when `summary.total` is zero or a configured
+`warning_exit_code: 0` makes the command exit successfully. No changed models is
+not evidence that the whole project was assessed. The MCP wrapper reports a
+baseline problem in `refusals` with `reason: "baseline_problem"` and the problem
+value in `detail`; it cannot return `safe` while that refusal remains.
+
+`summary.total`, `safe`, `warning`, and `destructive` are always present as
+integers. `summary.acknowledged` appears only when at least one finding was
+acknowledged, and `summary.cascade_risks` appears only when at least one cascade
+risk exists.
+
+Every model has these fields:
+
+| Field | Type | Meaning |
+|------|------|---------|
+| `model_name` | string | Compiled model identifier. |
+| `materialization` | string | dbt materialization reported by the manifest. |
+| `on_schema_change` | string or null | Explicit schema-change policy, or null when absent. |
+| `safety` | string | `safe`, `warning`, or `destructive`. |
+| `operations` | array | Predicted operations, each with `operation` and nullable `column`. |
+| `columns_added` | string array | Added columns recorded by the prediction; not a complete SQL diff for every materialization. |
+| `columns_removed` | string array | Removed columns recorded by the prediction; not a complete SQL diff for every materialization. |
+| `acknowledged` | boolean | Whether this model was explicitly acknowledged. |
+
+For example, `table` and `view` replacements can leave both column arrays empty
+while downstream findings still identify a removed SQL column, as in the example
+above. Use the operations, final safety, and downstream impacts together.
+
+The following model fields are omitted, rather than set to null or an empty
+array, when there is no data:
+
+| Field | Item shape | Meaning |
+|------|------------|---------|
+| `downstream` | string | Reachable downstream model name. |
+| `downstream_exposures` | `name`, `type`, `owner`, `url` | Exposure that depends on the changed model; unavailable owner or URL values are empty strings. |
+| `downstream_impacts` | `model_name`, `risk`, `reason` | Predicted cascade finding. |
+
+Required arrays use `[]` when empty. The only null values in the model contract
+are an absent `on_schema_change` and an operation without a column.
+
+#### Cascade risk vocabulary
+
+| Risk | Severity | Meaning |
+|------|----------|---------|
+| `broken_ref` | destructive | Downstream SQL reads or references a removed column. |
+| `build_failure` | warning | An incremental downstream model uses `on_schema_change=fail` after an upstream schema change. |
+| `unit_test_failure` | warning | A unit-test fixture names a removed column. |
+| `unit_test_unreadable` | warning | A unit-test fixture cannot be inspected well enough to decide. |
+| `inherited_drop` | destructive | An unchanged downstream model inherits a column loss and its configuration predicts a destructive operation. |
+| `inherited_change` | warning | An unchanged downstream model inherits a change that requires review. |
+| `data_test_failure` | warning | A generic or singular data test reads a removed column. |
+| `data_test_unreadable` | warning | A data test cannot be inspected well enough to decide. |
+
+Consumers should use `models[].safety` for the final severity and tolerate new
+`risk` strings in minor releases. Treat an unknown risk as a warning that needs
+review; never interpret it as safe.
