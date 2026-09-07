@@ -1255,121 +1255,7 @@ def _do_check(args: argparse.Namespace) -> int:
     return _exit_code_for(check_result, config.warning_exit_code)
 
 
-_DBT_PROJECT_PATH_KEYS = (
-    ("model-paths", ("models",)),
-    ("macro-paths", ("macros",)),
-    ("snapshot-paths", ("snapshots",)),
-    ("seed-paths", ("seeds",)),
-)
-_CI_WORKFLOW_ALWAYS_PATHS = ("packages.yml", "dbt_project.yml")
-_CI_WORKFLOW_PATHS_PLACEHOLDER = "__DBT_PLAN_PULL_REQUEST_PATHS__"
-
-
-def _read_dbt_project_path_settings(project_dir: Path) -> dict[str, tuple[str, ...]]:
-    """Read the top-level dbt path settings that should wake the CI workflow."""
-    from dbt_plan.config import Config
-
-    path = project_dir / "dbt_project.yml"
-    try:
-        text = path.read_text(encoding="utf-8")
-    except (OSError, UnicodeDecodeError):
-        return {}
-
-    lines = text.lstrip("\ufeff").splitlines()
-    path_keys = {key for key, _ in _DBT_PROJECT_PATH_KEYS}
-    settings: dict[str, tuple[str, ...]] = {}
-
-    line_number = 0
-    while line_number < len(lines):
-        raw_line = lines[line_number]
-        line_number += 1
-        if raw_line[:1].isspace():
-            continue
-
-        stripped_line = Config._strip_inline_comment(raw_line).strip()
-        if not stripped_line or ":" not in stripped_line:
-            continue
-
-        key, _, value = stripped_line.partition(":")
-        key = key.strip()
-        value = value.strip()
-        if key not in path_keys:
-            continue
-
-        if not value:
-            values: list[str] = []
-            key_indent = len(raw_line) - len(raw_line.lstrip())
-            while line_number < len(lines):
-                list_line = lines[line_number]
-                list_content = Config._strip_inline_comment(list_line).strip()
-                if not list_content:
-                    line_number += 1
-                    continue
-                list_indent = len(list_line) - len(list_line.lstrip())
-                if list_indent <= key_indent:
-                    break
-                line_number += 1
-                if not list_content.startswith("-"):
-                    continue
-                item = Config._unquote_scalar(list_content[1:].strip())
-                if item:
-                    values.append(item)
-            if values:
-                settings[key] = tuple(values)
-            continue
-
-        parsed = Config._parse_inline_list(Config._unquote_scalar(value))
-        if parsed:
-            settings[key] = tuple(parsed)
-
-    return settings
-
-
-def _path_filter_glob(path: str) -> str | None:
-    """Convert a dbt source path into a GitHub Actions path filter glob."""
-    value = path.replace("\\", "/").strip()
-    while value.startswith("./"):
-        value = value[2:]
-    value = PurePosixPath(value.strip("/")).as_posix()
-    if not value:
-        return None
-    if value == ".":
-        return "**"
-    return f"{value}/**"
-
-
-def _ci_workflow_path_globs(project_dir: Path | None = None) -> tuple[str, ...]:
-    settings = _read_dbt_project_path_settings(project_dir) if project_dir is not None else {}
-    globs: list[str] = []
-    for key, defaults in _DBT_PROJECT_PATH_KEYS:
-        for value in settings.get(key) or defaults:
-            glob = _path_filter_glob(value)
-            if glob:
-                globs.append(glob)
-    globs.extend(_CI_WORKFLOW_ALWAYS_PATHS)
-    return tuple(dict.fromkeys(globs))
-
-
-def _single_quote_yaml(value: str) -> str:
-    return "'" + value.replace("'", "''") + "'"
-
-
-def _format_ci_workflow_paths(paths: Sequence[str]) -> str:
-    return "\n".join(f"      - {_single_quote_yaml(path)}" for path in paths)
-
-
-def _ci_workflow_for_paths(paths: Sequence[str]) -> str:
-    return _CI_WORKFLOW_TEMPLATE.replace(
-        _CI_WORKFLOW_PATHS_PLACEHOLDER,
-        _format_ci_workflow_paths(paths),
-    )
-
-
-def _ci_workflow_for_project(project_dir: Path) -> str:
-    return _ci_workflow_for_paths(_ci_workflow_path_globs(project_dir))
-
-
-_CI_WORKFLOW_TEMPLATE = """\
+_CI_WORKFLOW = """\
 name: dbt-plan
 # dbt-plan itself never connects to your warehouse, but `dbt compile` does.
 # That compile runs Jinja and macros authored in the pull request, so treat it
@@ -1383,9 +1269,8 @@ name: dbt-plan
 #   * Fork PRs receive no secrets by design; the Preflight step says so plainly
 #     instead of failing later with a confusing driver error.
 on:
-  pull_request:
-    paths:
-__DBT_PLAN_PULL_REQUEST_PATHS__
+  # Every PR: custom paths, packages and YAML/Jinja settings can change compiled SQL.
+  pull_request: {}
 
 concurrency:
   group: dbt-plan-${{ github.event.pull_request.number }}
@@ -1461,8 +1346,6 @@ jobs:
         run: dbt-plan check
 """
 
-_CI_WORKFLOW = _ci_workflow_for_paths(_ci_workflow_path_globs())
-
 
 def _do_ci_setup(args: argparse.Namespace) -> None:
     """Generate a GitHub Actions workflow for dbt-plan CI."""
@@ -1479,7 +1362,7 @@ def _do_ci_setup(args: argparse.Namespace) -> None:
         sys.exit(2)
 
     workflows_dir.mkdir(parents=True, exist_ok=True)
-    workflow_path.write_text(_ci_workflow_for_project(project_dir), encoding="utf-8")
+    workflow_path.write_text(_CI_WORKFLOW, encoding="utf-8")
     print(f"Created {workflow_path}")
     print("Push this file to enable dbt-plan on every PR.")
 
