@@ -39,15 +39,26 @@ def _manifest(models: dict[str, dict]) -> dict:
     }
 
 
-def _write(root: Path, sql: dict[str, str], manifest: dict) -> None:
-    d = root / "target" / "compiled" / "p" / "models"
+def _write(root: Path, sql: dict[str, str], manifest: dict, target_dir: str = "target") -> None:
+    d = root / target_dir / "compiled" / "p" / "models"
     d.mkdir(parents=True, exist_ok=True)
     for name, body in sql.items():
         (d / f"{name}.sql").write_text(body, encoding="utf-8")
-    (root / "target" / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
+    (root / target_dir / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
 
 
 class TestVerdicts:
+    def test_custom_target_dir_is_used_for_snapshot_and_plan(self, tmp_path):
+        m = _manifest({"fct_orders": {}})
+        _write(tmp_path, {"fct_orders": "SELECT a, b FROM raw"}, m, target_dir="build")
+        mcp_server.snapshot(str(tmp_path), target_dir="build")
+        _write(tmp_path, {"fct_orders": "SELECT a FROM raw"}, m, target_dir="build")
+
+        out = mcp_server.plan(str(tmp_path), dialect="duckdb", target_dir="build")
+
+        assert out["verdict"] == "destructive"
+        assert out["models"][0]["columns_removed"] == ["b"]
+
     def test_a_dropped_column_is_destructive(self, tmp_path):
         m = _manifest({"fct_orders": {}})
         _write(tmp_path, {"fct_orders": "SELECT a, b FROM raw"}, m)
