@@ -63,8 +63,8 @@ jobs:
     permissions:
       contents: read
       actions: write
-      issues: write
-      pull-requests: read
+      # The comments endpoint is shared with issues, but these are PR comments.
+      pull-requests: write
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
