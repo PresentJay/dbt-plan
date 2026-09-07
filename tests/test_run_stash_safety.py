@@ -10,6 +10,7 @@ user's work is sitting in the stash while the command looks like it succeeded.
 from __future__ import annotations
 
 import argparse
+import json
 import subprocess
 from unittest.mock import patch
 
@@ -262,8 +263,10 @@ class TestTheSnapshotIsNotTheUsersWork:
 
         _do_snapshot(argparse.Namespace(project_dir=str(project), target_dir="target"))
 
+        captured = capsys.readouterr()
         assert gitignore.read_text(encoding="utf-8") == "target/\n"
-        assert "Snapshot saved" in capsys.readouterr().out
+        assert "Snapshot saved" in captured.err
+        assert "Snapshot saved" not in captured.out
 
     def test_run_does_not_stash_for_the_snapshot_alone(self, tmp_path):
         """An otherwise clean tree with a snapshot in it must not be stashed at all.
@@ -295,3 +298,70 @@ class TestTheSnapshotIsNotTheUsersWork:
             assert _do_run(_args(tmp_path, "dbt compile")) == 0
 
         assert [c for c in calls if isinstance(c, list) and "stash" in c] == []
+
+
+class TestRunJsonStdoutIsPureJson:
+    """`run --format json` must keep stdout machine-readable (issue #165).
+
+    snapshot's "Snapshot saved to ..." line was the one thing left writing to
+    stdout on the way to check's JSON report, so an agent that pipes
+    `run --format json` into `json.loads` got a parse failure. It belongs on
+    stderr with the rest of run's progress.
+    """
+
+    def _project(self, tmp_path):
+        """A project whose current compile matches the baseline: a clean JSON run."""
+        project = tmp_path / "proj"
+        models = project / "target" / "compiled" / "proj" / "models"
+        models.mkdir(parents=True)
+        (models / "m.sql").write_text("SELECT 1 AS a\n", encoding="utf-8")
+        manifest = {
+            "nodes": {
+                "model.proj.m": {
+                    "name": "m",
+                    "config": {"materialized": "table"},
+                }
+            },
+            "child_map": {"model.proj.m": []},
+            "metadata": {"project_name": "proj"},
+        }
+        (project / "target" / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
+        return project
+
+    def test_stdout_stays_parseable_json_and_progress_goes_to_stderr(self, tmp_path, capsys):
+        """The whole run pipeline, with only the subprocess calls faked.
+
+        No real git repo and no real dbt: git's status is empty (so nothing is
+        stashed) and both compiles succeed without touching target/, leaving the
+        snapshot and check to run for real against the prepared project.
+        """
+        from unittest.mock import MagicMock
+
+        from dbt_plan.config import Config
+
+        noop = MagicMock(returncode=0, stdout="", stderr="")
+
+        def _everything_succeeds(*args, **kwargs):
+            return noop
+
+        project = self._project(tmp_path)
+        args = argparse.Namespace(
+            project_dir=str(project),
+            compile_command="dbt compile",
+            format="json",
+            no_color=True,
+            verbose=False,
+            dialect=None,
+            select=None,
+            acknowledge=None,
+        )
+        with (
+            patch("subprocess.run", side_effect=_everything_succeeds),
+            patch("dbt_plan.config.Config.load", return_value=Config()),
+        ):
+            assert _run(args) == 0
+
+        captured = capsys.readouterr()
+        json.loads(captured.out)  # raises if run wrote anything but JSON
+        assert "Snapshot saved" in captured.err
+        assert "Snapshot saved" not in captured.out

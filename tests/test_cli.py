@@ -129,7 +129,8 @@ class TestSnapshotPathValidation:
 
         captured = capsys.readouterr()
         assert f"Warning: manifest.json not found in {target}" in captured.err
-        assert "Snapshot saved to" in captured.out
+        assert "Snapshot saved to" in captured.err
+        assert "Snapshot saved to" not in captured.out
 
     def test_snapshot_happy_path(self, tmp_path, capsys):
         """Snapshot copies compiled SQL + manifest to .dbt-plan/base/."""
@@ -144,7 +145,8 @@ class TestSnapshotPathValidation:
         _do_snapshot(args)
 
         captured = capsys.readouterr()
-        assert "Snapshot saved to" in captured.out
+        assert "Snapshot saved to" in captured.err
+        assert "Snapshot saved to" not in captured.out
         base = project_dir / ".dbt-plan" / "base"
         assert (base / "compiled" / "models" / "m.sql").exists()
         assert (base / "manifest.json").exists()

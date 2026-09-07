@@ -216,7 +216,8 @@ class TestEmptyCompiledDir:
         _do_snapshot(_snapshot_args(project_dir))
 
         captured = capsys.readouterr()
-        assert "Snapshot saved" in captured.out
+        assert "Snapshot saved" in captured.err
+        assert "Snapshot saved" not in captured.out
 
         # Verify the snapshot dir was created
         base_compiled = project_dir / ".dbt-plan" / "base" / "compiled"
@@ -333,7 +334,7 @@ class TestManifestMissingDuringSnapshot:
         assert "manifest.json" in captured.err
 
         # But the compiled SQL should still be saved
-        assert "Snapshot saved" in captured.out
+        assert "Snapshot saved" in captured.err
         base_compiled = project_dir / ".dbt-plan" / "base" / "compiled"
         assert (base_compiled / "models" / "my_model.sql").exists()
         assert (base_compiled / "models" / "my_model.sql").read_text(
