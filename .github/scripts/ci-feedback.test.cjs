@@ -3,10 +3,6 @@ const assert = require('node:assert/strict');
 const { resolve, report } = require('./ci-feedback.cjs');
 
 const SHA = 'a'.repeat(40);
-// Temporary live verification only. This branch will never be merged.
-test('live feedback smoke: deliberate failure for retry verification', () => {
-  assert.fail('Expected temporary failure: verifying CI feedback and retry, not a product defect.');
-});
 const NOW = Date.parse('2026-09-07T12:00:00Z');
 const BOT = { id: 41898282, login: 'github-actions[bot]', type: 'Bot' };
 
