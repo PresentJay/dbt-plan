@@ -18,7 +18,7 @@ import pytest
 from dbt_plan.cli import _CI_WORKFLOW, _do_ci_setup
 
 _REPOSITORY_CI_WORKFLOW = Path(__file__).parents[1] / ".github" / "workflows" / "ci.yml"
-
+_EXAMPLE_CI_WORKFLOW = Path(__file__).parents[1] / "examples" / "ci-workflow" / "dbt-plan.yml"
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -66,13 +66,27 @@ class TestGeneratedYamlValid:
 
 
 class TestWorkflowStructure:
-    def test_pull_request_paths_include_models(self):
-        """on.pull_request.paths includes models/**."""
-        assert "models/**" in _CI_WORKFLOW
+    @pytest.mark.parametrize(
+        "project_config",
+        [
+            "",
+            'model-paths: ["transformations"]\n',
+            "model-paths:\n- transformations\n",
+            "model-paths:\n  - transformations\n",
+            '"model-paths": ["transformations"]\n',
+            "custom: &dirs [transformations]\nmodel-paths: *dirs\n",
+            "model-paths: [\"{{ env_var('MODEL_DIR') }}\"]\n",
+        ],
+    )
+    def test_generated_workflow_cannot_skip_dbt_inputs(self, tmp_path, project_config):
+        (tmp_path / "dbt_project.yml").write_text(project_config, encoding="utf-8")
+        workflow = _run_ci_setup(tmp_path).read_text(encoding="utf-8")
+        assert re.search(r"^  pull_request:\s*\{\}\s*$", workflow, re.MULTILINE)
+        assert not re.search(r"^\s+paths(?:-ignore)?:", workflow, re.MULTILINE)
 
-    def test_pull_request_paths_include_macros(self):
-        """on.pull_request.paths includes macros/**."""
-        assert "macros/**" in _CI_WORKFLOW
+    def test_template_runs_for_every_pull_request(self):
+        assert "  pull_request: {}" in _CI_WORKFLOW
+        assert not re.search(r"^\s+paths(?:-ignore)?:", _CI_WORKFLOW, re.MULTILINE)
 
     def test_concurrency_cancel_in_progress_true(self):
         """concurrency.cancel-in-progress is true."""
@@ -97,6 +111,14 @@ class TestWorkflowStructure:
         assert block, "permissions block not found"
         scopes = dict(re.findall(r"(\S+):\s*(\S+)", block.group(1)))
         assert scopes == {"contents": "read"}, f"expected only contents: read, got {scopes}"
+
+
+class TestExampleWorkflow:
+    def test_example_runs_for_every_pull_request(self):
+        """The example cannot omit inputs that the generated workflow checks."""
+        content = _EXAMPLE_CI_WORKFLOW.read_text(encoding="utf-8")
+        assert "  pull_request: {}" in content
+        assert not re.search(r"^\s+paths(?:-ignore)?:", content, re.MULTILINE)
 
 
 class TestRepositoryCiJobs:

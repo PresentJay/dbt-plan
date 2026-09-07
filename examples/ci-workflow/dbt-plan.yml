@@ -16,11 +16,8 @@
 name: dbt-plan
 
 on:
-  pull_request:
-    paths:
-      - 'models/**'
-      - 'macros/**'
-      - 'dbt_project.yml'
+  # Every PR: custom paths, packages and YAML/Jinja settings can change compiled SQL.
+  pull_request: {}
 
 # Cancel in-progress runs for same PR
 concurrency:

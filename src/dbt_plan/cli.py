@@ -1293,8 +1293,8 @@ name: dbt-plan
 #   * Fork PRs receive no secrets by design; the Preflight step says so plainly
 #     instead of failing later with a confusing driver error.
 on:
-  pull_request:
-    paths: ['models/**', 'macros/**', 'dbt_project.yml']
+  # Every PR: custom paths, packages and YAML/Jinja settings can change compiled SQL.
+  pull_request: {}
 
 concurrency:
   group: dbt-plan-${{ github.event.pull_request.number }}
