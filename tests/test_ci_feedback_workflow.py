@@ -31,9 +31,14 @@ def test_feedback_serializes_per_pr_and_listens_for_results():
     assert "group: ci-feedback-${{ matrix.pr }}" in workflow
     assert "cancel-in-progress: false" in workflow
     assert "contents: write" not in workflow
-    assert "pull-requests: write" not in workflow
     assert "actions: write" in workflow
-    assert "issues: write" in workflow
+    resolve_job, report_job = workflow.split("  report:\n", 1)
+    assert "pull-requests: read" in resolve_job
+    assert "pull-requests: write" not in resolve_job
+    # PR conversation comments use the issue-comment endpoint but need PR write
+    # permission for the workflow token; issues: write with PR read returned 403.
+    assert "pull-requests: write" in report_job
+    assert "issues: write" not in workflow
 
 
 def test_feedback_behavior_tests_are_part_of_required_lint_job():
