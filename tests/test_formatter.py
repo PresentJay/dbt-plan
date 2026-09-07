@@ -41,6 +41,54 @@ class TestFormatText:
         assert "no model changes detected" in output
 
 
+class TestBaselineProblem:
+    """A baseline we could not read must show up in every format (#155)."""
+
+    def test_text_warns_instead_of_claiming_no_changes(self):
+        result = CheckResult(baseline_problem="corrupt")
+        output = format_text(result)
+        assert "WARNING" in output
+        assert "manifest" in output.lower()
+        assert "no model changes detected" not in output
+
+    def test_missing_versus_corrupt_say_different_things(self):
+        assert "snapshot" in format_text(CheckResult(baseline_problem="missing")).lower()
+        corrupt = format_text(CheckResult(baseline_problem="corrupt")).lower()
+        assert "revision" in corrupt or "walk" in corrupt
+
+    def test_text_warns_alongside_predictions(self):
+        result = CheckResult(
+            predictions=[
+                DDLPrediction(
+                    model_name="dim_users",
+                    materialization="incremental",
+                    on_schema_change="sync_all_columns",
+                    safety=Safety.SAFE,
+                    operations=[DDLOperation("ADD COLUMN", "age")],
+                    columns_added=["age"],
+                    columns_removed=[],
+                ),
+            ],
+            baseline_problem="missing",
+        )
+        output = format_text(result)
+        assert "dim_users" in output
+        assert "WARNING" in output
+
+    def test_github_warns_without_hiding_the_empty_report(self):
+        output = format_github(CheckResult(baseline_problem="corrupt"))
+        assert "WARNING" in output
+        assert "no model changes detected" not in output
+
+    def test_json_carries_the_problem_key(self):
+        output = format_json(CheckResult(baseline_problem="missing"))
+        assert json.loads(output)["baseline_problem"] == "missing"
+
+    def test_json_omits_the_key_when_the_baseline_is_fine(self):
+        output = format_json(CheckResult(predictions=[], downstream_map={}, parse_failures=[]))
+        assert "baseline_problem" not in json.loads(output)
+
+
 class TestFormatGithub:
     def test_safe_markdown(self):
         """Safe prediction uses markdown formatting."""

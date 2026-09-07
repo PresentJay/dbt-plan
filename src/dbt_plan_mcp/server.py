@@ -138,6 +138,11 @@ def plan(
                     }
                 )
 
+    if report.get("baseline_problem"):
+        refusals.append(
+            {"reason": "baseline_problem", "detail": report["baseline_problem"], "models": []}
+        )
+
     verdict = _VERDICTS[result.returncode]
     # warning_exit_code is configurable, so exit 0 alone does not guarantee that
     # every model was judged. Refusals always require human review.

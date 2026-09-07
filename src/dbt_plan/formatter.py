@@ -106,9 +106,28 @@ class CheckResult:
     # the predictor stays a pure function of config x column diff, with no
     # knowledge of CI policy.
     acknowledge_models: list[str] = field(default_factory=list)
+    # A baseline (base snapshot) the check could not read. "missing" is an older
+    # or interrupted snapshot -- recoverable, but deleted-model detection is off.
+    # "corrupt" means the manifest exists and will not parse, so the snapshot is
+    # not the revision it claims to be. Either way the report must not be read
+    # as safe (see #155).
+    baseline_problem: str | None = None
 
     def is_acknowledged(self, pred: DDLPrediction) -> bool:
         return pred.model_name in self.acknowledge_models
+
+
+_BASELINE_PROBLEMS: dict[str, str] = {
+    "missing": (
+        "baseline has no manifest.json -- an older or interrupted snapshot. "
+        "Deleted-model detection is off. Re-run 'dbt-plan snapshot'."
+    ),
+    "corrupt": (
+        "baseline manifest.json will not parse, so this snapshot is not the "
+        "revision it claims to be. Deleted-model detection is off. Re-run "
+        "'dbt-plan snapshot', or treat this report as unverifiable."
+    ),
+}
 
 
 def _has_nothing_to_report(result: CheckResult) -> bool:
@@ -120,7 +139,8 @@ def _has_nothing_to_report(result: CheckResult) -> bool:
     and one the compile never produced all have to survive to the output.
 
     A stale `target/` is the strongest of these, because an empty diff is exactly
-    what a failed compile produces.
+    what a failed compile produces. An unreadable baseline is the same class: it
+    is the difference between "nothing changed" and "I could not look".
     """
     return not (
         result.predictions
@@ -128,6 +148,7 @@ def _has_nothing_to_report(result: CheckResult) -> bool:
         or result.skipped_models
         or result.uncompiled_models
         or result.stale_sources
+        or result.baseline_problem
     )
 
 
@@ -187,6 +208,11 @@ def format_text(result: CheckResult, *, color: bool | None = None) -> str:
             f"{'is' if len(result.stale_sources) == 1 else 'are'} newer than the manifest. "
             f"Recompile, or this report describes code you no longer have."
         )
+
+    if result.baseline_problem:
+        warn = _colored("WARNING", Safety.WARNING) if use_color else "WARNING"
+        detail = _BASELINE_PROBLEMS.get(result.baseline_problem, result.baseline_problem)
+        lines.append(f"{warn}: {detail}")
 
     if result.parse_failures:
         names = ", ".join(result.parse_failures)
@@ -275,6 +301,10 @@ def format_github(result: CheckResult) -> str:
             f"{'is' if len(result.stale_sources) == 1 else 'are'} newer than the manifest. "
             f"Recompile, or this report describes code you no longer have."
         )
+
+    if result.baseline_problem:
+        detail = _BASELINE_PROBLEMS.get(result.baseline_problem, result.baseline_problem)
+        lines.append(f"> **WARNING**: {detail}")
 
     if result.parse_failures:
         names = ", ".join(result.parse_failures)
@@ -365,4 +395,6 @@ def format_json(result: CheckResult) -> str:
         "skipped_models": result.skipped_models,
         "uncompiled_models": result.uncompiled_models,
     }
+    if result.baseline_problem:
+        output["baseline_problem"] = result.baseline_problem
     return json.dumps(output, indent=2)
