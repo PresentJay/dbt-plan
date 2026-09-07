@@ -74,6 +74,28 @@ class TestVerdicts:
 class TestRefusalsSurvive:
     """Each of these would be reported as `safe` by a wrapper that collapsed them."""
 
+    @pytest.mark.parametrize("problem", ["missing", "corrupt"])
+    @pytest.mark.parametrize("warning_exit_code", [0, 2])
+    def test_baseline_problem_survives_the_cli_round_trip(
+        self, tmp_path, problem, warning_exit_code
+    ):
+        _write(tmp_path, {"orders": "SELECT a, b FROM raw"}, _manifest({"orders": {}}))
+        assert mcp_server.snapshot(str(tmp_path))["ok"]
+        baseline = tmp_path / ".dbt-plan" / "base" / "manifest.json"
+        if problem == "missing":
+            baseline.unlink()
+        else:
+            baseline.write_text("not json {{{", encoding="utf-8")
+        (tmp_path / ".dbt-plan.yml").write_text(
+            f"warning_exit_code: {warning_exit_code}\n", encoding="utf-8"
+        )
+
+        out = mcp_server.plan(str(tmp_path), dialect="duckdb")
+
+        assert out["exit_code"] == warning_exit_code
+        assert out["verdict"] == "review_required"
+        assert {"reason": "baseline_problem", "detail": problem, "models": []} in out["refusals"]
+
     def test_an_incomplete_compile_is_reported_not_hidden(self, tmp_path):
         m = _manifest({"fct_orders": {}, "never_compiled": {}})
         _write(tmp_path, {"fct_orders": "SELECT a, b FROM raw"}, m)

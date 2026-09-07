@@ -127,8 +127,17 @@ def plan(
                     }
                 )
 
+    if report.get("baseline_problem"):
+        refusals.append(
+            {"reason": "baseline_problem", "detail": report["baseline_problem"], "models": []}
+        )
+
+    verdict = _VERDICTS[result.returncode]
+    if verdict == "safe" and refusals:
+        verdict = "review_required"
+
     return {
-        "verdict": _VERDICTS[result.returncode],
+        "verdict": verdict,
         "exit_code": result.returncode,
         "summary": report.get("summary", {}),
         "models": report.get("models", []),
