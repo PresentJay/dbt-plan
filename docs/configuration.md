@@ -208,7 +208,7 @@ the compiled `stg_orders` model, and running `dbt-plan check --format json`:
 
 #### Field reference
 
-The top-level keys are always present. Their arrays are empty when there are no
+The top-level keys below are always present. Their arrays are empty when there are no
 matching findings.
 
 | Field | Type | Meaning |
@@ -219,6 +219,18 @@ matching findings.
 | `stale_sources` | string array | Source files newer than the manifest. |
 | `skipped_models` | string array | Compiled models not found in the manifest. |
 | `uncompiled_models` | string array | Manifest models with no compiled SQL. |
+
+An additional top-level `baseline_problem` string is present only when the
+snapshot manifest is missing (`"missing"`) or cannot be read (`"corrupt"`).
+Deleted-model and baseline-configuration checks cannot be trusted in that state;
+recreate the snapshot from the intended baseline revision before relying on the
+report. The field is omitted when the baseline is readable.
+
+Refusal fields must be inspected even when `summary.total` is zero or a configured
+`warning_exit_code: 0` makes the command exit successfully. No changed models is
+not evidence that the whole project was assessed. The MCP wrapper reports a
+baseline problem in `refusals` with `reason: "baseline_problem"` and the problem
+value in `detail`; it cannot return `safe` while that refusal remains.
 
 `summary.total`, `safe`, `warning`, and `destructive` are always present as
 integers. `summary.acknowledged` appears only when at least one finding was
@@ -234,9 +246,13 @@ Every model has these fields:
 | `on_schema_change` | string or null | Explicit schema-change policy, or null when absent. |
 | `safety` | string | `safe`, `warning`, or `destructive`. |
 | `operations` | array | Predicted operations, each with `operation` and nullable `column`. |
-| `columns_added` | string array | Columns present only in the current compiled SQL. |
-| `columns_removed` | string array | Columns present only in the snapshot. |
+| `columns_added` | string array | Added columns recorded by the prediction; not a complete SQL diff for every materialization. |
+| `columns_removed` | string array | Removed columns recorded by the prediction; not a complete SQL diff for every materialization. |
 | `acknowledged` | boolean | Whether this model was explicitly acknowledged. |
+
+For example, `table` and `view` replacements can leave both column arrays empty
+while downstream findings still identify a removed SQL column, as in the example
+above. Use the operations, final safety, and downstream impacts together.
 
 The following model fields are omitted, rather than set to null or an empty
 array, when there is no data:

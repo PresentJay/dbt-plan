@@ -191,7 +191,9 @@ class TestJsonSchemaStability:
         assert data["skipped_models"] == ["orphan"]
 
     def test_documented_cascade_risks_match_the_runtime_vocabulary(self):
-        docs = (Path(__file__).parents[1] / "docs" / "configuration.md").read_text()
+        docs = (Path(__file__).parents[1] / "docs" / "configuration.md").read_text(
+            encoding="utf-8"
+        )
         section = docs.split("#### Cascade risk vocabulary", 1)[1].split("### ", 1)[0]
         documented = set(re.findall(r"^\| `([^`]+)` \|", section, re.MULTILINE))
         assert documented == set(RISK_SAFETY)
