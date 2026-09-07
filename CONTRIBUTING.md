@@ -48,6 +48,36 @@ uv pip install --reinstall-package dbt-plan -e .
 Most valuable contribution, by a wide margin: a compiled SQL pattern that
 dbt-plan reads wrong. That is usually a fixture plus a line of parsing logic.
 
+### Checking CI on your pull request
+
+A bot maintains one **CI status** comment on your PR. It shows the current commit,
+whether CI is waiting for approval or running, and the result with links to failed
+jobs and steps. You do not need to ask a maintainer to interpret an approval wait
+as a test failure.
+
+| Comment | Who can use it | What happens |
+|---|---|---|
+| `/ci` | PR author or a maintainer with write access | Refreshes the status comment. |
+| `/ci retry` | PR author or a maintainer with write access | Retries failed jobs from an already executed CI run for the current commit. |
+| `/ci approve <full commit SHA>` | Maintainer with write access | Approves the current CI run if GitHub is holding it for execution approval. Copy the command from the bot comment after reviewing the changes. |
+
+For a code or test failure, fix the problem and push a commit; CI starts for the new
+commit automatically, subject to GitHub's external-contributor approval policy.
+Use retry for transient infrastructure failures. Retries have a five-minute
+cooldown and stop after three total run attempts. Running, successful, cancelled,
+or approval-waiting runs are not restarted by `/ci retry`; a maintainer can inspect
+the run in Actions when manual intervention is needed. A retry never approves an
+unreviewed external commit. Execution approval does not approve or merge the PR.
+
+Post commands as new comments, not edits or code blocks. Status refreshes happen
+when the PR changes or CI starts/finishes; this is event-driven, not a live job log.
+Commands queued together are reconciled using the latest authorized command.
+
+The feedback workflow only runs code from the repository's default branch and
+uses GitHub's API to control the existing `CI` workflow. It never executes fork
+code with its write token. Its tests use Node's built-in runner, without npm
+dependencies: `node --test .github/scripts/ci-feedback.test.cjs`.
+
 ### Adding a SQL fixture
 
 Drop a `.sql` file in `tests/fixtures/` with the expected column list in a header
