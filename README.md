@@ -209,7 +209,6 @@ dbt compares its declared `data_type` against the warehouse, which dbt-plan does
 name: dbt-plan
 on:
   pull_request:
-    paths: ['models/**', 'macros/**', 'dbt_project.yml']
 
 jobs:
   plan:
@@ -282,6 +281,14 @@ flowchart TD
 ## Contributing
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for development setup, TDD workflow, and coding rules.
+
+**CI feedback for contributors:** PRs to this repository get one automatically
+updated status comment with the tested commit, approval waits, and links to failed
+jobs. Comment `/ci` to refresh it, or `/ci retry` to retry a transient failure.
+External contributions still need a maintainer's execution approval; retrying does
+not bypass it. See [commands and limits](CONTRIBUTING.md#checking-ci-on-your-pull-request).
+This helper is for contributions to dbt-plan itself, separate from the GitHub Action
+you install in your own dbt project.
 
 ### Architecture
 

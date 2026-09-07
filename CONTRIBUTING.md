@@ -1,5 +1,8 @@
 # Contributing to dbt-plan
 
+Already opened a PR? See [Checking CI on your pull request](#checking-ci-on-your-pull-request)
+for automatic status updates and comment commands.
+
 ## The one rule
 
 A false warning is fine. A false safe is not.
@@ -50,7 +53,9 @@ dbt-plan reads wrong. That is usually a fixture plus a line of parsing logic.
 
 ### Checking CI on your pull request
 
-A bot maintains one **CI status** comment on your PR. It shows the current commit,
+A bot maintains one **CI status** comment on PRs to `PresentJay/dbt-plan`.
+This is repository contributor tooling, not part of `dbt-plan ci-setup` or the
+GitHub Action installed in your own dbt project. It shows the current commit,
 whether CI is waiting for approval or running, and the result with links to failed
 jobs and steps. You do not need to ask a maintainer to interpret an approval wait
 as a test failure.

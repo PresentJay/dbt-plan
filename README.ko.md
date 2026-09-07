@@ -96,6 +96,17 @@ dbt-plan check --select model1   # 특정 모델만 체크
 - Python 3.10+
 - CTE, UNION ALL, QUALIFY, 윈도우 함수, VARIANT 접근
 
+## 기여하기
+
+개발 환경과 기여 절차는 [CONTRIBUTING.md](CONTRIBUTING.md)를 참고하세요.
+
+**기여자 CI 안내:** 이 저장소에 PR을 열면 봇이 하나의 상태 댓글을 갱신해
+검사 대상 커밋, 실행 승인 대기 여부, 실패한 작업 링크를 알려줍니다.
+`/ci` 댓글로 상태를 새로고침하고, 일시적인 실행 오류는 `/ci retry`로 재시도할 수 있습니다.
+외부 기여의 실행 승인은 여전히 관리자가 처리하며, 재시도로 우회할 수 없습니다.
+[명령과 제한 사항](CONTRIBUTING.md#checking-ci-on-your-pull-request)을 확인하세요.
+이 기능은 dbt-plan 자체에 기여하는 PR용이며, 사용자 dbt 프로젝트에 설치하는 Action과는 별개입니다.
+
 ## 라이선스
 
 Apache-2.0

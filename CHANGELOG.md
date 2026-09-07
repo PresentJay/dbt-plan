@@ -7,7 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- Custom target-directory support in `run`, the GitHub Action, and MCP. (#172)
+- Contributor CI feedback: an automatically updated PR comment, status refresh,
+  controlled retries, and maintainer-only execution approval. (#184, #186)
+
+### Changed
+- Generated CI workflows run for every pull request, including changes outside
+  conventional model and macro paths. Regenerate existing workflows to adopt this. (#181)
+- Long generated data-test names are shortened in human-readable output; JSON
+  retains the full names. (#179)
+- Documented the JSON output contract and explained missing verdicts in generated
+  agent setup guidance. (#180, #178)
+
 ### Fixed
+- `run` forwards acknowledgements to `check`. (#125)
+- MCP verdicts no longer report safe when unresolved refusals remain. (#137)
+- `run --format json` keeps snapshot progress on stderr so stdout remains JSON. (#175)
+- Unreadable baselines produce an explicit warning instead of a quiet successful
+  result, including in MCP output. (#176)
+- Added regression coverage tying cascade risk names to the severity table. (#126)
+
 - **A view whose SQL will not parse no longer exits 0.** (#131) A parse failure was
   recorded only for materializations other than `table` and `view`, on the reasoning
   that `CREATE OR REPLACE` is safe whatever the columns are. That is true of the model
