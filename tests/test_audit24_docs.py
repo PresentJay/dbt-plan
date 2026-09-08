@@ -52,7 +52,12 @@ def test_committed_showcase_matches_current_cli():
     assert result.returncode == 1, result.stderr
     expected = (SAMPLE / "output.txt").read_text(encoding="utf-8")
     assert result.stdout == expected
-    for document in ("docs/use-cases.md", "README.md", "examples/sample-project/README.md"):
+    for document in (
+        "docs/use-cases.md",
+        "README.md",
+        "README.ko.md",
+        "examples/sample-project/README.md",
+    ):
         assert expected.rstrip() in (ROOT / document).read_text(encoding="utf-8")
     page = (ROOT / "docs/index.html").read_text(encoding="utf-8")
     rendered = html.unescape(re.sub(r"<[^>]+>", "", page))

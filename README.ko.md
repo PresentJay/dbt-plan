@@ -9,18 +9,29 @@ dbt 버전의 `terraform plan`. 컴파일된 SQL로 동작 — `dbt compile`은 
 ```text
 $ dbt-plan check
 
-dbt-plan -- 2 model(s) changed
+dbt-plan -- 4 model(s) changed
+  dialect: snowflake (default; adapter: unknown)
+  baseline: unknown revision, unknown snapshot time
+
 
 DESTRUCTIVE  int_order_enriched (incremental, sync_all_columns)
+  ADD COLUMN  billing_method
+  ADD COLUMN  shipping_city
+  DROP COLUMN  billing_info
   DROP COLUMN  shipping_info
-  ADD COLUMN   shipping_city
-  Downstream: dim_customers, fct_orders (2 model(s))
-  >> BROKEN_REF  fct_orders: references dropped column(s): shipping_info
+  Downstream: dim_customers, fct_daily_sales (2 model(s))
+  >> BROKEN_REF  fct_daily_sales: reads dropped column(s): shipping_info
 
 SAFE  dim_customers (table)
   CREATE OR REPLACE TABLE
 
-dbt-plan: 2 checked, 1 safe, 0 warning, 1 destructive, 1 cascade risk(s)
+SAFE  dim_publishers (table)
+  CREATE OR REPLACE TABLE
+
+SAFE  fct_daily_sales (incremental, append_new_columns)
+  ADD COLUMN  total_sales
+
+dbt-plan: 4 checked, 3 safe, 0 warning, 1 destructive, 1 cascade risk(s)
 ```
 
 ## 무엇을 하는가
@@ -30,8 +41,8 @@ PR에서 dbt 모델이 변경되었을 때, 컴파일된 SQL 비교로:
 - **컬럼 변경 감지**: ADD/DROP COLUMN
 - **위험도 판정**: materialization × on_schema_change 규칙 기반
 - **하위 모델 영향 분석**: 삭제된 컬럼을 참조하는 downstream 모델 감지
-- **타입 변경 감지**: 양쪽에 명시적 `CAST`가 있는 컬럼의 타입 비교
-- **설정 변경 감지**: materialization/on_schema_change 정책 변경
+- **타입 변경 감지**: 명시적 `CAST`의 타입을 비교하고, 한쪽에만 CAST가 생기거나 사라져도 검토 요청
+- **설정 변경 감지**: materialization/on_schema_change 정책과 database/schema/alias 이동
 
 실행하지 않습니다. Warehouse에 접속하지 않습니다. 파일을 읽고, 비교하고, 경고합니다.
 
