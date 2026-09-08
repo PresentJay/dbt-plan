@@ -70,3 +70,26 @@ jobs:
       - run: pip install -e ".[test]"
       - run: pip install sqlglot==28.0.0
       - run: pytest -q
+
+  integrations:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12"
+      - run: pip install -e ".[test,dbt,mcp]" dbt-core==1.11.7 dbt-duckdb==1.10.1
+      - run: python .github/scripts/required-tests.py tests/test_dbt_e2e.py tests/test_mcp_server.py -q
+
+  packaging:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12"
+      - run: pip install -e ".[test]" build
+      - run: python -m build
+      - run: python .github/scripts/required-tests.py tests/test_packaging.py -q

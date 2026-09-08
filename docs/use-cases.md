@@ -60,6 +60,7 @@ before `dbt run` rather than only in CI.
 
 A macro is edited. No model file changes:
 
+{% raw %}
 ```diff
   {% macro audit_cols() %}
 -     current_timestamp() AS dbt_loaded_at,
@@ -67,6 +68,7 @@ A macro is edited. No model file changes:
 +     current_timestamp() AS dbt_loaded_at
   {% endmacro %}
 ```
+{% endraw %}
 
 The pull request diff is two lines in one file. Nothing tells you which models call it,
 and nothing tells you that one of them is `incremental` with `on_schema_change:
