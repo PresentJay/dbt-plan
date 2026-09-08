@@ -226,7 +226,7 @@ def format_text(result: CheckResult, *, color: bool | None = None) -> str:
         warn = _colored("WARNING", Safety.WARNING) if use_color else "WARNING"
         lines.append(
             f"{warn}: target/ may be out of date -- {names} "
-            f"{'is' if len(result.stale_sources) == 1 else 'are'} newer than the manifest. "
+            f"{'is' if len(result.stale_sources) == 1 else 'are'} not verified as current compilation input. "
             f"Recompile, or this report describes code you no longer have."
         )
 
@@ -324,7 +324,7 @@ def format_github(result: CheckResult) -> str:
         names = ", ".join(result.stale_sources)
         lines.append(
             f"> **WARNING**: `target/` may be out of date -- {names} "
-            f"{'is' if len(result.stale_sources) == 1 else 'are'} newer than the manifest. "
+            f"{'is' if len(result.stale_sources) == 1 else 'are'} not verified as current compilation input. "
             f"Recompile, or this report describes code you no longer have."
         )
 

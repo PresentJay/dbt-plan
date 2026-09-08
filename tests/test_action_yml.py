@@ -102,6 +102,7 @@ class TestInvocations:
             args = [
                 {"$DIALECT": "snowflake"}.get(tok, "x" if tok.startswith("$") else tok)
                 for tok in shlex.split(raw)
+                if tok != "$@"
             ]
             proc = subprocess.run(
                 [sys.executable, "-m", "dbt_plan.cli", *args],
@@ -175,3 +176,59 @@ def test_check_step_handles_verdicts_under_github_errexit(tmp_path, code, report
         assert (
             f"verdict={ {0: 'safe', 1: 'destructive', 2: 'warning'}[code] }" in output.read_text()
         )
+
+
+@pytest.mark.parametrize("dialect", ["", "postgres", "snowflake", "invalid dialect; exit 0"])
+def test_dialect_is_optional_and_identical_in_every_report(tmp_path, dialect):
+    import json
+    import os
+    import shutil
+    import textwrap
+
+    bash = shutil.which("bash")
+    if not bash:
+        pytest.skip("bash is required to execute the composite Action shell")
+    check = ACTION_TEXT.split("    - name: Check\n", 1)[1].split("    - name: Gate", 1)[0]
+    script = textwrap.dedent(check.split("      run: |\n", 1)[1])
+    recorder = tmp_path / "record.py"
+    recorder.write_text(
+        "import json, os, sys\n"
+        "with open(os.environ['ARGV_LOG'], 'a') as f: f.write(json.dumps(sys.argv[1:]) + '\\n')\n"
+        "print(json.dumps({'summary': {}, 'models': []}))\n"
+    )
+    env = {
+        **os.environ,
+        "PATH": str(Path(sys.executable).parent) + os.pathsep + os.environ.get("PATH", ""),
+        "RUNNER_TEMP": tmp_path.as_posix(),
+        "TARGET_DIR": "custom target",
+        "DIALECT": dialect,
+        "SUMMARY": "true",
+        "GITHUB_OUTPUT": (tmp_path / "outputs").as_posix(),
+        "GITHUB_STEP_SUMMARY": (tmp_path / "summary").as_posix(),
+        "ARGV_LOG": str(tmp_path / "args.jsonl"),
+    }
+    prefix = f'dbt-plan() {{ python {shlex.quote(recorder.as_posix())} "$@"; }}\n'
+    result = subprocess.run(
+        [bash, "--noprofile", "--norc", "-e", "-o", "pipefail", "-c", prefix + script],
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    calls = [json.loads(line) for line in (tmp_path / "args.jsonl").read_text().splitlines()]
+    assert len(calls) == 3
+    for args in calls:
+        assert args[args.index("--target-dir") + 1] == "custom target"
+        if dialect:
+            assert args[args.index("--dialect") + 1] == dialect
+        else:
+            assert "--dialect" not in args
+    assert calls[0][-2:] == ["--format", "json"]
+    assert calls[1][-2:] == ["--format", "github"]
+    assert calls[2][-1] == "--no-color"
+
+
+def test_action_dialect_default_does_not_override_manifest():
+    dialect = ACTION_TEXT.split("  dialect:\n", 1)[1].split("  version:", 1)[0]
+    assert "default: ''" in dialect

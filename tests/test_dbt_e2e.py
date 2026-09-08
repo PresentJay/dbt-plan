@@ -1401,3 +1401,113 @@ class TestAudit24RulesAgainstRealDbt:
         built = _dbt_run(rule_project)
         assert built.returncode == 0, built.stdout + built.stderr
         assert _fct_orders_columns(rule_project) == ["order_id"]
+
+
+def test_select_graph_operators_on_real_compilation(dbt_project):
+    _dbt_compile(dbt_project)
+    snapshot = _dbt_plan(["snapshot", "--project-dir", str(dbt_project)])
+    assert snapshot.returncode == 0, snapshot.stderr
+    for relative in ["staging/stg_orders.sql", "marts/fct_orders.sql"]:
+        path = dbt_project / "models" / relative
+        path.write_text(path.read_text() + "\n-- changed for selection regression\n")
+    _dbt_compile(dbt_project)
+    cases = {
+        "stg_orders": {"stg_orders"},
+        "stg_orders+": {"stg_orders", "fct_orders"},
+        "+dim_books": {"stg_orders"},
+        "+fct_orders": {"stg_orders", "fct_orders"},
+        "+stg_orders+": {"stg_orders", "fct_orders"},
+        "stg_orders,fct_orders": {"stg_orders", "fct_orders"},
+        "dim_books": set(),
+    }
+    for term, expected in cases.items():
+        result = _dbt_plan(
+            ["check", "--project-dir", str(dbt_project), "--format", "json", "--select", term]
+        )
+        assert result.returncode == 0, (term, result.stdout, result.stderr)
+        report = json.loads(result.stdout)
+        assert {m["model_name"] for m in report["models"]} == expected, term
+    for term in [
+        "tag:nightly",
+        "stg_orders+2",
+        "2+dim_books",
+        "@stg_orders",
+        "stg_orders,typo",
+        "",
+        "fct_order",
+    ]:
+        result = _dbt_plan(
+            ["check", "--project-dir", str(dbt_project), "--format", "json", "--select", term]
+        )
+        assert result.returncode == 3, (term, result.stdout, result.stderr)
+        assert result.stdout == ""
+        assert "Error: --select" in result.stderr
+
+
+@pytest.mark.parametrize("renamed", [False, True])
+def test_select_versioned_models_and_defined_in_on_real_compilation(versioned_project, renamed):
+    project = versioned_project
+    stem = "orders_current" if renamed else "fct_orders_v2"
+    if renamed:
+        (project / "models/fct_orders_v2.sql").rename(project / f"models/{stem}.sql")
+        schema = project / "models/schema.yml"
+        schema.write_text(
+            schema.read_text().replace(
+                "      - v: 2", "      - v: 2\n        defined_in: orders_current"
+            )
+        )
+    reader = project / "models/reader.sql"
+    reader.write_text("select order_id from {{ ref('fct_orders', v=2) }}\n")
+    _dbt_compile(project)
+    snapshot = _dbt_plan(["snapshot", "--project-dir", str(project)])
+    assert snapshot.returncode == 0, snapshot.stderr
+    (project / f"models/{stem}.sql").write_text(_VERSIONED_V2.format(extra=""))
+    reader.write_text(reader.read_text() + "-- changed reader\n")
+    _dbt_compile(project)
+    cases = {
+        "fct_orders_v2": {stem},
+        stem: {stem},
+        "fct_orders_v2+": {stem, "reader"},
+        "+reader": {stem, "reader"},
+        "fct_orders_v1": set(),
+        "fct_orders_v1+": set(),
+        "fct_orders_v1,fct_orders_v2": {stem},
+    }
+    for term, expected in cases.items():
+        result = _dbt_plan(
+            ["check", "--project-dir", str(project), "--format", "json", "--select", term]
+        )
+        assert result.returncode == (1 if stem in expected else 0), (
+            term,
+            result.stdout,
+            result.stderr,
+        )
+        assert {m["model_name"] for m in json.loads(result.stdout)["models"]} == expected
+    result = _dbt_plan(
+        ["check", "--project-dir", str(project), "--format", "json", "--select", "fct_orders"]
+    )
+    assert result.returncode == 3
+    assert result.stdout == ""
+    assert "fct_orders" in result.stderr and "version" in result.stderr
+
+
+def test_run_invalid_selection_restores_work_after_real_compile(run_project):
+    before = _run_project_state(run_project)
+    result = _dbt_plan(
+        [
+            "run",
+            "--project-dir",
+            str(run_project),
+            "--format",
+            "json",
+            "--select",
+            "@orders",
+            "--compile-command",
+            shlex.join([_DBT, "compile", "--profiles-dir", ".", "--target-path", "target"]),
+        ],
+        timeout=90,
+    )
+    assert result.returncode == 3, result.stdout + result.stderr
+    assert result.stdout == ""
+    assert "Error: --select" in result.stderr
+    assert _run_project_state(run_project) == before

@@ -238,7 +238,7 @@ matching findings.
 | `summary` | object | Counts for the complete check. |
 | `models` | array | One entry per changed model. |
 | `parse_failures` | string array | Models whose compiled SQL could not be parsed. |
-| `stale_sources` | string array | Source files newer than the manifest. |
+| `stale_sources` | string array | Source or compiled inputs whose freshness/compilation could not be established. |
 | `skipped_models` | string array | Compiled models not found in the manifest. |
 | `uncompiled_models` | string array | Manifest models with no compiled SQL. |
 

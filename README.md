@@ -77,17 +77,10 @@ dbt-plan snapshot          # once, on the revision you are changing from
 dbt compile && dbt-plan check
 ```
 
-Measured on a project of 3 models, median of 3 runs:
-
-| step | time |
-|---|---|
-| `dbt compile` (Fusion) | 1.8 – 3.8 s |
-| **`dbt-plan check`** | **0.11 s** |
-| `dbt-plan snapshot` | 0.10 s |
-
-200 models, every one of them changed: **0.48 s**. The compile is the cost, and you were
-compiling anyway — dbt-plan itself is fast enough to sit in the edit loop rather than at
-the end of it.
+`dbt-plan check` reads local compiled artifacts. Its latency is separate from
+`dbt compile`, which can depend on your adapter, macros, and warehouse.
+See the [reproducible CLI benchmark](docs/performance.md) for measured workloads,
+raw samples, and commands to measure your machine.
 
 ### Working with a coding agent
 
@@ -144,6 +137,10 @@ dbt-plan check --select fct_orders+   # it and everything downstream
 ```
 
 
+`--select` accepts model names and optional upstream/downstream `+` operators;
+comma-separated terms form a union. In the next minor release, unsupported or
+unknown selections fail with exit 3. Use explicit version names such as
+`fct_orders_v2`. See the [selection contract and examples](docs/selection.md).
 
 ## Scope
 
@@ -228,6 +225,7 @@ jobs:
       contents: read
     env:
       # Whatever your profiles.yml reads. `dbt compile` connects; dbt-plan does not.
+      UV_PROJECT_ENVIRONMENT: ${{ runner.temp }}/project-venv
       SNOWFLAKE_ACCOUNT: ${{ secrets.SNOWFLAKE_ACCOUNT }}
       SNOWFLAKE_USER: ${{ secrets.SNOWFLAKE_USER }}
       SNOWFLAKE_PRIVATE_KEY: ${{ secrets.SNOWFLAKE_PRIVATE_KEY }}
@@ -238,10 +236,18 @@ jobs:
           persist-credentials: false
       - uses: actions/setup-python@v5
         with: { python-version: '3.12' }
-      - run: pip install uv && uv sync
+      - run: pip install uv
+      - run: uv sync --locked
 
       - uses: PresentJay/dbt-plan@v1
+        with:
+          compile-command: uv run --no-sync dbt compile
 ```
+
+This example assumes a checked-in `uv.lock` with your dbt adapter included. The
+virtual environment lives outside the checkout so changing revisions cannot replace
+it. With pip/requirements.txt, install your adapter before the Action and use the
+default `dbt compile` command. Run `dbt deps` first if your project uses dbt packages.
 
 Keep the `pull_request` trigger. Never switch it to `pull_request_target` — `dbt compile`
 runs Jinja and macros written in the pull request, so that would hand your warehouse
@@ -253,7 +259,7 @@ credentials to code from any fork.
 | `base-ref` | the PR base | The revision to compare against. |
 | `project-dir` | `.` | dbt project directory. |
 | `target-dir` | `target` | dbt artifact directory relative to `project-dir`; set this when dbt writes to a custom path such as `build`. |
-| `dialect` | the manifest's `adapter_type`, else `snowflake` | sqlglot dialect for parsing compiled SQL. Set this only to override what your project already says. |
+| `dialect` | empty | Preserve CLI configuration and manifest adapter detection, then fall back to `snowflake`. Set only to override the project. |
 | `version` | latest | Pin a dbt-plan release. |
 | `fail-on` | `destructive` | Or `warning`, or `never`. |
 | `summary` | `true` | Write the report to the job step summary. |

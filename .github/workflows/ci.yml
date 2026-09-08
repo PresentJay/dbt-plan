@@ -80,7 +80,119 @@ jobs:
         with:
           python-version: "3.12"
       - run: pip install -e ".[test,dbt,mcp]" uv dbt-core==1.11.7 dbt-duckdb==1.10.1
-      - run: python .github/scripts/required-tests.py tests/test_dbt_e2e.py tests/test_mcp_server.py tests/test_review_safety_gaps.py tests/test_generated_ci_execution.py tests/test_generated_ci_install.py -q
+      - run: python .github/scripts/required-tests.py tests/test_dbt_e2e.py tests/test_mcp_server.py tests/test_review_safety_gaps.py tests/test_generated_ci_execution.py tests/test_generated_ci_install.py tests/test_action_e2e.py tests/test_compiled_fixture.py -q
+
+      - name: Prepare real composite Action projects and current wheel
+        id: action-projects
+        run: |
+          python -m tests.action_project prepare "$RUNNER_TEMP/action-projects"
+          python -m pip wheel --no-deps --wheel-dir "$RUNNER_TEMP/action-wheels" .
+          python -m pip uninstall -y dbt-plan
+      - name: Composite Action safe
+        id: action-safe
+        continue-on-error: true
+        uses: ./
+        env:
+          PIP_NO_INDEX: '1'
+          PIP_FIND_LINKS: ${{ runner.temp }}/action-wheels
+          DBT_SEND_ANONYMOUS_USAGE_STATS: 'false'
+        with:
+          project-dir: ${{ runner.temp }}/action-projects/safe
+          base-ref: ${{ steps.action-projects.outputs.safe-base }}
+          target-dir: compiled target
+          compile-command: "git rev-parse HEAD >> compile.log; dbt compile --profiles-dir . --target-path 'compiled target'"
+          fail-on: destructive
+      - name: Verify composite Action safe
+        env:
+          OUTCOME: ${{ steps.action-safe.outcome }}
+          CODE: ${{ steps.action-safe.outputs.exit-code }}
+          VERDICT: ${{ steps.action-safe.outputs.verdict }}
+          REPORT: ${{ steps.action-safe.outputs.report }}
+        run: python -m tests.action_project verify "$RUNNER_TEMP/action-projects" safe "$OUTCOME" "$CODE" "$VERDICT" "$REPORT"
+      - name: Composite Action warning
+        id: action-warning
+        continue-on-error: true
+        uses: ./
+        env:
+          PIP_NO_INDEX: '1'
+          PIP_FIND_LINKS: ${{ runner.temp }}/action-wheels
+          DBT_SEND_ANONYMOUS_USAGE_STATS: 'false'
+        with:
+          project-dir: ${{ runner.temp }}/action-projects/warning
+          base-ref: ${{ steps.action-projects.outputs.warning-base }}
+          target-dir: compiled target
+          compile-command: "git rev-parse HEAD >> compile.log; dbt compile --profiles-dir . --target-path 'compiled target'"
+          fail-on: destructive
+      - name: Verify composite Action warning
+        env:
+          OUTCOME: ${{ steps.action-warning.outcome }}
+          CODE: ${{ steps.action-warning.outputs.exit-code }}
+          VERDICT: ${{ steps.action-warning.outputs.verdict }}
+          REPORT: ${{ steps.action-warning.outputs.report }}
+        run: python -m tests.action_project verify "$RUNNER_TEMP/action-projects" warning "$OUTCOME" "$CODE" "$VERDICT" "$REPORT"
+      - name: Composite Action destructive
+        id: action-destructive
+        continue-on-error: true
+        uses: ./
+        env:
+          PIP_NO_INDEX: '1'
+          PIP_FIND_LINKS: ${{ runner.temp }}/action-wheels
+          DBT_SEND_ANONYMOUS_USAGE_STATS: 'false'
+        with:
+          project-dir: ${{ runner.temp }}/action-projects/destructive
+          base-ref: ${{ steps.action-projects.outputs.destructive-base }}
+          target-dir: compiled target
+          compile-command: "git rev-parse HEAD >> compile.log; dbt compile --profiles-dir . --target-path 'compiled target'"
+          fail-on: destructive
+      - name: Verify composite Action destructive
+        env:
+          OUTCOME: ${{ steps.action-destructive.outcome }}
+          CODE: ${{ steps.action-destructive.outputs.exit-code }}
+          VERDICT: ${{ steps.action-destructive.outputs.verdict }}
+          REPORT: ${{ steps.action-destructive.outputs.report }}
+        run: python -m tests.action_project verify "$RUNNER_TEMP/action-projects" destructive "$OUTCOME" "$CODE" "$VERDICT" "$REPORT"
+      - name: Composite Action base-error
+        id: action-base-error
+        continue-on-error: true
+        uses: ./
+        env:
+          PIP_NO_INDEX: '1'
+          PIP_FIND_LINKS: ${{ runner.temp }}/action-wheels
+          DBT_SEND_ANONYMOUS_USAGE_STATS: 'false'
+        with:
+          project-dir: ${{ runner.temp }}/action-projects/base-error
+          base-ref: ${{ steps.action-projects.outputs.base-error-base }}
+          target-dir: compiled target
+          compile-command: "git rev-parse HEAD >> compile.log; dbt compile --profiles-dir . --target-path 'compiled target'"
+          fail-on: never
+      - name: Verify composite Action base-error
+        env:
+          OUTCOME: ${{ steps.action-base-error.outcome }}
+          CODE: ${{ steps.action-base-error.outputs.exit-code }}
+          VERDICT: ${{ steps.action-base-error.outputs.verdict }}
+          REPORT: ${{ steps.action-base-error.outputs.report }}
+        run: python -m tests.action_project verify "$RUNNER_TEMP/action-projects" base-error "$OUTCOME" "$CODE" "$VERDICT" "$REPORT"
+      - name: Composite Action head-error
+        id: action-head-error
+        continue-on-error: true
+        uses: ./
+        env:
+          PIP_NO_INDEX: '1'
+          PIP_FIND_LINKS: ${{ runner.temp }}/action-wheels
+          DBT_SEND_ANONYMOUS_USAGE_STATS: 'false'
+        with:
+          project-dir: ${{ runner.temp }}/action-projects/head-error
+          base-ref: ${{ steps.action-projects.outputs.head-error-base }}
+          target-dir: compiled target
+          compile-command: "git rev-parse HEAD >> compile.log; dbt compile --profiles-dir . --target-path 'compiled target'"
+          fail-on: never
+      - name: Verify composite Action head-error
+        env:
+          OUTCOME: ${{ steps.action-head-error.outcome }}
+          CODE: ${{ steps.action-head-error.outputs.exit-code }}
+          VERDICT: ${{ steps.action-head-error.outputs.verdict }}
+          REPORT: ${{ steps.action-head-error.outputs.report }}
+        run: python -m tests.action_project verify "$RUNNER_TEMP/action-projects" head-error "$OUTCOME" "$CODE" "$VERDICT" "$REPORT"
 
   packaging:
     runs-on: ubuntu-latest

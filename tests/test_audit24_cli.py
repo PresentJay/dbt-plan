@@ -307,3 +307,20 @@ def test_quoted_contract_metadata_is_not_folded_into_proof(tmp_path, capsys, dia
     save(tmp_path, m)
     save(tmp_path, m, True)
     assert check(tmp_path, capsys)[0] == 2
+
+
+def test_versioned_defined_in_selection_keeps_source_refusal(tmp_path, capsys):
+    m = project(tmp_path, after="select 1 as id, 2 as tax")
+    old = m["nodes"].pop("model.bookshop.orders")
+    old.update(
+        path="models/orders_current.sql", original_file_path="models/orders_current.sql", version=2
+    )
+    m["nodes"]["model.bookshop.orders.v2"] = old
+    for folder in ("target/compiled/bookshop/models", ".dbt-plan/base/compiled/models"):
+        (tmp_path / folder / "orders.sql").rename(tmp_path / folder / "orders_current.sql")
+    save(tmp_path, m)
+    save(tmp_path, m, True)
+    (tmp_path / "models").mkdir()
+    source = tmp_path / "models/orders_current.sql"
+    source.write_text("select 1 as id")
+    assert check(tmp_path, capsys, "orders_v2")[0] == 2

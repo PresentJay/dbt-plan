@@ -184,6 +184,49 @@ both Git revisions and checks summary/gate behavior for safe, warning, and
 destructive changes. Regenerate `examples/ci-workflow/dbt-plan.yml` from
 `_CI_WORKFLOW` whenever the template changes; an equality test prevents drift.
 
+Real-dbt selection tests cover upstream/downstream operators, unions, known
+unchanged models, invalid terms, explicit model versions and `defined_in` aliases.
+See [selection semantics](docs/selection.md) before extending the grammar; silently
+narrowing an unsupported selection can hide destructive findings.
+
+### Compiled fixtures and Action integration
+
+`tests/test_compiled_fixture.py` compares a fresh compile with the committed
+`tests/dbt_project/target/compiled/` SQL and meaningful `manifest.json` fields:
+model identity/configuration, raw and compiled code, columns, lineage, and test
+fixtures. Runtime timestamps, invocation IDs, absolute compiled paths, and
+adapter macro internals are excluded. Negative controls verify that SQL, schema,
+configuration, and dependency drift are detected.
+
+Use the same fixture toolchain as the required integrations job:
+
+```bash
+uv pip install dbt-core==1.11.7 dbt-duckdb==1.10.1
+uv run --no-sync pytest tests/test_compiled_fixture.py -q
+# To regenerate after an intentional source change:
+(cd tests/dbt_project && uv run --no-sync dbt compile --profiles-dir . --no-partial-parse)
+```
+
+Review and commit only the generated SQL and manifest changes needed by the
+fixture. A toolchain upgrade needs an explicit pin change and a fixture review.
+The version assertion deliberately fails when another installed dbt version is
+used; a missing optional dependency skips locally and fails in required CI.
+
+`tests/test_action_e2e.py` executes the actual composite shell blocks with real
+Git, DuckDB compilation and the CLI. The required integrations job additionally
+invokes `uses: ./` against five real projects: safe, warning, destructive, failed
+baseline compile, and failed current compile. It installs the current checkout's
+built wheel from a local wheel directory, rather than testing an older PyPI
+release. Assertions check the revisions compiled, reports, outputs and job
+policy; `continue-on-error` permits inspecting expected failures, and the following
+verification step fails CI on any mismatch. Compilation errors must fail even
+with `fail-on: never`. PostgreSQL parser inference and explicit overrides are
+also exercised by the shell/CLI tests, without connecting to PostgreSQL.
+
+For performance changes, run the [CLI benchmark](docs/performance.md). The unit
+smoke test validates its workloads and result schema; elapsed-time numbers are
+measurements, not cross-machine CI thresholds.
+
 ## Where to start
 
 Issues labelled [good first issue](https://github.com/PresentJay/dbt-plan/labels/good%20first%20issue)

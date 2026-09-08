@@ -837,42 +837,49 @@ def _expand_selection(
     `fct_orders+` is the one that earns its keep locally: "this model and what it
     breaks" is the question the report answers anyway.
 
-    dbt's `tag:` and `path:` selectors are not supported. A term using one is
-    returned as unsupported rather than quietly matching nothing -- a `--select`
-    that matches less than the author meant hides findings, which is the failure
-    worth being loud about.
+    Commas union terms. Depth limits, @, selector methods, globs and empty
+    terms are unsupported; the caller rejects the entire selection. Unknown
+    names are retained so the caller can distinguish them from known unchanged
+    models. Version aliases and graph node IDs resolve to actual compiled names;
+    an unversioned family name does not implicitly select all its versions.
     """
-    from dbt_plan.manifest import find_downstream, model_key
+    import re
 
+    from dbt_plan.manifest import find_downstream
+
+    names_by_id = {node.node_id: node.name for node in node_index.values()}
     selected: set[str] = set()
     unsupported: list[str] = []
     parent_map: dict[str, list[str]] | None = None
 
     for raw in (term.strip() for term in select_models.split(",")):
-        if not raw:
-            continue
-        if any(char in raw for char in ":*@") or "+" in raw.strip("+") or "++" in raw:
-            unsupported.append(raw)
+        if not re.fullmatch(r"\+?[\w-]+\+?", raw):
+            unsupported.append(raw or "<empty>")
             continue
         want_upstream = raw.startswith("+")
         want_downstream = raw.endswith("+")
         name = raw.strip("+")
-        if not name or name not in node_index:
-            unsupported.append(raw)
-            continue
-        selected.add(name)
         node = node_index.get(name)
+        selected.add(node.name if node is not None else name)
         if node is None or not (want_upstream or want_downstream):
             continue
         if want_downstream:
-            selected.update(model_key(nid) for nid in find_downstream(node.node_id, child_map))
+            selected.update(
+                names_by_id[nid]
+                for nid in find_downstream(node.node_id, child_map)
+                if nid in names_by_id
+            )
         if want_upstream:
             if parent_map is None:
                 parent_map = {}
                 for parent, children in child_map.items():
                     for child in children:
                         parent_map.setdefault(child, []).append(parent)
-            selected.update(model_key(nid) for nid in find_downstream(node.node_id, parent_map))
+            selected.update(
+                names_by_id[nid]
+                for nid in find_downstream(node.node_id, parent_map)
+                if nid in names_by_id
+            )
     return selected, unsupported
 
 
@@ -1046,6 +1053,9 @@ def _do_check(args: argparse.Namespace) -> int:
     # Build O(1) lookup indexes instead of O(N) scan per model
     node_index = build_node_index(manifest)
     base_node_index = build_node_index(base_manifest) if base_manifest else {}
+    # Index keys include version aliases; only node.name identifies a compiled file.
+    model_names = {node.name for node in node_index.values()}
+    base_model_names = {node.name for node in base_node_index.values()}
 
     # Manifest-only resources and configuration can change without changing SQL.
     non_sql_names: set[str] = set()
@@ -1062,6 +1072,8 @@ def _do_check(args: argparse.Namespace) -> int:
                 non_sql_names.add(name)
             elif nid.startswith("model.") and raw.get("language") == "python":
                 non_sql_names.add(model_key(nid))
+    model_names = {node.name for node in node_index.values()}
+    base_model_names = {node.name for node in base_node_index.values()}
     current_paths = {f.stem: f for f in iter_model_sql(current_compiled, model_dirs)}
     base_paths = {f.stem: f for f in iter_model_sql(base_compiled, base_model_dirs)}
     already_changed = {d.model_name for d in model_diffs}
@@ -1103,8 +1115,8 @@ def _do_check(args: argparse.Namespace) -> int:
     already = {d.model_name for d in model_diffs}
     deleted = sorted(
         name
-        for name in base_node_index
-        if name not in node_index and name not in already and name not in config.ignore_models
+        for name in base_model_names
+        if name not in model_names and name not in already and name not in config.ignore_models
     )
     if deleted:
         base_sql_by_stem = {f.stem: f for f in iter_model_sql(base_compiled, base_model_dirs)}
@@ -1114,8 +1126,8 @@ def _do_check(args: argparse.Namespace) -> int:
 
     # Filter: --select. After the manifest, because `fct_orders+` needs the graph.
     select_models = getattr(args, "select", None)
-    relevant_names = set(node_index) | set(base_node_index)
-    if select_models:
+    relevant_names = model_names | base_model_names
+    if select_models is not None:
         select_set, unsupported = _expand_selection(
             select_models, child_map, {**base_node_index, **node_index}
         )
@@ -1123,8 +1135,17 @@ def _do_check(args: argparse.Namespace) -> int:
             unsupported = [select_models]
         if unsupported:
             print(
-                f"Warning: --select does not support {', '.join(unsupported)}. "
-                f"Only a model name, with an optional leading or trailing '+'.",
+                f"Error: --select does not support {', '.join(unsupported)}. "
+                "Use comma-separated model names with one optional '+' at either end.",
+                file=sys.stderr,
+            )
+            return ERROR_EXIT_CODE
+        unknown = sorted(select_set - (model_names | base_model_names))
+        if unknown:
+            print(
+                f"Error: --select contains unknown model(s): {', '.join(unknown)}. "
+                "Use a compiled file stem; for versioned models specify the version "
+                "(for example fct_orders_v2) or its defined_in file name.",
                 file=sys.stderr,
             )
             return ERROR_EXIT_CODE
@@ -1138,7 +1159,11 @@ def _do_check(args: argparse.Namespace) -> int:
             if selected_node:
                 for graph in (child_map, parent_map):
                     relevant_names.update(
-                        model_key(nid) for nid in find_downstream(selected_node.node_id, graph)
+                        (
+                            node_index.get(model_key(nid)) or base_node_index.get(model_key(nid))
+                        ).name
+                        for nid in find_downstream(selected_node.node_id, graph)
+                        if node_index.get(model_key(nid)) or base_node_index.get(model_key(nid))
                     )
         before_select = len(model_diffs)
         model_diffs = [d for d in model_diffs if d.model_name in select_set]
@@ -1173,7 +1198,7 @@ def _do_check(args: argparse.Namespace) -> int:
     compiled_stems = {f.stem for f in iter_model_sql(current_compiled, model_dirs)}
     uncompiled_models = sorted(
         name
-        for name in node_index
+        for name in model_names
         if name not in compiled_stems
         and name not in config.ignore_models
         and name not in non_sql_names
@@ -1187,7 +1212,7 @@ def _do_check(args: argparse.Namespace) -> int:
     base_stems = {f.stem for f in iter_model_sql(base_compiled, base_model_dirs)}
     missing_base = sorted(
         name
-        for name in base_node_index
+        for name in base_model_names
         if name not in base_stems
         and name not in config.ignore_models
         and name not in non_sql_names
@@ -1218,12 +1243,18 @@ def _do_check(args: argparse.Namespace) -> int:
         unrelated_paths = {
             raw.get("original_file_path")
             for nid, raw in manifest.get("nodes", {}).items()
-            if nid.startswith("model.") and model_key(nid) not in relevant_names
+            if nid.startswith("model.")
+            and (
+                node_index.get(model_key(nid)) is None
+                or node_index[model_key(nid)].name not in relevant_names
+            )
         }
         related_paths = {
             raw.get("original_file_path")
             for nid, raw in manifest.get("nodes", {}).items()
-            if nid.startswith("model.") and model_key(nid) in relevant_names
+            if nid.startswith("model.")
+            and node_index.get(model_key(nid)) is not None
+            and node_index[model_key(nid)].name in relevant_names
         }
         unrelated_paths -= related_paths
         stale_sources = [path for path in stale_sources if path not in unrelated_paths]
@@ -2314,8 +2345,9 @@ def _main() -> None:
         "--select",
         default=None,
         help=(
-            "Only check these models. Comma-separated, with dbt's graph operators: "
-            "`fct_orders`, `fct_orders+` (and downstream), `+fct_orders` (and upstream)."
+            "Union of comma-separated model names; optional '+' includes upstream "
+            "and/or downstream. Use explicit version names (fct_orders_v2). "
+            "Unsupported syntax and unknown names exit 3."
         ),
     )
     check.add_argument(
@@ -2424,8 +2456,9 @@ def _main() -> None:
         "--select",
         default=None,
         help=(
-            "Only check these models. Comma-separated, with dbt's graph operators: "
-            "`fct_orders`, `fct_orders+` (and downstream), `+fct_orders` (and upstream)."
+            "Union of comma-separated model names; optional '+' includes upstream "
+            "and/or downstream. Use explicit version names (fct_orders_v2). "
+            "Unsupported syntax and unknown names exit 3."
         ),
     )
     run_cmd.add_argument(

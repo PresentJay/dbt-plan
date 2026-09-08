@@ -8,6 +8,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Breaking (next minor release, not a 0.15.x patch)
+- Reject unsupported, empty and unknown `--select` terms with exit 3 and no completed
+  report, including mixed valid/invalid selections. Existing unchanged selections
+  remain valid. Versioned models require an explicit version/file name. (#145, #101)
 - Execution failures now exit 3; completed warning findings still use `warning_exit_code`
   (default 2). Invalid arguments, missing/invalid artifacts, compile/recovery failures,
   and unexpected CLI exceptions cannot masquerade as warning/destructive verdicts.
@@ -15,7 +18,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   reserved from warning configuration. See [migration instructions](docs/exit-codes.md). (#113)
 
 
+### Added
+- Required CI compares pinned real compilation with committed fixtures and executes
+  the composite Action against safe, warning, destructive and failed-compile projects.
+  A reproducible CLI benchmark replaces unsupported timing claims. (#164)
+
 ### Fixed
+- Resolve selection graph nodes and version aliases to compiled file stems, including
+  `defined_in`. Aliases no longer create phantom missing/deleted artifacts. Real-dbt
+  tests cover graph operators, explicit versions and invalid-selection recovery. (#101)
+- The Action preserves manifest dialect detection when its dialect input is empty;
+  explicit overrides apply consistently to JSON, summary and text reports. (#134)
 - Generated CI installs dbt/project dependencies and dbt-plan in one environment
   for uv projects or requirements.txt layouts, honors existing uv locks, and keeps
   the environment outside revision checkouts. Capture and validate the check report
