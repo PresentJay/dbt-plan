@@ -1,5 +1,8 @@
 # Contributing to dbt-plan
 
+New here? [Start with a small, ready contribution](docs/first-contribution.md):
+choose a task, reproduce it locally and open a draft PR.
+
 Already opened a PR? See [Checking CI on your pull request](#checking-ci-on-your-pull-request)
 for automatic status updates and comment commands.
 
@@ -87,7 +90,8 @@ dependencies: `node --test .github/scripts/ci-feedback.test.cjs`.
 ### Adding a SQL fixture
 
 Drop a `.sql` file in `tests/fixtures/` with the expected column list in a header
-comment, then assert on it from `tests/test_columns.py`:
+comment, then assert on it from the test module specified in the issue (or
+`tests/test_columns.py` for an unscoped fixture):
 
 ```sql
 -- Pattern: lateral flatten over a VARIANT array
@@ -230,9 +234,11 @@ measurements, not cross-machine CI thresholds.
 ## Where to start
 
 Issues labelled [good first issue](https://github.com/PresentJay/dbt-plan/labels/good%20first%20issue)
-are kept scoped to one file with a clear finish line. If none are open, a fixture
-for a SQL pattern from your own project is always welcome — that is how parsing
-gaps get found.
+have a settled scope, owned files, expected results and validation commands.
+The [first-contribution guide](docs/first-contribution.md) lists a starter batch
+and explains claiming a task without duplicating another contributor's work.
+If none are available, propose a small, anonymized SQL example in an issue;
+maintainers can check existing coverage before scoping a fixture.
 
 ## Repository settings
 
@@ -259,16 +265,13 @@ merging the script does not apply repository settings automatically.
 
 ## If it was useful
 
-A star is the only signal this project gets that is not automated. Clones run at
-roughly twenty times the page views, and downloads spike on every release from
-scanners and mirrors — neither number says a person decided anything. Stars are
-also the gate on several tool directories, which use them as a proxy for whether
-anyone actually uses a thing.
+Tell us what you tried, what dbt-plan found and what was confusing. A small,
+anonymized reproduction helps us improve the tool. Please omit credentials and
+private schema details.
 
-So if dbt-plan caught something for you, or you fixed something in it, a star is
-genuinely the most useful thing you can leave behind. No obligation, and please
-do not star it if you have not used it — an inflated count would cost more than
-it is worth, because it is the one number here still worth reading.
+A star is optional. Stars, clones and downloads do not establish active usage;
+reproductions, feedback and reviewed contributions give us more useful context.
+You never need to star or promote the repository to receive help or review.
 
 ## Code of Conduct
 

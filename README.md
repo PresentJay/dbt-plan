@@ -308,6 +308,10 @@ flowchart TD
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for development setup, TDD workflow, and coding rules.
 
+**First contribution?** [Choose a small, ready task](docs/first-contribution.md):
+SQL fixtures, documentation or a sample-script fix, with exact expected results
+and no warehouse credentials required.
+
 **CI feedback for contributors:** PRs to this repository get one automatically
 updated status comment with the tested commit, approval waits, and links to failed
 jobs. Comment `/ci` to refresh it, or `/ci retry` to retry a transient failure.
@@ -333,7 +337,8 @@ src/dbt_plan/
 
 **Where to start:** the [open issues](https://github.com/PresentJay/dbt-plan/issues),
 particularly those labelled [good first issue](https://github.com/PresentJay/dbt-plan/issues?q=is%3Aissue+is%3Aopen+label%3A%22good+first+issue%22).
-Each one says what it is, how it was found, and what has to be decided before code.
+Each starter issue has an agreed scope, expected results and validation commands.
+Check its assignee and recent comments, then confirm ownership before starting.
 
 **Design decisions:** See [docs/design-notes.md](docs/design-notes.md).
 
