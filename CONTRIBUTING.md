@@ -184,6 +184,11 @@ both Git revisions and checks summary/gate behavior for safe, warning, and
 destructive changes. Regenerate `examples/ci-workflow/dbt-plan.yml` from
 `_CI_WORKFLOW` whenever the template changes; an equality test prevents drift.
 
+Real-dbt selection tests cover upstream/downstream operators, unions, known
+unchanged models, invalid terms, explicit model versions and `defined_in` aliases.
+See [selection semantics](docs/selection.md) before extending the grammar; silently
+narrowing an unsupported selection can hide destructive findings.
+
 ### Compiled fixtures and Action integration
 
 `tests/test_compiled_fixture.py` compares a fresh compile with the committed

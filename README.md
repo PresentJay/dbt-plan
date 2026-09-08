@@ -126,6 +126,10 @@ dbt-plan check --select fct_orders+   # it and everything downstream
 ```
 
 
+`--select` accepts model names and optional upstream/downstream `+` operators;
+comma-separated terms form a union. In the next minor release, unsupported or
+unknown selections fail with exit 3. Use explicit version names such as
+`fct_orders_v2`. See the [selection contract and examples](docs/selection.md).
 
 ## Scope
 
