@@ -122,21 +122,13 @@ Fork PR은 설계상 secret을 받지 못하므로 compile이 실패합니다. �
 
 | Code | 의미 | CI 동작 |
 |------|------|---------|
-| 0 | 안전 (SAFE) | 통과 |
+| 0 | 설정된 정책상 통과 | 통과 |
 | 1 | 파괴적 (DESTRUCTIVE) | merge 차단 |
 | 2 | 검토 필요 (WARNING) | 새 생성 워크플로와 Action의 기본 정책에서는 허용; 기본 CLI에서는 실패 |
 | 3 | 실행 오류 (ERROR), 완료된 판정 없음 | 차단; `fail-on: never`도 허용하지 않음 |
 
 실행 오류 3은 다음 마이너 릴리스부터 적용합니다. 기존 0.15.x의 오류 2와
 구분해야 합니다. [종료 코드 전환 안내](exit-codes.md)를 참고하세요.
-
-## Override: `ddl-reviewed` 라벨
-
-의도적으로 컬럼을 삭제하는 PR이라면:
-
-1. PR에 `ddl-reviewed` 라벨 추가
-2. 워크플로우가 자동으로 skip됨
-3. PR 코멘트에는 여전히 DDL 예측이 표시됨 (정보 제공)
 
 ## Self-hosted Runner 참고
 
@@ -154,15 +146,47 @@ Fork PR은 설계상 secret을 받지 못하므로 compile이 실패합니다. �
 
 PR의 Actions 탭에서 결과를 볼 수 있습니다.
 
-### Slack Webhook (Phase 2a)
+Slack 알림은 생성 구성에 포함되지 않습니다. 필요하면 저장된 검사 결과를 읽어
+별도 알림 단계에서 처리하세요.
 
-destructive DDL 발생 시 Slack으로 알림:
+## 컴파일 명령과 dbt 패키지
 
-```yaml
-- name: Notify Slack on destructive
-  if: failure()
-  run: |
-    curl -X POST ${{ secrets.SLACK_WEBHOOK_URL }} \
-      -H 'Content-Type: application/json' \
-      -d '{"text": "dbt-plan: destructive DDL detected in PR #${{ github.event.number }}"}'
+`dbt-plan run`의 `--compile-command`, `DBT_PLAN_COMPILE_COMMAND`,
+`.dbt-plan.yml`의 `compile_command`는 **명령 하나와 인자**를 받습니다.
+문자열을 `shlex.split`으로 나눈 뒤 셸 없이 실행하므로 `&&`, 파이프, `$VAR`
+확장을 처리하지 않습니다. `dbt deps && dbt compile`을 그대로 넣으면 `&&`도
+`dbt`의 인자로 전달됩니다.
+
+GitHub Action의 `compile-command` 입력은 현재 Bash의 `eval`로 실행하는
+**셸 명령문**입니다. CLI 설정 파일이나 환경 변수를 자동으로 읽는 입력이 아니며,
+CLI와 실행 방식도 다릅니다. 생성 워크플로의 `run:` 단계 역시 Bash 명령문입니다.
+
+두 환경에서 같은 동작을 원하면 실행 파일을 사용하세요. 예를 들어 프로젝트의
+`scripts/dbt-compile`을 다음과 같이 만들고 실행 권한을 줍니다.
+
+```sh
+#!/bin/sh
+set -eu
+if [ "${1:-}" = "--version" ]; then
+    exec dbt --version
+fi
+if [ -f packages.yml ] || [ -f dependencies.yml ]; then
+    dbt deps
+fi
+exec dbt compile "$@"
 ```
+
+```bash
+chmod +x scripts/dbt-compile
+dbt-plan run --compile-command ./scripts/dbt-compile
+```
+
+CLI는 작업 트리를 바꾸기 전에 명령의 실행 파일에 `--version`을 전달해 확인하므로
+위 분기가 필요합니다. 스크립트는 비교할 두 리비전 모두에 있어야 합니다.
+Action에는 `compile-command: ./scripts/dbt-compile`을 지정하고, 생성 워크플로는
+기준선과 현재 리비전 양쪽의 `dbt compile`을 이 스크립트 호출로 바꾸세요.
+`packages.yml` 또는 `dependencies.yml`로 패키지를 쓰는 프로젝트의 `dbt deps`는
+현재 자동 실행되지 않습니다. 리비전마다 패키지 구성이 달라질 수 있으므로 한 번만
+설치하지 말고 각각의 컴파일 전에 실행해야 합니다.
+
+[분석 범위와 한계](analysis-limits.md)도 확인하세요.

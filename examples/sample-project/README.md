@@ -1,41 +1,40 @@
-# Sample Project
+# Sample project
 
-dbt-plan을 체험해볼 수 있는 예제 프로젝트입니다. Snowflake 접속 없이 로컬에서 바로 실행됩니다.
-
-## 시나리오
-
-| 모델 | 변경 | 예상 결과 |
-|------|------|-----------|
-| `int_order_enriched` | `shipping_info`, `billing_info` 삭제, `shipping_city`, `billing_method` 추가 | **DESTRUCTIVE** (sync_all_columns + DROP COLUMN) |
-| `fct_daily_sales` | `total_sales` 컬럼 추가, `shipping_info` 참조 유지 | **SAFE** (append_new_columns) + **BROKEN_REF** cascade |
-| `dim_customers` | `platform` 컬럼 추가 | **SAFE** (table = CREATE OR REPLACE) |
-| `dim_publishers` | 새 모델 | **SAFE** (신규 테이블) |
-
-## 실행
+Run the static check against committed before/after SQL. No warehouse or dbt
+installation is needed.
 
 ```bash
-pip install dbt-plan  # or: pip install git+https://github.com/PresentJay/dbt-plan
-cd examples/sample-project
-bash run-example.sh
+pip install dbt-plan
+bash examples/sample-project/run-example.sh
 ```
 
-## 기대 출력
+`int_order_enriched` drops `shipping_info` and `billing_info` under
+`sync_all_columns`. `fct_daily_sales` still reads `shipping_info`; the resolver
+attributes that read to the changed relation. Its other inputs, `customer_id`
+and `revenue`, exist in both versions of the upstream SQL.
+
+`dim_customers` changes as a table, and `dim_publishers` is a new table.
+
+## Expected text output
 
 ```text
 dbt-plan -- 4 model(s) changed
+  dialect: snowflake (default; adapter: unknown)
+  baseline: unknown revision, unknown snapshot time
+
 
 DESTRUCTIVE  int_order_enriched (incremental, sync_all_columns)
-  ADD COLUMN  shipping_city
   ADD COLUMN  billing_method
-  DROP COLUMN  shipping_info
+  ADD COLUMN  shipping_city
   DROP COLUMN  billing_info
+  DROP COLUMN  shipping_info
   Downstream: dim_customers, fct_daily_sales (2 model(s))
-  >> BROKEN_REF  fct_daily_sales: references dropped column(s): shipping_info
-
-SAFE  dim_publishers (table)
-  CREATE OR REPLACE TABLE
+  >> BROKEN_REF  fct_daily_sales: reads dropped column(s): shipping_info
 
 SAFE  dim_customers (table)
+  CREATE OR REPLACE TABLE
+
+SAFE  dim_publishers (table)
   CREATE OR REPLACE TABLE
 
 SAFE  fct_daily_sales (incremental, append_new_columns)
@@ -44,17 +43,10 @@ SAFE  fct_daily_sales (incremental, append_new_columns)
 dbt-plan: 4 checked, 3 safe, 0 warning, 1 destructive, 1 cascade risk(s)
 ```
 
-Exit code: **1** (destructive — int_order_enriched에 DROP COLUMN + fct_daily_sales cascade broken ref)
+The check exits **1** for the destructive change. The demonstration script prints
+all three formats and reports that exit code; the script itself completes with 0.
+The committed [output.txt](output.txt) and the use-cases page are checked against
+a fresh CLI invocation by `tests/test_audit24_docs.py`.
 
-## 구조
-
-```text
-base/                              # snapshot (변경 전)
-├── compiled/*.sql
-└── manifest.json
-
-current/                           # 현재 상태 (변경 후)
-└── target/
-    ├── compiled/sample/models/*.sql
-    └── manifest.json
-```
+`base/` is the saved baseline; `current/target/` holds the current compiled SQL
+and manifest. These files illustrate analysis, not a runnable dbt project.

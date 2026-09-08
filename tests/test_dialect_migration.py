@@ -86,11 +86,8 @@ class TestBigQuerySQLParsedAsSnowflake:
         """SELECT * EXCEPT(internal_id) + SAFE_CAST on bigquery dialect."""
         sql = "SELECT * EXCEPT(internal_id), SAFE_CAST(revenue AS FLOAT64) AS revenue FROM t"
         result = extract_columns(sql, dialect="bigquery")
-        # BigQuery dialect should handle * EXCEPT and SAFE_CAST
-        assert result is not None, "BigQuery SQL should parse with bigquery dialect"
-        # Since there's a *, expect star-based result
-        # The * EXCEPT will trigger the star-except sentinel path
-        assert isinstance(result, list)
+        # Parsing succeeds, but unknown input columns make EXCEPT unresolved.
+        assert result is None
 
     def test_star_except_with_snowflake_dialect(self):
         """SELECT * EXCEPT is not Snowflake syntax — what happens?"""
@@ -332,8 +329,12 @@ class TestMixedDialectMigration:
         for name, sql in bigquery_specific.items():
             bq = extract_columns(sql, dialect="bigquery")
             sf = extract_columns(sql, dialect="snowflake")
-            # BigQuery should always work with its own dialect
-            assert bq is not None, f"BigQuery pattern '{name}' should parse with bigquery dialect"
+            if name == "star_except":
+                assert bq is None  # source schema is unknown even with the correct dialect
+            else:
+                assert bq is not None, (
+                    f"BigQuery pattern '{name}' should parse with bigquery dialect"
+                )
             # Snowflake may or may not parse — just don't crash
 
 
@@ -434,12 +435,11 @@ class TestStatsCommandDialect:
         result = extract_columns(sql, dialect="postgres")
         assert result == ["*"]
 
-    def test_star_except_detected_on_bigquery(self):
-        """SELECT * EXCEPT — only makes sense on bigquery."""
+    def test_star_except_without_source_refuses_on_bigquery(self):
+        """The correct dialect still needs the physical source's column list."""
         sql = "SELECT * EXCEPT(internal_id) FROM my_table"
         result = extract_columns(sql, dialect="bigquery")
-        assert result is not None
-        assert result == ["* except(internal_id)"]
+        assert result is None
 
     def test_stats_dialect_parameter_flow(self):
         """Simulate the stats command column extraction loop.

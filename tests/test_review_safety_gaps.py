@@ -40,9 +40,7 @@ def test_transformed_relation_does_not_reuse_input_columns(projection, suffix):
 @pytest.mark.parametrize("projection", ["*", "orders.*"])
 def test_qualified_relation_is_not_shadowed_by_cte(projection):
     sql = f"with orders as (select id from db.sch.orders) select {projection} from db.sch.orders"
-    assert extract_columns(sql, table_columns=lambda name: ["id", "amount"]) == (
-        ["id", "amount"] if projection == "*" else ["*"]
-    )
+    assert extract_columns(sql, table_columns=lambda name: ["id", "amount"]) == ["id", "amount"]
 
 
 @pytest.mark.parametrize("projection", ["*", "orders.*"])
@@ -54,8 +52,8 @@ def test_physical_relation_alias_does_not_select_an_unrelated_cte(projection, re
     columns = extract_columns(
         sql, table_columns=lambda name: {relation: ["id", "amount"]}.get(name)
     )
-    # Qualified physical stars remain unsupported; a plausible CTE list is never valid.
-    assert columns == (["id", "amount"] if projection == "*" else ["*"])
+    # Both star forms must use the physical relation, not the unrelated CTE.
+    assert columns == ["id", "amount"]
 
 
 @pytest.mark.parametrize("projection", ["*", "orders.*"])

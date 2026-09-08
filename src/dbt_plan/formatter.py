@@ -113,6 +113,8 @@ class CheckResult:
     # as safe (see #155).
     baseline_problem: str | None = None
 
+    analysis: dict = field(default_factory=dict)
+
     def is_acknowledged(self, pred: DDLPrediction) -> bool:
         return pred.model_name in self.acknowledge_models
 
@@ -152,6 +154,20 @@ def _has_nothing_to_report(result: CheckResult) -> bool:
     )
 
 
+def _analysis_header(result: CheckResult) -> str:
+    if not result.analysis:
+        return ""
+    info = result.analysis
+    baseline = info.get("baseline") or {}
+    revision = baseline.get("revision") or "unknown revision"
+    created = baseline.get("created_at") or "unknown snapshot time"
+    return (
+        f"  dialect: {info['dialect']} ({info.get('dialect_source', 'unknown')}; "
+        f"adapter: {info.get('adapter_type') or 'unknown'})\n"
+        f"  baseline: {revision}, {created}\n"
+    )
+
+
 def format_text(result: CheckResult, *, color: bool | None = None) -> str:
     """Format result for terminal output.
 
@@ -167,10 +183,15 @@ def format_text(result: CheckResult, *, color: bool | None = None) -> str:
         return f"{c}{_BOLD}{text}{_RESET}"
 
     if _has_nothing_to_report(result):
-        return "dbt-plan -- no model changes detected"
+        return "dbt-plan -- no model changes detected" + (
+            "\n" + _analysis_header(result).rstrip() if result.analysis else ""
+        )
 
     sorted_preds = sorted(result.predictions, key=lambda p: _SAFETY_ORDER.get(p.safety, 9))
     lines = [f"dbt-plan -- {len(result.predictions)} model(s) changed", ""]
+
+    if result.analysis:
+        lines.insert(1, _analysis_header(result))
 
     for pred in sorted_preds:
         mat_info = pred.materialization
@@ -260,10 +281,15 @@ def _summary_line(result: CheckResult) -> str:
 def format_github(result: CheckResult) -> str:
     """Format result as GitHub-flavored markdown."""
     if _has_nothing_to_report(result):
-        return "### dbt-plan -- no model changes detected"
+        return "### dbt-plan -- no model changes detected" + (
+            "\n\n" + _analysis_header(result).rstrip() if result.analysis else ""
+        )
 
     sorted_preds = sorted(result.predictions, key=lambda p: _SAFETY_ORDER.get(p.safety, 9))
     lines = [f"### dbt-plan -- {len(result.predictions)} model(s) changed", ""]
+
+    if result.analysis:
+        lines.insert(1, _analysis_header(result))
 
     for pred in sorted_preds:
         icon = _SAFETY_ICON.get(pred.safety, "")
@@ -397,4 +423,6 @@ def format_json(result: CheckResult) -> str:
     }
     if result.baseline_problem:
         output["baseline_problem"] = result.baseline_problem
+    if result.analysis:
+        output["analysis"] = result.analysis
     return json.dumps(output, indent=2)

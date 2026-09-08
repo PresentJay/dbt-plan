@@ -102,7 +102,7 @@ class TestReadingFixtures:
             ("ref('stg_orders')", "stg_orders"),
             ('ref("stg_orders")', "stg_orders"),
             ("ref('a_package', 'stg_orders')", "stg_orders"),
-            ("ref('stg_orders', v=2)", "stg_orders"),
+            ("ref('stg_orders', v=2)", "stg_orders_v2"),
             ("  ref( 'stg_orders' ) ", "stg_orders"),
             # Sources are outside dbt-plan's scope, and it does not diff them.
             ("source('raw', 'orders')", ""),

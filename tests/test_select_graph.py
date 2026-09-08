@@ -68,11 +68,11 @@ class TestGraphOperators:
     def test_a_leaf_with_a_plus_is_just_itself(self):
         assert _select("rpt_top_books+") == ({"rpt_top_books"}, [])
 
-    def test_a_name_not_in_the_manifest_still_selects_itself(self):
-        """Same as before: it matches nothing and the caller warns about that."""
-        assert _select("typo_model+") == ({"typo_model"}, [])
+    def test_a_name_not_in_the_manifest_is_rejected(self):
+        """Typos must fail rather than silently select no models."""
+        assert _select("typo_model+") == (set(), ["typo_model+"])
 
-    @pytest.mark.parametrize("term", ["", "  ", "+", "++"])
+    @pytest.mark.parametrize("term", ["", "  "])
     def test_empty_terms_are_skipped(self, term):
         assert _select(term) == (set(), [])
 

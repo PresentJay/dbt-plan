@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import ast
 import json
 import re
 from collections import deque
@@ -70,8 +71,9 @@ class UnitTestNode:
 class DataTestNode:
     """A dbt data test: generic (`not_null`) or singular (a `.sql` file in `tests/`).
 
-    A generic test names its column in the manifest, so `columns_by_model` answers
-    it outright. A singular test, and a generic one with no `column_name` such as
+    A generic test names its primary column in the manifest. Predicate arguments
+    can read additional columns, recorded by `requires_sql`. A singular test, and
+    a generic one with no `column_name` such as
     `dbt_utils.expression_is_true`, names nothing there -- for those the models it
     depends on are recorded instead, and the caller reads its compiled SQL.
     """
@@ -80,6 +82,7 @@ class DataTestNode:
     name: str  # "not_null_stg_orders_customer_id"
     columns_by_model: dict[str, frozenset[str]] = field(default_factory=dict)
     depends_on_models: tuple[str, ...] = ()
+    requires_sql: bool = False  # arbitrary test predicates may read other columns
 
 
 def build_data_test_index(manifest: dict) -> dict[str, DataTestNode]:
@@ -122,6 +125,14 @@ def build_data_test_index(manifest: dict) -> dict[str, DataTestNode]:
             name=node.get("name") or node_id.split(".")[-1],
             columns_by_model={model: frozenset(cols) for model, cols in columns.items()},
             depends_on_models=depends,
+            requires_sql=bool(
+                config.get("where")
+                or any(
+                    key not in {"model", "column_name", "to", "field", "values", "quote"}
+                    for key in (metadata.get("kwargs") or {})
+                )
+                or metadata.get("namespace")
+            ),
         )
     return index
 
@@ -205,7 +216,42 @@ def load_manifest(manifest_path: str | Path) -> dict:
         "exposures": full.get("exposures") or {},
         "source_dirs": _source_dirs(full),
     }
+    result.update(_source_provenance(full))
     del full
+    return result
+
+
+def _source_provenance(manifest: dict) -> dict:
+    """Keep authored text for detecting edits inside filesystem timestamp tolerance.
+
+    source_files maps project-relative node paths to their exact raw_code string.
+    source_macros maps macro file paths to all macro_sql blocks in that file;
+    blocks are fragments, so callers must check containment, not file equality.
+    Missing text is omitted rather than invented for older/synthetic manifests.
+    """
+    project = (manifest.get("metadata") or {}).get("project_name")
+    files: dict[str, str] = {}
+    macros: dict[str, list[str]] = {}
+    for section, text_key in (("nodes", "raw_code"), ("macros", "macro_sql")):
+        for nid, node in (manifest.get(section) or {}).items():
+            parts = nid.split(".")
+            if project and len(parts) > 1 and parts[1] != project:
+                continue
+            path, content = node.get("original_file_path"), node.get(text_key)
+            if not isinstance(path, str) or not path or not isinstance(content, str):
+                continue
+            if section == "nodes":
+                # Generic tests point at YAML but raw_code is generated SQL, not
+                # the YAML file's contents. Only source-code files can be compared.
+                if PurePosixPath(path).suffix.lower() in {".sql", ".py"}:
+                    files[path] = content
+            else:
+                macros.setdefault(path, []).append(content)
+    result: dict = {}
+    if files:
+        result["source_files"] = files
+    if macros:
+        result["source_macros"] = macros
     return result
 
 
@@ -268,22 +314,59 @@ def _fixture_columns(block: dict) -> tuple[frozenset[str] | None, str]:
     return None, f"is in '{fmt}' format, which dbt-plan does not read"
 
 
-_REF_CALL = re.compile(r"^\s*ref\s*\((.*)\)\s*$", re.DOTALL)
-_QUOTED = re.compile(r"""['\"]([^'\"]+)['\"]""")
-
-
 def _input_model(input_expr: str) -> str:
     """The model a unit test's `given` input stands in for, or "" if it is not one.
 
-    dbt stores the literal Jinja call: `ref('stg_orders')`, or with a package,
-    `ref('a_package', 'stg_orders')` -- the model is the last quoted name either
-    way. `source(...)` inputs return "", since sources are outside dbt-plan's scope.
+    dbt stores the literal Jinja call, optionally with a package and version.
+    Preserve explicit versions in the compiled key. `source(...)` inputs return
+    "", since sources are outside dbt-plan's scope.
     """
-    call = _REF_CALL.match(input_expr or "")
-    if not call:
+    return _resolve_input_model(input_expr, {}, {})
+
+
+def _resolve_input_model(input_expr: str, manifest: dict, test_node: dict) -> str:
+    """Resolve ref version/package through dependencies to the actual compiled name."""
+    try:
+        call = ast.parse(input_expr.strip(), mode="eval").body
+        if not isinstance(call, ast.Call) or not isinstance(call.func, ast.Name):
+            return ""
+        if call.func.id != "ref" or not 1 <= len(call.args) <= 2:
+            return ""
+        args = [ast.literal_eval(arg) for arg in call.args]
+        if not all(isinstance(arg, str) for arg in args):
+            return ""
+        keywords = {kw.arg: ast.literal_eval(kw.value) for kw in call.keywords}
+    except (SyntaxError, ValueError, TypeError):
         return ""
-    names = _QUOTED.findall(call.group(1))
-    return names[-1] if names else ""
+    name = args[-1]
+    package = args[0] if len(args) == 2 else None
+    version = keywords.get("v", keywords.get("version"))
+    nodes = manifest.get("nodes") or {}
+    dependencies = (test_node.get("depends_on") or {}).get("nodes") or []
+    candidates = []
+    for nid in dependencies:
+        node = nodes.get(nid) or {}
+        parts = nid.split(".")
+        if not nid.startswith("model.") or node.get("name") != name:
+            continue
+        if package and parts[1] != package:
+            continue
+        if version is not None and str(node.get("version")) != str(version):
+            continue
+        candidates.append((nid, node))
+    if len(candidates) > 1 and version is None:
+        latest = [
+            (nid, node)
+            for nid, node in candidates
+            if node.get("latest_version") is not None
+            and str(node.get("version")) == str(node["latest_version"])
+        ]
+        if len(latest) == 1:
+            candidates = latest
+    if len(candidates) == 1:
+        nid, node = candidates[0]
+        return PurePosixPath(node["path"]).stem if node.get("path") else model_key(nid)
+    return f"{name}_v{version}" if version is not None else name
 
 
 def build_unit_test_index(manifest: dict) -> dict[str, UnitTestNode]:
@@ -306,7 +389,7 @@ def build_unit_test_index(manifest: dict) -> dict[str, UnitTestNode]:
             )
         )
         for given in node.get("given") or []:
-            input_model = _input_model(given.get("input") or "")
+            input_model = _resolve_input_model(given.get("input") or "", manifest, node)
             if not input_model:
                 continue  # a source, or something that is not a ref()
             given_cols, given_reason = _fixture_columns(given)

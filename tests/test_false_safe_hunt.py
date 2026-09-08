@@ -1160,13 +1160,13 @@ class TestSnapshotAlwaysWarning:
 # Attack Vector 19: incremental + sync_all_columns column reorder
 #
 # Same column set but different order.
-# sync_all_columns may reorder columns (drop + re-add).
+# sync_all_columns compares column names; projection order alone causes no DDL.
 # ===================================================================
 class TestSyncColumnReorder:
-    """sync_all_columns detects column reordering."""
+    """sync_all_columns ignores projection order when column names are unchanged."""
 
-    def test_reorder_detected(self):
-        """CORRECTLY CAUGHT: column reorder with sync_all_columns -> WARNING."""
+    def test_reorder_is_safe(self):
+        """Projection order alone does not change dbt's column set or emit DDL."""
         result = predict_ddl(
             model_name="m",
             materialization="incremental",
@@ -1174,8 +1174,8 @@ class TestSyncColumnReorder:
             base_columns=["a", "b", "c"],
             current_columns=["c", "b", "a"],
         )
-        assert result.safety == Safety.WARNING
-        assert any("REORDER" in op.operation for op in result.operations)
+        assert result.safety == Safety.SAFE
+        assert result.operations == []
 
     def test_no_reorder_when_same_order(self):
         """Same order -> SAFE, no reorder warning."""

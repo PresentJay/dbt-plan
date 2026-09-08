@@ -25,6 +25,9 @@ diff when it flags something worth looking at.
 
 ```
 dbt-plan -- 4 model(s) changed
+  dialect: snowflake (default; adapter: unknown)
+  baseline: unknown revision, unknown snapshot time
+
 
 DESTRUCTIVE  int_order_enriched (incremental, sync_all_columns)
   ADD COLUMN  billing_method
@@ -32,9 +35,12 @@ DESTRUCTIVE  int_order_enriched (incremental, sync_all_columns)
   DROP COLUMN  billing_info
   DROP COLUMN  shipping_info
   Downstream: dim_customers, fct_daily_sales (2 model(s))
-  >> BROKEN_REF  fct_daily_sales: references dropped column(s): shipping_info
+  >> BROKEN_REF  fct_daily_sales: reads dropped column(s): shipping_info
 
 SAFE  dim_customers (table)
+  CREATE OR REPLACE TABLE
+
+SAFE  dim_publishers (table)
   CREATE OR REPLACE TABLE
 
 SAFE  fct_daily_sales (incremental, append_new_columns)
@@ -221,7 +227,7 @@ output is designed to make the risk legible to someone in that position:
 🔴 **DESTRUCTIVE** `int_order_enriched` (incremental, sync_all_columns)
 - `DROP COLUMN` shipping_info
 - Downstream: dim_customers, fct_daily_sales (2 model(s))
-- 🔴 **BROKEN_REF** `fct_daily_sales`: references dropped column(s): shipping_info
+- 🔴 **BROKEN_REF** `fct_daily_sales`: reads dropped column(s): shipping_info
 ```
 
 ---
@@ -300,10 +306,13 @@ WARNING: target/ may be out of date -- models/staging/stg_orders.sql is newer th
 the manifest. Recompile, or this report describes code you no longer have.
 ```
 
-That is a source mtime against the manifest's, so it catches an edit that was never
-compiled and it does not catch a file **deleted** since the compile -- a deletion
-leaves no mtime behind. Chain the commands (`dbt compile && dbt-plan check`) or use
-`dbt-plan run`, which compiles and stops on a failure.
+When the source checkout is available, dbt-plan also compares model and macro
+content with the manifest and uses available compilation evidence to identify
+stale or incomplete artifacts. Timestamp checks remain a fallback when stronger
+evidence is unavailable. An artifact-only checkout cannot validate source edits
+or deletions it was not given. Chain the commands (`dbt compile && dbt-plan check`)
+or use `dbt-plan run`, which compiles and stops on a failure. See
+[analysis limits](analysis-limits.md) for the input boundary.
 
 For a genuine false positive you have accepted, `--acknowledge` keeps it in the
 report while letting the build through; `ignore_models` hides it entirely.

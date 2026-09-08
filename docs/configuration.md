@@ -293,6 +293,7 @@ are an absent `on_schema_change` and an operation without a column.
 | Risk | Severity | Meaning |
 |------|----------|---------|
 | `broken_ref` | destructive | Downstream SQL reads or references a removed column. |
+| `contract_violation` | warning | A downstream enforced contract fails or its SQL columns cannot be established. |
 | `build_failure` | warning | An incremental downstream model uses `on_schema_change=fail` after an upstream schema change. |
 | `unit_test_failure` | warning | A unit-test fixture names a removed column. |
 | `unit_test_unreadable` | warning | A unit-test fixture cannot be inspected well enough to decide. |
@@ -304,3 +305,22 @@ are an absent `on_schema_change` and an operation without a column.
 Consumers should use `models[].safety` for the final severity and tolerate new
 `risk` strings in minor releases. Treat an unknown risk as a warning that needs
 review; never interpret it as safe.
+
+### Analysis inputs
+
+CLI JSON reports include `analysis`: `dialect`, `dialect_source`, `adapter_type`,
+`baseline` (`revision`, `created_at`, and, for new snapshots, `dbt_plan_version`),
+`selection`, and `unsupported_languages`. Missing legacy provenance is explicitly
+`null`; the report does not guess a revision. Git revision records the checkout
+where the snapshot was taken, not proof that compiled artifacts came from a clean commit.
+Text and GitHub output show the dialect and baseline even when there are no changes.
+
+`agent-setup --file CLAUDE.md` writes to an explicit instruction file instead of
+`AGENTS.md`; nested paths such as `.cursor/rules/dbt-plan.mdc` work too. Existing
+instructions are preserved and a duplicate dbt-plan section is refused.
+
+Selection supports model names and leading/trailing `+`. Unsupported operators
+or unknown names are execution errors, never an empty successful check. Missing
+or stale models outside the selection and its upstream/downstream graph do not
+block that selection; shared macro, project, and schema-file uncertainty still does.
+An unreadable baseline remains a project-wide refusal.

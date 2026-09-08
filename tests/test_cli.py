@@ -684,8 +684,8 @@ class TestSelectFilter:
         model_names = sorted(m["model_name"] for m in data["models"])
         assert model_names == ["m1", "m3"]
 
-    def test_select_no_match_returns_empty(self, tmp_path, capsys):
-        """--select with non-existent model name results in empty output."""
+    def test_select_unknown_model_is_an_error(self, tmp_path, capsys):
+        """An unknown name must not produce an empty successful report."""
         manifest = {
             "nodes": {
                 "model.p.m1": {
@@ -705,10 +705,10 @@ class TestSelectFilter:
 
         args = _make_check_args(project_dir, fmt="json", select="nonexistent")
         exit_code = _do_check(args)
-        assert exit_code == 0
+        assert exit_code == 3
         captured = capsys.readouterr()
-        data = json.loads(captured.out)
-        assert data["summary"]["total"] == 0
+        assert not captured.out
+        assert "does not support nonexistent" in captured.err
 
 
 class TestIgnoreModels:
@@ -1235,7 +1235,7 @@ class TestSelectWarning:
         args = _make_check_args(project_dir, select="nonexistent")
         _do_check(args)
         err = capsys.readouterr().err
-        assert "matched no changed models" in err
+        assert "does not support nonexistent" in err
 
 
 class TestTargetDir:

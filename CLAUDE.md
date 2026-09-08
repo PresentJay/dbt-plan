@@ -41,6 +41,7 @@ dbt-plan은 `dbt run` 전에 위험을 경고하는 **정적 분석 도구**다.
 - `dbt run` 시뮬레이션 — 런타임 동작은 범위 밖
 - Warehouse 접속 — 순수 파일 분석만
 - `full_refresh` 모드 판정 — 런타임 플래그는 CI 환경에서 결정
+- Python 모델의 DataFrame 컬럼 분석 — 변경은 별도 REVIEW REQUIRED로 표시
 - `seed`/`source` 변경 감지 — 컴파일 SQL 기반 도구
 - `pre_hook`/`post_hook` DDL 분석 — 복잡성 대비 가치 낮음
 
@@ -104,3 +105,5 @@ pytest tests/test_columns.py # specific module
 ```
 
 Test fixtures in `tests/fixtures/` contain real-world compiled SQL patterns.
+
+분석 한계와 어댑터·Mesh·seed 경계는 [docs/analysis-limits.md](docs/analysis-limits.md)를 참고한다.
