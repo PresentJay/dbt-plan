@@ -139,12 +139,13 @@ def _resolve_star_columns(
             if len(matches) != 1:
                 return None
             table = matches[0]
-            source = table.name
         else:
             table = _sole_source(select)
             if table is None:
                 return None
-            source = table.alias_or_name
+        # An alias identifies this source in the SELECT, not a different CTE.
+        # Both star forms must resolve CTE identity from the relation name.
+        source = table.name
 
         if source in seen:
             return None
