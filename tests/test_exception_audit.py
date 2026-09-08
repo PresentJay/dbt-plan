@@ -368,7 +368,7 @@ class TestCliCheckExceptionHandling:
             dialect="snowflake",
             select=None,
         )
-        # manifest.json doesn't exist -> exits with 2
+        # manifest.json doesn't exist -> execution error 3
         exit_code = _do_check(args)
         assert exit_code == 3
 
@@ -376,7 +376,7 @@ class TestCliCheckExceptionHandling:
 class TestCliCheckManifestUnicodeError:
     """Verify cli.py _do_check now handles UnicodeDecodeError from manifest."""
 
-    def test_binary_manifest_returns_exit_2(self, tmp_path):
+    def test_binary_manifest_returns_exit_3(self, tmp_path):
         """Binary manifest with invalid UTF-8 -> exit 3 (not crash)."""
         import argparse
 

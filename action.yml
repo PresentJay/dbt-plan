@@ -120,6 +120,12 @@ runs:
           2) verdict=warning ;;
           *) echo "::error::dbt-plan exited $code"; cat "$report"; exit "$code" ;;
         esac
+        # Older package versions use verdict codes for errors too. Require a
+        # report before applying policy, including when version pins 0.15.x.
+        if ! python -c 'import json, sys; data = json.load(open(sys.argv[1], encoding="utf-8")); sys.exit(not (isinstance(data, dict) and isinstance(data.get("summary"), dict) and isinstance(data.get("models"), list)))' "$report" 2>/dev/null; then
+          echo "::error::dbt-plan did not produce a completed JSON report (exit $code)"
+          exit 3
+        fi
         if [ "$SUMMARY" = "true" ]; then
           dbt-plan check --target-dir "$TARGET_DIR" --dialect "$DIALECT" --format github >> "$GITHUB_STEP_SUMMARY" || true
         fi

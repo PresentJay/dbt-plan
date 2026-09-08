@@ -131,8 +131,12 @@ class TestSecrets:
             assert key in ACTION_TEXT
 
 
-@pytest.mark.parametrize("code", [0, 1, 2, 3])
-def test_check_step_handles_verdicts_under_github_errexit(tmp_path, code):
+@pytest.mark.parametrize(
+    "code,report,expected",
+    [(code, '{"summary": {}, "models": []}', 0 if code < 3 else 3) for code in range(4)]
+    + [(code, report, 3) for code in (0, 1, 2) for report in ("", "not JSON", "{}")],
+)
+def test_check_step_handles_verdicts_under_github_errexit(tmp_path, code, report, expected):
     """Execute the actual check shell block with GitHub's bash -e semantics."""
     import os
     import shutil
@@ -146,20 +150,22 @@ def test_check_step_handles_verdicts_under_github_errexit(tmp_path, code):
     output = tmp_path / "outputs"
     env = {
         **os.environ,
+        "PATH": str(Path(sys.executable).parent) + os.pathsep + os.environ.get("PATH", ""),
         "RUNNER_TEMP": tmp_path.as_posix(),
         "TARGET_DIR": "target",
         "DIALECT": "snowflake",
         "SUMMARY": "false",
         "GITHUB_OUTPUT": output.as_posix(),
     }
-    stub = f"dbt-plan() {{ printf '%s\\n' '{{}}'; return {code}; }}\n"
+    stub = f"dbt-plan() {{ printf '%s\\n' {shlex.quote(report)}; return {code}; }}\n"
     proc = subprocess.run(
         [bash, "--noprofile", "--norc", "-e", "-o", "pipefail", "-c", stub + script],
         env=env,
         capture_output=True,
         text=True,
+        timeout=30,
     )
-    if code == 3:
+    if expected == 3:
         assert proc.returncode == 3
         assert "::error::" in proc.stdout
         assert not output.exists()

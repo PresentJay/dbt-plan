@@ -35,6 +35,8 @@ The CLI does not yet provide `--fail-on` (#35). Its future default must describe
 today's warning policy, and no policy option may suppress an execution failure.
 The Action's `fail-on: destructive|warning|never` applies only after a completed
 check; code 3 fails the Check step before the Gate step, even for `never`. The Action
+also requires a JSON report with summary/model data before accepting a verdict, so
+legacy package errors that exit 1 or 2 without a report still fail the step. The Action
 continues to recognize standard verdict codes 0/1/2; custom warning codes outside
 those values fail its Check step. Custom policies can change the exit status, so
 inspect the report's findings rather than treating code 0 as proof of safety.
