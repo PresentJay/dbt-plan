@@ -18,9 +18,12 @@ BRANCH="main"
 CHECK_ONLY=false
 [[ "${1:-}" == "--check" ]] && CHECK_ONLY=true
 
-# Every job in ci.yml. A name here that does not exist as a job blocks all
-# merges permanently, so keep this list in step with .github/workflows/ci.yml.
-REQUIRED_CHECKS='["lint","minimum-deps","test (3.10)","test (3.11)","test (3.12)","test (3.13)","test (3.14)"]'
+# Every job in ci.yml, including optional-dependency integrations, built package
+# validation, and every supported Windows/Python combination. These are all
+# required: passing the dependency-light Linux matrix alone is not enough.
+# tests/test_repo_settings.py checks the expanded job names against this list;
+# a required name with no matching job would block every merge.
+REQUIRED_CHECKS='["lint","minimum-deps","test (3.10)","test (3.11)","test (3.12)","test (3.13)","test (3.14)","integrations","packaging","test-windows (3.10)","test-windows (3.11)","test-windows (3.12)","test-windows (3.13)","test-windows (3.14)"]'
 
 # Third-party actions are allowed by explicit pattern only. release.yml is the
 # only workflow holding PYPI_API_TOKEN, so anything running beside it is a
