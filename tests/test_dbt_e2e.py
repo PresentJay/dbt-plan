@@ -771,6 +771,15 @@ class TestAFailedCompileIsNotACleanRun:
         _dbt_compile(dbt_project)
         _dbt_plan(["snapshot", "--project-dir", str(dbt_project)])
 
+        # Exercise staleness beyond the documented filesystem tolerance.
+        # Fast Linux runners can edit within the one-second tolerance; relying
+        # on subprocess overhead made this test machine-speed dependent.
+        import os
+
+        manifest_path = dbt_project / "target" / "manifest.json"
+        stamp = manifest_path.stat().st_mtime - 5
+        os.utime(manifest_path, (stamp, stamp))
+
         # Drop a column, and break the parse so nothing recompiles.
         (dbt_project / "models" / "staging" / "stg_orders.sql").write_text(
             _STG_ORDERS_WITHOUT_CUSTOMER_ID
