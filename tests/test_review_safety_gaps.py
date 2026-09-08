@@ -79,6 +79,26 @@ def test_cte_alias_resolves_the_source_name_and_preserves_casts(projection):
     assert extract_cast_types(sql) == {"id": "INT"}
 
 
+@pytest.mark.parametrize("projection", ["*", "orders.*"])
+@pytest.mark.parametrize("rename_at", ["source", "cte"])
+def test_aliased_cte_column_renaming_is_not_ignored(projection, rename_at):
+    cte_names = "(order_id, total)" if rename_at == "cte" else ""
+    source_names = "(order_id, total)" if rename_at == "source" else ""
+    sql = (
+        f"with src{cte_names} as (select cast(id as int) as id, amount from raw_input) "
+        f"select {projection} from src as orders{source_names}"
+    )
+    assert extract_columns(sql, dialect="duckdb") == ["*"]
+    assert extract_cast_types(sql, dialect="duckdb") is None
+
+
+def test_physical_alias_column_renaming_does_not_reuse_input_schema():
+    sql = "select * from actual_orders as orders(order_id, total)"
+    assert extract_columns(sql, dialect="duckdb", table_columns=lambda name: ["id", "amount"]) == [
+        "*"
+    ]
+
+
 def test_physical_alias_does_not_inherit_an_unrelated_cte_cast():
     sql = (
         "with orders as (select cast(id as int) as id from raw_input) "
