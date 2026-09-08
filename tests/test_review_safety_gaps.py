@@ -45,6 +45,102 @@ def test_qualified_relation_is_not_shadowed_by_cte(projection):
     )
 
 
+@pytest.mark.parametrize("projection", ["*", "orders.*"])
+@pytest.mark.parametrize("relation", ["actual_orders", "db.sch.actual_orders"])
+def test_physical_relation_alias_does_not_select_an_unrelated_cte(projection, relation):
+    sql = (
+        f"with orders as (select id from raw_input) select {projection} from {relation} as orders"
+    )
+    columns = extract_columns(
+        sql, table_columns=lambda name: {relation: ["id", "amount"]}.get(name)
+    )
+    # Qualified physical stars remain unsupported; a plausible CTE list is never valid.
+    assert columns == (["id", "amount"] if projection == "*" else ["*"])
+
+
+@pytest.mark.parametrize("projection", ["*", "orders.*"])
+def test_unknown_physical_alias_cannot_borrow_cte_columns_or_casts(projection):
+    sql = (
+        "with orders as (select cast(id as int) as id from raw_input) "
+        f"select {projection} from actual_orders as orders"
+    )
+    assert extract_columns(sql) == ["*"]
+    assert extract_cast_types(sql) is None
+
+
+@pytest.mark.parametrize("projection", ["*", "orders.*"])
+def test_cte_alias_resolves_the_source_name_and_preserves_casts(projection):
+    sql = (
+        "with actual_orders as (select cast(id as int) as id, amount from raw_input), "
+        "orders as (select wrong_column from raw_input) "
+        f"select {projection} from actual_orders as orders"
+    )
+    assert extract_columns(sql) == ["id", "amount"]
+    assert extract_cast_types(sql) == {"id": "INT"}
+
+
+@pytest.mark.parametrize("projection", ["*", "orders.*"])
+@pytest.mark.parametrize("rename_at", ["source", "cte"])
+def test_aliased_cte_column_renaming_is_not_ignored(projection, rename_at):
+    cte_names = "(order_id, total)" if rename_at == "cte" else ""
+    source_names = "(order_id, total)" if rename_at == "source" else ""
+    sql = (
+        f"with src{cte_names} as (select cast(id as int) as id, amount from raw_input) "
+        f"select {projection} from src as orders{source_names}"
+    )
+    assert extract_columns(sql, dialect="duckdb") == ["*"]
+    assert extract_cast_types(sql, dialect="duckdb") is None
+
+
+def test_physical_alias_column_renaming_does_not_reuse_input_schema():
+    sql = "select * from actual_orders as orders(order_id, total)"
+    assert extract_columns(sql, dialect="duckdb", table_columns=lambda name: ["id", "amount"]) == [
+        "*"
+    ]
+
+
+def test_physical_alias_does_not_inherit_an_unrelated_cte_cast():
+    sql = (
+        "with orders as (select cast(id as int) as id from raw_input) "
+        "select * from actual_orders as orders"
+    )
+    assert (
+        extract_cast_types(
+            sql, table_columns=lambda name: {"actual_orders": ["id", "amount"]}.get(name)
+        )
+        == {}
+    )
+
+
+def test_cte_alias_collision_does_not_hide_a_physical_column_drop():
+    sql = "with orders as (select id from raw_input) select * from actual_orders as orders"
+    base = extract_columns(
+        sql, table_columns=lambda name: {"actual_orders": ["id", "amount"]}.get(name)
+    )
+    current = extract_columns(sql, table_columns=lambda name: {"actual_orders": ["id"]}.get(name))
+    verdict = predict_ddl("orders", "incremental", "sync_all_columns", base, current)
+    assert verdict.safety == Safety.DESTRUCTIVE
+    assert any(
+        op.operation == "DROP COLUMN" and op.column == "amount" for op in verdict.operations
+    )
+
+
+def test_physical_alias_columns_match_duckdb():
+    duckdb = pytest.importorskip("duckdb")
+    sql = "with orders as (select id from raw_input) select * from actual_orders as orders"
+    with duckdb.connect(":memory:") as connection:
+        connection.execute("create table raw_input (id integer)")
+        connection.execute("create table actual_orders (id integer, amount integer)")
+        actual = [column[0] for column in connection.execute(sql).description]
+    assert actual == ["id", "amount"]
+    assert (
+        extract_columns(
+            sql, dialect="duckdb", table_columns=lambda name: {"actual_orders": actual}.get(name)
+        )
+        == actual
+    )
+
+
 @pytest.mark.parametrize("current", [["id"], ["id", "tax", "extra"]])
 def test_incremental_ignore_warns_on_column_changes(current):
     result = predict_ddl("orders", "incremental", "ignore", ["id", "tax"], current)

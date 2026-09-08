@@ -139,18 +139,25 @@ def _resolve_star_columns(
             if len(matches) != 1:
                 return None
             table = matches[0]
-            source = table.name
         else:
             table = _sole_source(select)
             if table is None:
                 return None
-            source = table.alias_or_name
+        # An alias identifies this source in the SELECT, not a different CTE.
+        # Both star forms must resolve CTE identity from the relation name.
+        source = table.name
+        if table.alias_column_names:
+            # FROM source AS alias(new_names) changes the output schema.
+            return None
 
         if source in seen:
             return None
 
         body = ctes.get(source) if table is None or not (table.db or table.catalog) else None
         if body is not None:
+            if isinstance(body.parent, exp.CTE) and body.parent.alias_column_names:
+                # WITH source(new_names) AS (...) also renames the body output.
+                return None
             if not isinstance(body, exp.Select):
                 # A set operation or recursive CTE, whose column list is not a
                 # straight read of one SELECT's projections.
