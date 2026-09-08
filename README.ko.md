@@ -80,7 +80,7 @@ dbt-plan check --select model1   # 특정 모델만 체크
 | view | 무관 | `CREATE OR REPLACE VIEW` | SAFE |
 | ephemeral | 무관 | (물리 오브젝트 없음) | SAFE |
 | snapshot | 무관 | REVIEW REQUIRED | WARNING |
-| incremental | ignore | DDL 없음 | SAFE |
+| incremental | ignore | 스키마 DDL 없음; 기존 테이블의 컬럼 변경은 빌드 실패 가능 | 컬럼 변경·분석 불가 시 WARNING |
 | incremental | fail | 빌드 실패 | WARNING |
 | incremental | append_new_columns | `ADD COLUMN`만 | SAFE |
 | incremental | sync_all_columns | `ADD + DROP COLUMN` | 컬럼 삭제 시 DESTRUCTIVE |

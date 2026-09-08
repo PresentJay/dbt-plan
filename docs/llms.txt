@@ -43,7 +43,7 @@ Safety is decided by materialization crossed with `on_schema_change`:
 
 - table or view, any setting: `CREATE OR REPLACE` — safe
 - ephemeral: no physical object — safe
-- incremental + `ignore`: no DDL — safe
+- incremental + `ignore`: no schema DDL; changed or unknown columns require review (existing targets may fail)
 - incremental + `append_new_columns`: ADD COLUMN only — safe
 - incremental + `fail`: build failure on schema drift — warning
 - incremental + `sync_all_columns`: ADD and DROP COLUMN — destructive if a column was removed

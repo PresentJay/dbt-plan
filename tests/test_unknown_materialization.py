@@ -95,7 +95,7 @@ class TestAnExplicitSettingIsStillHonoured:
         )
 
     def test_an_explicit_ignore_is_taken_at_its_word(self):
-        assert verdict("custom_materialization", osc="ignore").safety == Safety.SAFE
+        assert verdict("custom_materialization", osc="ignore").safety == Safety.WARNING
 
     def test_but_an_absent_setting_is_not_read_as_ignore(self):
         """The exact false safe: None became "ignore" became SAFE."""
@@ -120,7 +120,7 @@ class TestKnownMaterializationsAreUntouched:
 
     def test_incremental_still_reads_on_schema_change(self):
         assert verdict("incremental", osc="sync_all_columns").safety == Safety.DESTRUCTIVE
-        assert verdict("incremental", osc="ignore").safety == Safety.SAFE
+        assert verdict("incremental", osc="ignore").safety == Safety.WARNING
 
     def test_a_removed_model_is_still_destructive_whatever_it_was(self):
         result = predict_ddl("m", "materialized_view", None, ["a"], None, status="removed")

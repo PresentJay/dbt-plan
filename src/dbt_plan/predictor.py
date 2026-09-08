@@ -225,6 +225,27 @@ def predict_ddl(
     # Incremental: depends on on_schema_change
     osc = on_schema_change or "ignore"
 
+    if osc == "ignore" and status != "added":
+        if (
+            base_columns is None
+            or current_columns is None
+            or any(col.startswith("*") for col in [*base_columns, *current_columns])
+        ):
+            operation = "REVIEW REQUIRED: cannot determine incremental schema changes"
+        elif set(base_columns) - set(current_columns):
+            operation = "BUILD FAILURE RISK: removed columns remain in the target under on_schema_change=ignore"
+        elif set(current_columns) - set(base_columns):
+            operation = "REVIEW REQUIRED: added columns are not written to the target under on_schema_change=ignore; downstream readers may fail"
+        else:
+            operation = "NO DDL"
+        return DDLPrediction(
+            model_name=model_name,
+            materialization=materialization,
+            on_schema_change=osc,
+            safety=Safety.SAFE if operation == "NO DDL" else Safety.WARNING,
+            operations=[DDLOperation(operation)],
+        )
+
     if osc == "ignore":
         return DDLPrediction(
             model_name=model_name,

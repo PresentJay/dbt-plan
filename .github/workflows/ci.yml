@@ -80,7 +80,7 @@ jobs:
         with:
           python-version: "3.12"
       - run: pip install -e ".[test,dbt,mcp]" dbt-core==1.11.7 dbt-duckdb==1.10.1
-      - run: python .github/scripts/required-tests.py tests/test_dbt_e2e.py tests/test_mcp_server.py -q
+      - run: python .github/scripts/required-tests.py tests/test_dbt_e2e.py tests/test_mcp_server.py tests/test_review_safety_gaps.py -q
 
   packaging:
     runs-on: ubuntu-latest

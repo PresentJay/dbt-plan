@@ -344,6 +344,14 @@ class TestJourney4AddNewModel:
             manifest=manifest,
         )
 
+        # The new model did not exist in the baseline manifest either.
+        base_manifest_path = project_dir / ".dbt-plan/base/manifest.json"
+        base_manifest = json.loads(base_manifest_path.read_text())
+        base_manifest["nodes"] = {
+            k: v for k, v in base_manifest["nodes"].items() if v["name"] != "stg_raw_events"
+        }
+        base_manifest_path.write_text(json.dumps(base_manifest))
+
         exit_code, result = _run_check(project_dir)
 
         # Assert: new model shows as added, safety=SAFE

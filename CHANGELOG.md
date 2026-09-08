@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- Refuse incomplete baseline snapshots instead of interpreting missing SQL as safe additions. (#158)
+- Read UNION projections from the left branch; refuse PIVOT/UNPIVOT star expansion and avoid CTE shadowing of qualified physical relations. (#161)
+- MCP verdicts preserve warnings and acknowledged destructive findings, and include stale-source and unreadable-test refusals. (#162)
+- Warn on changed or unknown columns under incremental `on_schema_change: ignore`: no schema DDL does not imply a successful build. New models and unchanged known columns remain safe. (#139)
+
 ## [0.15.0] - 2026-09-07
 
 ### Added

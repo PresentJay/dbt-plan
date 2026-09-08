@@ -32,3 +32,9 @@ def test_docs_protect_jinja_from_liquid():
             r"{% raw %}.*?{% endraw %}", "", page.read_text(encoding="utf-8"), flags=re.S
         )
         assert "{%" not in text, page
+
+
+def test_integration_job_runs_new_mcp_verdict_regressions():
+    ci = (ROOT / ".github/workflows/ci.yml").read_text()
+    integrations = ci.split("  integrations:", 1)[1].split("  packaging:", 1)[0]
+    assert "tests/test_review_safety_gaps.py" in integrations

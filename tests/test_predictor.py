@@ -32,8 +32,8 @@ class TestTableAndView:
 
 
 class TestIncrementalIgnoreAndFail:
-    def test_incremental_ignore_safe(self):
-        """incremental + ignore → NO DDL, safe."""
+    def test_incremental_ignore_warns(self):
+        """Ignoring schema DDL does not guarantee a successful incremental build."""
         result = predict_ddl(
             model_name="fct_orders",
             materialization="incremental",
@@ -41,8 +41,8 @@ class TestIncrementalIgnoreAndFail:
             base_columns=["a", "b"],
             current_columns=["a", "c"],
         )
-        assert result.safety == Safety.SAFE
-        assert any(op.operation == "NO DDL" for op in result.operations)
+        assert result.safety == Safety.WARNING
+        assert any("BUILD FAILURE" in op.operation for op in result.operations)
 
     def test_incremental_fail_same_columns_safe(self):
         """incremental + fail + same columns → SAFE (no schema change)."""
@@ -355,8 +355,8 @@ class TestStarExceptPredictor:
         )
         assert result.safety == Safety.SAFE
 
-    def test_star_except_ignore_safe(self):
-        """Incremental + ignore with * except → SAFE (no DDL)."""
+    def test_star_except_ignore_warns(self):
+        """Ignoring schema DDL does not guarantee a successful incremental build."""
         result = predict_ddl(
             model_name="m",
             materialization="incremental",
@@ -364,7 +364,7 @@ class TestStarExceptPredictor:
             base_columns=["a", "b"],
             current_columns=["* except(revenue)"],
         )
-        assert result.safety == Safety.SAFE
+        assert result.safety == Safety.WARNING
 
 
 class TestEphemeralAndUnknown:
