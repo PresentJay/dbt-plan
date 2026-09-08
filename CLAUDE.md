@@ -20,7 +20,7 @@ dbt-plan은 `dbt run` 전에 위험을 경고하는 **정적 분석 도구**다.
 3. **가볍고 빠르다 (No Runtime Dependency)**
    - sqlglot 외 런타임 의존성 없음
    - Warehouse 접속 불필요
-   - 200개 모델 프로젝트에서 < 5초
+   - 성능 목표: 200개 모델 분석 < 5초 (환경·쿼리에 따라 다름; 재현 측정은 docs/performance.md)
 
 4. **CI 친화적이다**
    - exit code로 판정 (0=정책상 통과, 1=destructive, 2=warning, 3=실행 오류)

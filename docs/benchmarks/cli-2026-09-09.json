@@ -1,0 +1,172 @@
+{
+  "schema_version": 1,
+  "recorded_at": "2026-09-08T21:26:51.143608+00:00",
+  "environment": {
+    "python": "3.12.9",
+    "implementation": "CPython",
+    "platform": "macOS-26.5.1-arm64-arm-64bit",
+    "machine": "arm64",
+    "processor": "arm",
+    "logical_cpus": 14,
+    "sqlglot": "30.17.0",
+    "dbt_plan": "dbt-plan 0.15.0",
+    "git_revision": "ec2325cf54d13c6966af33745e38e02c3bdcf0a7",
+    "working_tree_dirty": true,
+    "source_sha256": "7ecda823ef6f47b33611d3487cddce73b19395b9c421a6db8e2b8d781d27c125"
+  },
+  "repeat": 5,
+  "warmup": 1,
+  "measurement": {
+    "includes_dbt_compile": false,
+    "includes_process_startup": true,
+    "clock": "perf_counter",
+    "format": "json",
+    "fixture": "synthetic compiled SQL; fan-out groups of ten"
+  },
+  "results": [
+    {
+      "models": 50,
+      "scenario": "unchanged",
+      "changed_models": 0,
+      "exit_code": 0,
+      "seconds": [
+        0.10698579112067819,
+        0.1131607498973608,
+        0.10787195898592472,
+        0.1081037912517786,
+        0.11330187506973743
+      ],
+      "min_seconds": 0.10698579112067819,
+      "median_seconds": 0.1081037912517786,
+      "max_seconds": 0.11330187506973743
+    },
+    {
+      "models": 50,
+      "scenario": "one_changed",
+      "changed_models": 1,
+      "exit_code": 1,
+      "seconds": [
+        0.14975204225629568,
+        0.21819116733968258,
+        0.15856245812028646,
+        0.17275733407586813,
+        0.1661764159798622
+      ],
+      "min_seconds": 0.14975204225629568,
+      "median_seconds": 0.1661764159798622,
+      "max_seconds": 0.21819116733968258
+    },
+    {
+      "models": 50,
+      "scenario": "all_changed",
+      "changed_models": 50,
+      "exit_code": 1,
+      "seconds": [
+        0.19972675014287233,
+        0.1779114161618054,
+        0.17845016717910767,
+        0.17790204100310802,
+        0.1757261250168085
+      ],
+      "min_seconds": 0.1757261250168085,
+      "median_seconds": 0.1779114161618054,
+      "max_seconds": 0.19972675014287233
+    },
+    {
+      "models": 200,
+      "scenario": "unchanged",
+      "changed_models": 0,
+      "exit_code": 0,
+      "seconds": [
+        0.21075608395040035,
+        0.20001599984243512,
+        0.20956112490966916,
+        0.20566879166290164,
+        0.202611249871552
+      ],
+      "min_seconds": 0.20001599984243512,
+      "median_seconds": 0.20566879166290164,
+      "max_seconds": 0.21075608395040035
+    },
+    {
+      "models": 200,
+      "scenario": "one_changed",
+      "changed_models": 1,
+      "exit_code": 1,
+      "seconds": [
+        0.2966544581577182,
+        0.28195262514054775,
+        0.23495470825582743,
+        0.2426350424066186,
+        0.24292162526398897
+      ],
+      "min_seconds": 0.23495470825582743,
+      "median_seconds": 0.24292162526398897,
+      "max_seconds": 0.2966544581577182
+    },
+    {
+      "models": 200,
+      "scenario": "all_changed",
+      "changed_models": 200,
+      "exit_code": 1,
+      "seconds": [
+        0.5896766250953078,
+        0.646413791924715,
+        0.5779153746552765,
+        0.530888416338712,
+        0.5695535829290748
+      ],
+      "min_seconds": 0.530888416338712,
+      "median_seconds": 0.5779153746552765,
+      "max_seconds": 0.646413791924715
+    },
+    {
+      "models": 1000,
+      "scenario": "unchanged",
+      "changed_models": 0,
+      "exit_code": 0,
+      "seconds": [
+        0.49161612475290895,
+        0.5107546248473227,
+        0.4679754157550633,
+        0.5387018751353025,
+        0.5631276248022914
+      ],
+      "min_seconds": 0.4679754157550633,
+      "median_seconds": 0.5107546248473227,
+      "max_seconds": 0.5631276248022914
+    },
+    {
+      "models": 1000,
+      "scenario": "one_changed",
+      "changed_models": 1,
+      "exit_code": 1,
+      "seconds": [
+        1.313042334280908,
+        1.2237059590406716,
+        1.2041773344390094,
+        1.550153291784227,
+        1.3135084589011967
+      ],
+      "min_seconds": 1.2041773344390094,
+      "median_seconds": 1.313042334280908,
+      "max_seconds": 1.550153291784227
+    },
+    {
+      "models": 1000,
+      "scenario": "all_changed",
+      "changed_models": 1000,
+      "exit_code": 1,
+      "seconds": [
+        4.404231832828373,
+        4.6641530827619135,
+        4.491320332977921,
+        4.390101375058293,
+        4.5381963746622205
+      ],
+      "min_seconds": 4.390101375058293,
+      "median_seconds": 4.491320332977921,
+      "max_seconds": 4.6641530827619135
+    }
+  ]
+}
