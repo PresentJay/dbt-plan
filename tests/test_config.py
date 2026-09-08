@@ -1,6 +1,8 @@
 """Tests for configuration loading from .dbt-plan.yml and env vars."""
 
-from dbt_plan.config import Config
+import pytest
+
+from dbt_plan.config import Config, ConfigError
 
 
 class TestConfigDefaults:
@@ -211,11 +213,11 @@ class TestEnvVars:
         assert ":1: warning: cannot understand setting" in capsys.readouterr().err
 
     def test_unreadable_config_file(self, tmp_path):
-        """Config file that can't be read uses defaults."""
+        """Unreadable config cannot silently replace the user's policy."""
         config_path = tmp_path / ".dbt-plan.yml"
         config_path.mkdir()  # directory, not a file → OSError on read
-        config = Config.load(tmp_path)
-        assert config.dialect == "snowflake"  # default
+        with pytest.raises(ConfigError, match="Could not read configuration"):
+            Config.load(tmp_path)
 
     def test_bom_prefixed_config_file(self, tmp_path):
         """BOM at start of config file should not corrupt the first key."""

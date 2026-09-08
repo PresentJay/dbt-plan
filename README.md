@@ -254,6 +254,23 @@ For a workflow you own outright rather than a wrapped action, `dbt-plan ci-setup
 generates one with the credential wiring and least-privilege notes inline. Details in
 [docs/ci-integration.md](docs/ci-integration.md).
 
+## Exit codes
+
+The next minor release separates execution failures from review findings (a breaking
+change from 0.15.x). This contract is implemented on main and is not yet released.
+
+| Code | Meaning |
+|---|---|
+| `0` | No blocking findings under the configured policy. |
+| `1` | Destructive findings. |
+| `2` | Review required: SQL uncertainty or potential build/test failures. |
+| `3` | Execution failed: invalid input, missing artifacts, compile/recovery failure, or an internal error. No completed verdict. |
+
+`warning_exit_code` still controls review findings; its default remains `2`.
+Setting it to `0` does not suppress execution errors. Code `3` is reserved and cannot
+be used for warnings. The Action fails on execution errors even with `fail-on: never`.
+See [the migration guide](docs/exit-codes.md) before upgrading a CI script or pinned Action.
+
 ## How It Works
 
 ```mermaid

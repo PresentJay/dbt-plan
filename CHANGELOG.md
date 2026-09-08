@@ -7,7 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Breaking (next minor release, not a 0.15.x patch)
+- Execution failures now exit 3; completed warning findings still use `warning_exit_code`
+  (default 2). Invalid arguments, missing/invalid artifacts, compile/recovery failures,
+  and unexpected CLI exceptions cannot masquerade as warning/destructive verdicts.
+  Unreadable config is an error instead of silently loading defaults, and code 3 is
+  reserved from warning configuration. See [migration instructions](docs/exit-codes.md). (#113)
+
+
 ### Fixed
+- Non-UTF-8 compiled SQL produces a review finding, including added models, instead
+  of an uncaught exception. All model SQL analysis paths share the guarded read. (#173)
+- The Action captures nonzero check results under Bash errexit so verdicts reach
+  the gate and execution failures produce an explicit error. Require a JSON report
+  before applying policy so errors from older pinned packages cannot pass as warnings.
 - Refuse incomplete baseline snapshots instead of interpreting missing SQL as safe additions. (#158)
 - Read UNION projections from the left branch; refuse PIVOT/UNPIVOT star expansion and avoid CTE shadowing of qualified physical relations. (#161)
 - MCP verdicts preserve warnings and acknowledged destructive findings, and include stale-source and unreadable-test refusals. (#162)

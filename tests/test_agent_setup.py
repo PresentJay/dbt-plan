@@ -77,11 +77,11 @@ class TestAppendsToExisting:
 
 
 class TestIdempotency:
-    def test_second_run_exits_2(self, tmp_path):
+    def test_second_run_exits_3(self, tmp_path):
         _run(tmp_path)
         with pytest.raises(SystemExit) as exc:
             _run(tmp_path)
-        assert exc.value.code == 2
+        assert exc.value.code == 3
 
     def test_second_run_leaves_content_unchanged(self, tmp_path):
         path = _run(tmp_path)

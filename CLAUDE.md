@@ -23,7 +23,7 @@ dbt-plan은 `dbt run` 전에 위험을 경고하는 **정적 분석 도구**다.
    - 200개 모델 프로젝트에서 < 5초
 
 4. **CI 친화적이다**
-   - exit code로 판정 (0=safe, 1=destructive, 2=warning)
+   - exit code로 판정 (0=정책상 통과, 1=destructive, 2=warning, 3=실행 오류)
    - JSON/GitHub markdown 출력
    - 한 줄 요약 (grep 가능)
 

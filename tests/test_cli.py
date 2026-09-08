@@ -91,7 +91,7 @@ class TestSnapshotPathValidation:
         args = _make_snapshot_args(project_dir)
         with pytest.raises(SystemExit) as exc_info:
             _do_snapshot(args)
-        assert exc_info.value.code == 2
+        assert exc_info.value.code == 3
         assert "snapshot base directory escapes project directory" in capsys.readouterr().err
 
     def test_snapshot_rejects_base_dir_resolving_to_project(self, tmp_path):
@@ -110,7 +110,7 @@ class TestSnapshotPathValidation:
         args = _make_snapshot_args(project_dir)
         with pytest.raises(SystemExit) as exc_info:
             _do_snapshot(args)
-        assert exc_info.value.code == 2
+        assert exc_info.value.code == 3
         assert project_dir.exists()
 
     def test_snapshot_missing_manifest_warns(self, tmp_path, capsys):
@@ -169,8 +169,8 @@ class TestSnapshotPathValidation:
         base = project_dir / ".dbt-plan" / "base"
         assert (base / "compiled" / "models" / "m.sql").read_text(encoding="utf-8") == "SELECT 2"
 
-    def test_snapshot_no_compiled_sql_exits_2(self, tmp_path):
-        """Snapshot exits 2 when no compiled SQL exists."""
+    def test_snapshot_no_compiled_sql_exits_3(self, tmp_path):
+        """Snapshot exits 3 when no compiled SQL exists."""
         project_dir = tmp_path / "project"
         project_dir.mkdir()
         (project_dir / "target").mkdir()
@@ -178,7 +178,7 @@ class TestSnapshotPathValidation:
         args = _make_snapshot_args(project_dir)
         with pytest.raises(SystemExit) as exc_info:
             _do_snapshot(args)
-        assert exc_info.value.code == 2
+        assert exc_info.value.code == 3
 
 
 class TestFindCompiledDir:
@@ -251,8 +251,8 @@ class TestCheckLegacyAndEdgePaths:
         output = capsys.readouterr().out
         assert "m" in output
 
-    def test_missing_current_compiled_returns_2(self, tmp_path, capsys):
-        """check returns 2 when current compiled SQL directory doesn't exist."""
+    def test_missing_current_compiled_returns_3(self, tmp_path, capsys):
+        """check returns 3 when current compiled SQL directory doesn't exist."""
         manifest = {
             "nodes": {"model.p.m": {"name": "m", "config": {"materialized": "table"}}},
             "child_map": {},
@@ -272,13 +272,13 @@ class TestCheckLegacyAndEdgePaths:
 
         args = _make_check_args(project_dir)
         exit_code = _do_check(args)
-        assert exit_code == 2
+        assert exit_code == 3
         assert "compile" in capsys.readouterr().err.lower()
 
 
 class TestCheckErrorPaths:
-    def test_missing_base_dir_returns_2(self, tmp_path, capsys):
-        """check returns 2 when base dir does not exist."""
+    def test_missing_base_dir_returns_3(self, tmp_path, capsys):
+        """check returns 3 when base dir does not exist."""
         project_dir = _make_project(
             tmp_path,
             models_sql={"m": "SELECT 1"},
@@ -287,11 +287,11 @@ class TestCheckErrorPaths:
         # No base snapshot
         args = _make_check_args(project_dir)
         exit_code = _do_check(args)
-        assert exit_code == 2
+        assert exit_code == 3
         assert "snapshot" in capsys.readouterr().err.lower()
 
-    def test_missing_manifest_returns_2(self, tmp_path, capsys):
-        """check returns 2 when manifest.json is missing."""
+    def test_missing_manifest_returns_3(self, tmp_path, capsys):
+        """check returns 3 when manifest.json is missing."""
         project_dir = _make_project(
             tmp_path,
             models_sql={"m": "SELECT 1"},
@@ -300,11 +300,11 @@ class TestCheckErrorPaths:
         # manifest not created
         args = _make_check_args(project_dir)
         exit_code = _do_check(args)
-        assert exit_code == 2
+        assert exit_code == 3
         assert "manifest" in capsys.readouterr().err.lower()
 
-    def test_corrupt_manifest_returns_2(self, tmp_path, capsys):
-        """check returns 2 when manifest.json is invalid JSON and there are changes."""
+    def test_corrupt_manifest_returns_3(self, tmp_path, capsys):
+        """check returns 3 when manifest.json is invalid JSON and there are changes."""
         project_dir = _make_project(
             tmp_path,
             models_sql={"m": "SELECT a, b FROM t"},
@@ -313,13 +313,13 @@ class TestCheckErrorPaths:
         (project_dir / "target" / "manifest.json").write_text("{invalid json")
         args = _make_check_args(project_dir)
         exit_code = _do_check(args)
-        assert exit_code == 2
+        assert exit_code == 3
         assert "manifest" in capsys.readouterr().err.lower()
 
 
 class TestCheckValueErrorCatch:
     def test_check_catches_duplicate_model_valueerror(self, tmp_path, capsys):
-        """check returns 2 when diff_compiled_dirs raises ValueError (duplicate models)."""
+        """check returns 3 when diff_compiled_dirs raises ValueError (duplicate models)."""
         manifest = {
             "nodes": {"model.p.m": {"name": "m", "config": {"materialized": "table"}}},
             "child_map": {},
@@ -340,7 +340,7 @@ class TestCheckValueErrorCatch:
 
         args = _make_check_args(project_dir)
         exit_code = _do_check(args)
-        assert exit_code == 2
+        assert exit_code == 3
         captured = capsys.readouterr()
         assert "Duplicate model name" in captured.err
 
@@ -950,7 +950,7 @@ class TestInit:
         assert "Added" not in output  # should not add again
 
     def test_rejects_existing_config(self, tmp_path):
-        """init exits 2 when config already exists."""
+        """init exits 3 when config already exists."""
         import argparse
 
         (tmp_path / ".dbt-plan.yml").write_text("# existing\n")
@@ -959,7 +959,7 @@ class TestInit:
 
         with pytest.raises(SystemExit) as exc_info:
             _do_init(args)
-        assert exc_info.value.code == 2
+        assert exc_info.value.code == 3
 
 
 class TestStats:
@@ -1022,15 +1022,15 @@ class TestStats:
         assert "Cascade risk" in output
         assert "1 incremental model(s)" in output
 
-    def test_stats_missing_manifest_exits_2(self, tmp_path):
-        """stats exits 2 when manifest.json is missing."""
+    def test_stats_missing_manifest_exits_3(self, tmp_path):
+        """stats exits 3 when manifest.json is missing."""
         project_dir = _make_project(tmp_path, models_sql={"m": "SELECT 1"})
         # No manifest
         from dbt_plan.cli import _do_stats
 
         with pytest.raises(SystemExit) as exc_info:
             _do_stats(self._make_stats_args(project_dir))
-        assert exc_info.value.code == 2
+        assert exc_info.value.code == 3
 
     def test_stats_no_compiled_sql_still_works(self, tmp_path, capsys):
         """stats works when there's no compiled SQL directory (manifest only)."""
@@ -1079,7 +1079,7 @@ class TestCiSetup:
         assert "Created" in output
 
     def test_rejects_existing_workflow(self, tmp_path):
-        """ci-setup exits 2 when workflow already exists."""
+        """ci-setup exits 3 when workflow already exists."""
         import argparse
 
         from dbt_plan.cli import _do_ci_setup
@@ -1091,7 +1091,7 @@ class TestCiSetup:
         args = argparse.Namespace(project_dir=str(tmp_path))
         with pytest.raises(SystemExit) as exc_info:
             _do_ci_setup(args)
-        assert exc_info.value.code == 2
+        assert exc_info.value.code == 3
 
 
 class TestRun:
@@ -1139,8 +1139,8 @@ class TestRun:
         assert check.call_args.args[0].target_dir == "build"
         assert check.call_args.args[0].acknowledge == "model_a,model_b"
 
-    def test_run_missing_dbt_returns_2(self, tmp_path, capsys, monkeypatch):
-        """run returns 2 when dbt is not available."""
+    def test_run_missing_dbt_returns_3(self, tmp_path, capsys, monkeypatch):
+        """run returns 3 when dbt is not available."""
         import argparse
 
         from dbt_plan.cli import _do_run
@@ -1158,11 +1158,11 @@ class TestRun:
             compile_command=None,
         )
         exit_code = _do_run(args)
-        assert exit_code == 2
+        assert exit_code == 3
         assert "not found" in capsys.readouterr().err
 
     def test_run_custom_compile_command_not_found(self, tmp_path, capsys, monkeypatch):
-        """run returns 2 with helpful error when custom compile command not found."""
+        """run returns 3 with helpful error when custom compile command not found."""
         import argparse
 
         from dbt_plan.cli import _do_run
@@ -1179,15 +1179,15 @@ class TestRun:
             compile_command="uv run dbt compile",
         )
         exit_code = _do_run(args)
-        assert exit_code == 2
+        assert exit_code == 3
         err = capsys.readouterr().err
         assert "not found" in err
         assert "compile_command" in err
 
 
 class TestRunGitHandling:
-    def test_run_no_git_returns_2(self, tmp_path, capsys):
-        """run returns 2 with helpful error when git is not available."""
+    def test_run_no_git_returns_3(self, tmp_path, capsys):
+        """run returns 3 with helpful error when git is not available."""
         import argparse
         import subprocess
 
@@ -1211,7 +1211,7 @@ class TestRunGitHandling:
         )
         with patch("subprocess.run", side_effect=run_command):
             exit_code = _do_run(args)
-        assert exit_code == 2
+        assert exit_code == 3
         err = capsys.readouterr().err
         assert "git" in err.lower()
 
@@ -1257,7 +1257,7 @@ class TestTargetDir:
             dialect=None,
         )
 
-        assert _do_check(args) == 2
+        assert _do_check(args) == 3
         err = capsys.readouterr().err
         assert f"No compiled SQL found in {project_dir / 'build'}" in err
 

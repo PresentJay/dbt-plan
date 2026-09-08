@@ -197,7 +197,7 @@ class TestThroughTheCommand:
         args.against = "no_such_branch"
         (repo / "m.sql").write_text("SELECT 2 AS a, 3 AS b\n", encoding="utf-8")
 
-        assert self._run(args) == 2
+        assert self._run(args) == 3
         assert "not a commit in this repository" in capsys.readouterr().err
         assert _head(repo) == "feature"
         assert (repo / "m.sql").read_text(encoding="utf-8") == "SELECT 2 AS a, 3 AS b\n"

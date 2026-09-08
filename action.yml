@@ -34,6 +34,7 @@ inputs:
     description: >-
       Which verdict fails the job: destructive, warning, or never. "warning" honours
       warning_exit_code from .dbt-plan.yml, so setting that to 0 opts out of it.
+      Execution errors always fail, including when fail-on is never.
     default: destructive
   summary:
     description: Write the report to the job step summary.
@@ -44,7 +45,7 @@ outputs:
     description: safe, destructive, or warning.
     value: ${{ steps.check.outputs.verdict }}
   exit-code:
-    description: The dbt-plan exit code -- 0 safe, 1 destructive, 2 warning.
+    description: The dbt-plan exit code -- 0 safe, 1 destructive, 2 warning, 3 execution error (no verdict).
     value: ${{ steps.check.outputs.exit-code }}
   report:
     description: Path to the JSON report.
@@ -111,14 +112,20 @@ runs:
       run: |
         set -u
         report="$RUNNER_TEMP/dbt-plan-report.json"
-        dbt-plan check --target-dir "$TARGET_DIR" --dialect "$DIALECT" --format json > "$report"
-        code=$?
+        code=0
+        dbt-plan check --target-dir "$TARGET_DIR" --dialect "$DIALECT" --format json > "$report" || code=$?
         case "$code" in
           0) verdict=safe ;;
           1) verdict=destructive ;;
           2) verdict=warning ;;
           *) echo "::error::dbt-plan exited $code"; cat "$report"; exit "$code" ;;
         esac
+        # Older package versions use verdict codes for errors too. Require a
+        # report before applying policy, including when version pins 0.15.x.
+        if ! python -c 'import json, sys; data = json.load(open(sys.argv[1], encoding="utf-8")); sys.exit(not (isinstance(data, dict) and isinstance(data.get("summary"), dict) and isinstance(data.get("models"), list)))' "$report" 2>/dev/null; then
+          echo "::error::dbt-plan did not produce a completed JSON report (exit $code)"
+          exit 3
+        fi
         if [ "$SUMMARY" = "true" ]; then
           dbt-plan check --target-dir "$TARGET_DIR" --dialect "$DIALECT" --format github >> "$GITHUB_STEP_SUMMARY" || true
         fi

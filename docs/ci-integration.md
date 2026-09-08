@@ -134,7 +134,11 @@ Fork PR은 설계상 secret을 받지 못하므로 compile이 실패합니다. �
 |------|------|---------|
 | 0 | 안전 (SAFE) | 통과 |
 | 1 | 파괴적 (DESTRUCTIVE) | merge 차단 |
-| 2 | 경고/오류 (WARNING) | 통과 (경고만) |
+| 2 | 검토 필요 (WARNING) | Action의 기본 정책에서는 허용; 기본 CLI와 생성 워크플로에서는 실패 |
+| 3 | 실행 오류 (ERROR), 완료된 판정 없음 | 차단; `fail-on: never`도 허용하지 않음 |
+
+실행 오류 3은 다음 마이너 릴리스부터 적용합니다. 기존 0.15.x의 오류 2와
+구분해야 합니다. [종료 코드 전환 안내](exit-codes.md)를 참고하세요.
 
 ## Override: `ddl-reviewed` 라벨
 
