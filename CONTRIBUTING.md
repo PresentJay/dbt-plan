@@ -189,9 +189,16 @@ reaches `main` through a pull request with green CI. Tag pushes are exempt, so
 releases are unaffected, and no review is required, so a PR can be merged as
 soon as the checks pass.
 
+Required checks include lint, minimum dependencies, every Linux and Windows
+Python matrix job, dbt/MCP integrations, and built-package validation. The
+Linux matrix alone does not exercise the optional dependencies or installed
+artifacts, and Windows failures can expose filesystem and encoding regressions.
+
 If you add or rename a job in `.github/workflows/ci.yml`, update the required
-check list in that script too. A required check that names a job which does not
-exist blocks every merge, permanently.
+check list in that script too. `tests/test_repo_settings.py` compares the
+expanded workflow job names with the list, so an omitted check or a nonexistent
+name fails CI. After changing the list, verify the live branch protection too;
+merging the script does not apply repository settings automatically.
 
 ## If it was useful
 
