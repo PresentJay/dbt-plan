@@ -176,6 +176,14 @@ measure the CLI subprocesses in the real-dbt E2E tier. Those tests are enforced
 separately by the required `integrations` job; a coverage percentage is not a
 measure of end-to-end workflow or adapter coverage.
 
+Generated-workflow tests execute the actual shell blocks under Bash. Installation
+tests use real uv with offline fixture wheels to verify environment selection and
+lock preservation; they need uv on a POSIX host. The required integrations job
+installs uv and rejects skips in these suites. Real-dbt E2E additionally compiles
+both Git revisions and checks summary/gate behavior for safe, warning, and
+destructive changes. Regenerate `examples/ci-workflow/dbt-plan.yml` from
+`_CI_WORKFLOW` whenever the template changes; an equality test prevents drift.
+
 ## Where to start
 
 Issues labelled [good first issue](https://github.com/PresentJay/dbt-plan/labels/good%20first%20issue)

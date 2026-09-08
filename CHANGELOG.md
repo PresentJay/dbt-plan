@@ -16,6 +16,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 
 ### Fixed
+- Generated CI installs dbt/project dependencies and dbt-plan in one environment
+  for uv projects or requirements.txt layouts, honors existing uv locks, and keeps
+  the environment outside revision checkouts. Capture and validate the check report
+  before rendering; Gate defaults to destructive-only and always blocks execution
+  errors. The checked-in example now exactly matches the generator. Regenerate
+  existing workflows and review custom settings to adopt the new policy. (#166)
 - Non-UTF-8 compiled SQL produces a review finding, including added models, instead
   of an uncaught exception. All model SQL analysis paths share the guarded read. (#173)
 - The Action captures nonzero check results under Bash errexit so verdicts reach

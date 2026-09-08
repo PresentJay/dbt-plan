@@ -251,8 +251,11 @@ Outputs `verdict` (`safe` / `destructive` / `warning`), `exit-code`, and `report
 (path to the JSON report), so a later step can comment on the PR or open a ticket.
 
 For a workflow you own outright rather than a wrapped action, `dbt-plan ci-setup`
-generates one with the credential wiring and least-privilege notes inline. Details in
-[docs/ci-integration.md](docs/ci-integration.md).
+generates one with credential wiring and least-privilege notes inline. The next-minor
+generator supports `pyproject.toml`/`uv.lock` and `requirements.txt`, installs dbt and
+dbt-plan in one environment, and separates summary rendering from its gate. The default
+`FAIL_ON: destructive` allows warnings but always blocks execution errors. Regenerate
+existing workflows to adopt it; see [docs/ci-integration.md](docs/ci-integration.md).
 
 ## Exit codes
 

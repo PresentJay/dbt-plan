@@ -10,63 +10,53 @@ dbt 프로젝트에서 dbt-plan을 CI에 붙이는 방법입니다.
 dbt-plan ci-setup      # .github/workflows/dbt-plan.yml 생성
 ```
 
-자격증명 설정과 보안 주석이 포함된 워크플로가 생성됩니다.
-아래 [자격증명](#자격증명) 절을 참고해 secret을 채우고 push하면 끝입니다.
+새 생성기는 다음 마이너 릴리스에 포함됩니다. 기존 워크플로는 패키지를 업그레이드해도
+바뀌지 않습니다. 적용할 때는 기존 파일을 백업하고 새로 생성한 파일과 비교해 자격증명과
+프로젝트별 설정을 옮기세요. `ci-setup`은 기존 파일을 덮어쓰지 않습니다.
+[체크인된 예제](../examples/ci-workflow/dbt-plan.yml)는 생성 결과와 동일하며 테스트로 확인합니다.
 
-이 문서는 생성된 워크플로를 그대로 옮겨 적지 않습니다 — 복붙본은 반드시 원본과 어긋납니다.
-아래는 그 위에 얹는 **차이분**만 다룹니다.
+### 의존성 설치
 
-### PR 코멘트 추가 (선택)
+저장소 루트의 dbt 프로젝트를 기준으로 다음 순서로 설치합니다.
 
-생성된 워크플로는 결과를 step summary로 냅니다. PR 코멘트로도 남기려면 job 권한에
-`pull-requests: write`를 더하고, `Check current`와 `Gate` 사이에 아래 두 스텝을 넣으세요.
+1. `pyproject.toml`이 있으면 `uv sync`를 사용합니다. `uv.lock`도 있으면 `--locked`로
+   잠금 파일과 설정이 일치하는지 확인하며, 잠금 파일을 자동으로 갱신하지 않습니다.
+   원래 잠금 파일이 없었다면 설치 중 생긴 임시 `uv.lock`은 제거해 base 리비전의 파일과
+   충돌하지 않게 합니다.
+2. `pyproject.toml`이 없고 `requirements.txt`가 있으면 해당 파일의 의존성을 설치합니다.
+3. 둘 다 없거나 설치 결과에 dbt가 없으면 설명을 출력하고 실패합니다.
 
-```yaml
-    permissions:
-      contents: read
-      pull-requests: write   # PR 코멘트를 남길 때만 필요
+프로젝트 의존성에 dbt와 사용하는 어댑터가 있어야 합니다. dbt가 선택적 의존성이나 별도
+그룹에 있다면 Install의 `uv sync` 옵션을 조정하세요. `packages.yml` 등으로 dbt 패키지를
+사용한다면 각 리비전의 `dbt compile` 전에 필요한 `dbt deps`도 추가하세요.
 
-    # ... steps: 안, Check current 다음 / Gate 앞
-      - name: Run DDL check
-        id: plan
-        continue-on-error: true
-        run: |
-          dbt-plan check --format github > /tmp/dbt-plan-output.md || true
-          echo "result<<EOF" >> $GITHUB_OUTPUT
-          cat /tmp/dbt-plan-output.md >> $GITHUB_OUTPUT
-          echo "EOF" >> $GITHUB_OUTPUT
+프로젝트 의존성과 dbt-plan은 `$RUNNER_TEMP/dbt-plan-venv`에 함께 설치합니다.
+`GITHUB_PATH`로 이후 단계가 이 환경의 `dbt`, `dbt-plan`, `python`을 사용하게 합니다.
+리비전을 바꿔도 환경이 유지되며, `uv run`의 재동기화로 dbt-plan이 제거되는 일이 없습니다.
+자격증명은 아래 [자격증명](#자격증명) 절을 참고해 설정하세요.
 
-      - name: Post PR comment
-        uses: actions/github-script@v7
-        with:
-          script: |
-            const body = `<!-- dbt-plan -->\n${process.env.RESULT}`;
-            const { data: comments } = await github.rest.issues.listComments({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              issue_number: context.issue.number,
-            });
-            const existing = comments.find(c => c.body.includes('<!-- dbt-plan -->'));
-            if (existing) {
-              await github.rest.issues.updateComment({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                comment_id: existing.id,
-                body,
-              });
-            } else {
-              await github.rest.issues.createComment({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                issue_number: context.issue.number,
-                body,
-              });
-            }
-        env:
-          RESULT: ${{ steps.plan.outputs.result }}
-```
+### 보고와 차단 정책
 
-`continue-on-error: true`라서 코멘트는 항상 올라가고, 뒤따르는 `Gate` 스텝이 exit code로 막습니다.
+Check current는 현재 리비전을 컴파일한 뒤 JSON 보고서를 검사하고 종료 코드를 저장합니다.
+Report는 GitHub step summary에 결과를 출력합니다. Markdown 출력이 실패하면 원래 JSON을
+표시하며, Report 자체가 실패해도 Gate는 저장된 결과로 판정합니다.
+
+Gate 단계의 `env.FAIL_ON`을 바꾸면 정책을 선택할 수 있습니다.
+
+| 값 | 동작 |
+|---|---|
+| `destructive` (기본값) | 파괴적 변경만 차단하고 경고는 보고 |
+| `warning` | 파괴적 변경과 경고 모두 차단 |
+| `never` | 완료된 검사 결과는 보고만 함 |
+
+컴파일·snapshot·검사 실행 오류는 어느 정책에서도 통과시키지 않습니다. 구버전이 오류에
+1이나 2를 반환하더라도 JSON 보고서가 없거나 잘못됐다면 실행 오류로 처리합니다.
+`warning_exit_code: 0`은 기존처럼 경고를 허용하며, 0/1/2 외 사용자 지정 경고 코드는
+이 워크플로에서 실행 오류로 차단합니다. CLI의 기본 경고 코드는 여전히 2입니다.
+
+PR 코멘트는 기본 생성 구성에 포함되지 않습니다. 결과는 Actions의 step summary에서
+확인할 수 있으며, JSON 원본은 해당 작업의 `$RUNNER_TEMP/dbt-plan-report.json`에 있습니다.
+별도로 코멘트를 게시하려면 토큰 권한과 fork PR 처리도 해당 워크플로에서 구성해야 합니다.
 
 ### 의도적인 파괴적 변경 허용 (선택)
 
@@ -134,7 +124,7 @@ Fork PR은 설계상 secret을 받지 못하므로 compile이 실패합니다. �
 |------|------|---------|
 | 0 | 안전 (SAFE) | 통과 |
 | 1 | 파괴적 (DESTRUCTIVE) | merge 차단 |
-| 2 | 검토 필요 (WARNING) | Action의 기본 정책에서는 허용; 기본 CLI와 생성 워크플로에서는 실패 |
+| 2 | 검토 필요 (WARNING) | 새 생성 워크플로와 Action의 기본 정책에서는 허용; 기본 CLI에서는 실패 |
 | 3 | 실행 오류 (ERROR), 완료된 판정 없음 | 차단; `fail-on: never`도 허용하지 않음 |
 
 실행 오류 3은 다음 마이너 릴리스부터 적용합니다. 기존 0.15.x의 오류 2와

@@ -6,6 +6,7 @@ Skip if dbt is not installed.
 
 import importlib.util
 import json
+import os
 import shlex
 import shutil
 import subprocess
@@ -1193,3 +1194,53 @@ class TestRunWithRealCompile:
         assert result.returncode == 3, result.stderr
         assert f"compile failed for {phase}" in result.stderr
         assert _run_project_state(run_project) == before
+
+
+@pytest.mark.parametrize("finding", ["safe", "warning", "destructive"])
+def test_generated_workflow_compiles_reports_and_gates_real_changes(
+    run_project, tmp_path, finding
+):
+    from tests.test_generated_ci_execution import execute, outputs
+
+    _run_git(run_project, "add", "-A")
+    _run_git(run_project, "commit", "-qm", "initialized project")
+    base = _run_git(run_project, "rev-parse", "HEAD").strip()
+    changed = _RUN_BASE_SQL + "-- current revision\n"
+    if finding != "safe":
+        changed = changed.replace(", 2 as amount", "")
+    if finding == "warning":
+        changed = changed.replace("sync_all_columns", "fail")
+    (run_project / "models/orders.sql").write_text(changed, encoding="utf-8")
+    _run_git(run_project, "add", "models/orders.sql")
+    _run_git(run_project, "commit", "-qm", "current model change")
+    head = _run_git(run_project, "rev-parse", "HEAD").strip()
+    runner = tmp_path / "runner"
+    runner.mkdir()
+    env = {
+        **os.environ,
+        "PATH": str(_VENV_BIN) + os.pathsep + os.environ.get("PATH", ""),
+        "RUNNER_TEMP": str(runner),
+        "GITHUB_OUTPUT": str(runner / "outputs"),
+        "GITHUB_STEP_SUMMARY": str(runner / "summary"),
+        "DBT_PROFILES_DIR": str(run_project),
+        "BASE_REF": base,
+        "HEAD_REF": head,
+    }
+    # Use this checkout's module; an editable console script can point elsewhere.
+    prefix = f'dbt-plan() {{ {shlex.join(_DBT_PLAN_ARGV)} "$@"; }}\n'
+    snapshot = execute("Snapshot base", run_project, env, prefix)
+    assert snapshot.returncode == 0, snapshot.stdout + snapshot.stderr
+    checked = execute("Check current", run_project, env, prefix)
+    assert checked.returncode == 0, checked.stdout + checked.stderr
+    code = outputs(env)["exit-code"]
+    assert code == {"safe": "0", "warning": "2", "destructive": "1"}[finding]
+    report = json.loads((runner / "dbt-plan-report.json").read_text())
+    assert report["parse_failures"] == []
+    if finding != "safe":
+        assert report["models"][0]["safety"] == finding
+    env.update(CODE=code, FAIL_ON="destructive")
+    rendered = execute("Report", run_project, env, prefix)
+    assert rendered.returncode == 0, rendered.stdout + rendered.stderr
+    assert (runner / "summary").read_text().strip()
+    assert execute("Gate", run_project, env).returncode == (1 if finding == "destructive" else 0)
+    assert _run_git(run_project, "rev-parse", "HEAD").strip() == head
