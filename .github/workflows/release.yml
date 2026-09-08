@@ -48,6 +48,9 @@ jobs:
       - run: pip install build
       - run: python -m build
 
+      - name: Verify built artifacts without skips
+        run: python .github/scripts/required-tests.py tests/test_packaging.py -q
+
       # PyPI first — fail fast before creating GitHub Release
       - uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33 # release/v1
         with:
