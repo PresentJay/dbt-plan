@@ -161,10 +161,10 @@ def plan(
     if "destructive" in findings:
         verdict = "destructive"
     elif "warning" in findings and verdict == "safe":
-        verdict = "warning"
+        verdict = "review_required"
     # warning_exit_code is configurable, so exit 0 alone does not guarantee that
     # every model was judged. Refusals always require human review.
-    if verdict in {"safe", "warning"} and refusals:
+    if verdict == "safe" and refusals:
         verdict = "review_required"
 
     return {

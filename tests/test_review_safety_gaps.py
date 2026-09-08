@@ -66,7 +66,7 @@ def test_new_incremental_ignore_is_still_safe():
             {"models": [{"model_name": "orders", "safety": "destructive", "acknowledged": True}]},
             "destructive",
         ),
-        ({"models": [{"model_name": "orders", "safety": "warning"}]}, "warning"),
+        ({"models": [{"model_name": "orders", "safety": "warning"}]}, "review_required"),
         ({"stale_sources": ["models/orders.sql"]}, "review_required"),
         (
             {
@@ -95,5 +95,7 @@ def test_mcp_verdict_describes_findings_even_when_exit_zero(report, expected):
     ):
         result = server.plan(".")
     assert result["verdict"] == expected
-    if expected == "review_required":
+    if report.get("stale_sources") or any(
+        m.get("downstream_impacts") for m in report.get("models", [])
+    ):
         assert result["refusals"]
