@@ -341,10 +341,12 @@ def _authored_on_schema_change(node: dict, config: dict) -> str | None:
     from `dbt_project.yml`. An explicit setting is still honoured -- a custom
     materialization declared `sync_all_columns` still earns a destructive verdict.
 
-    Older manifests have no `unrendered_config`, and the resolved value cannot say
+    Manifest schema v0 (dbt Core 0.18) has no `unrendered_config`; schema v1 and
+    every later schema do. The resolved value in that legacy artifact cannot say
     who set it. There, keep it only for `incremental`, whose default is dbt's own
     documented rule; refuse for everything else. A false warning is the acceptable
-    direction.
+    direction. dbt-plan's supported dbt Core floor is 1.7, so this is compatibility
+    for imported historical snapshots rather than a normal current-runtime path.
     """
     authored = node.get("unrendered_config")
     if isinstance(authored, dict):
