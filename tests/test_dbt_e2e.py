@@ -267,6 +267,11 @@ class TestUnitTestsAreReachedByCascade:
         )
         assert compiled_unit_tests, "dbt did not compile the unit test; the guard is untested"
 
+        # The partial build rewrites the manifest for only stg_orders. Refresh
+        # all model compilation evidence while retaining the generated unit-test
+        # artifact whose exclusion this regression actually measures.
+        _dbt_compile(dbt_project)
+        assert all(path.exists() for path in compiled_unit_tests)
         result = _dbt_plan(["check", "--project-dir", str(dbt_project), "--no-color"])
         assert "test_stg_orders_shape" not in result.stdout
         assert "not found in manifest" not in result.stdout
