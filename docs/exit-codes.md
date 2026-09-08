@@ -61,10 +61,12 @@ case "$code" in
 esac
 ```
 
-A bare CLI command or generated `ci-setup` workflow still fails on any nonzero
-status. It does not inherit the Action's allow-warning default. #166 tracks the
-remaining generated-workflow installation and reporting/gating changes. Existing
-workflow files are not rewritten by a package upgrade; edit them deliberately.
+A bare CLI command still fails on any nonzero status. Newly generated `ci-setup`
+workflows use an explicit `FAIL_ON: destructive` gate: they allow completed warnings
+by default, and never allow execution errors. Report rendering cannot bypass that
+gate. Existing workflow files are not rewritten by a package upgrade; regenerate
+and review your project-specific settings to adopt this policy. See the
+[CI guide](ci-integration.md) for dependency layouts and policy settings.
 Update the dbt-plan section in consumer `AGENTS.md` after upgrading, or remove that
 section and rerun `dbt-plan agent-setup` to regenerate it.
 

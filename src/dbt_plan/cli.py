@@ -1318,6 +1318,9 @@ jobs:
   plan:
     name: DDL Impact Check
     runs-on: ubuntu-latest
+    defaults:
+      run:
+        shell: bash
     # Results go to the step summary, which needs no token scope.
     permissions:
       contents: read
@@ -1346,6 +1349,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
+          ref: ${{ github.event.pull_request.head.sha }}
           # dbt compile runs PR-authored code -- leave no git token on disk.
           persist-credentials: false
 
@@ -1366,24 +1370,99 @@ jobs:
 
       - name: Install
         run: |
-          pip install uv && uv sync
-          pip install dbt-plan
+          python -m pip install uv
+          # Outside the checkout: switching revisions cannot replace this environment.
+          export UV_PROJECT_ENVIRONMENT="$RUNNER_TEMP/dbt-plan-venv"
+          if [ -f pyproject.toml ]; then
+            if [ -f uv.lock ]; then
+              uv sync --locked
+            else
+              uv sync
+              # uv created this untracked lock. Do not let it obstruct checkout
+              # of a baseline that does track uv.lock; no existing lock is removed.
+              rm -f uv.lock
+            fi
+          elif [ -f requirements.txt ]; then
+            uv venv "$UV_PROJECT_ENVIRONMENT"
+            uv pip install --python "$UV_PROJECT_ENVIRONMENT/bin/python" -r requirements.txt
+          else
+            echo "::error::Add pyproject.toml or requirements.txt with your dbt adapter dependencies."
+            exit 3
+          fi
+          uv pip install --python "$UV_PROJECT_ENVIRONMENT/bin/python" dbt-plan
+          if [ ! -x "$UV_PROJECT_ENVIRONMENT/bin/dbt" ]; then
+            echo "::error::Project dependencies must install dbt and its adapter. Adjust the Install step for optional dependency groups."
+            exit 3
+          fi
+          # All later steps use these installed commands, without uv run re-syncing.
+          echo "$UV_PROJECT_ENVIRONMENT/bin" >> "$GITHUB_PATH"
 
       - name: Snapshot base
+        env:
+          BASE_REF: ${{ github.event.pull_request.base.sha }}
         run: |
-          git checkout ${{ github.event.pull_request.base.sha }}
-          dbt compile && dbt-plan snapshot
+          git checkout --detach "$BASE_REF"
+          dbt compile
+          dbt-plan snapshot
 
       - name: Check current
+        id: check
+        env:
+          HEAD_REF: ${{ github.event.pull_request.head.sha }}
         run: |
-          git checkout ${{ github.event.pull_request.head.sha }}
+          git checkout --detach "$HEAD_REF"
           dbt compile
-          dbt-plan check --format github >> $GITHUB_STEP_SUMMARY
+          code=0
+          report="$RUNNER_TEMP/dbt-plan-report.json"
+          dbt-plan check --format json > "$report" || code=$?
+          # Older releases also used codes 1/2 for execution failures. No report
+          # means no verdict, regardless of a user-selected warning policy.
+          if ! python -c 'import json, sys; data = json.load(open(sys.argv[1], encoding="utf-8")); sys.exit(not (isinstance(data, dict) and isinstance(data.get("summary"), dict) and isinstance(data.get("models"), list)))' "$report" 2>/dev/null; then
+            echo "::error::dbt-plan did not produce a completed JSON report (exit $code)"
+            code=3
+          fi
+          echo "exit-code=$code" >> "$GITHUB_OUTPUT"
 
-      # Default CLI policy: 1 destructive, 2 review required, 3 execution error.
-      # Every nonzero code fails this workflow; 3 must never be allowed as a warning.
+      - name: Report
+        continue-on-error: true
+        env:
+          CODE: ${{ steps.check.outputs.exit-code }}
+        run: |
+          case "$CODE" in
+            0|1|2) ;;
+            *) echo "dbt-plan could not complete (exit $CODE). See the Check current logs." >> "$GITHUB_STEP_SUMMARY"; exit 0 ;;
+          esac
+          rendered=0
+          markdown="$RUNNER_TEMP/dbt-plan-report.md"
+          dbt-plan check --format github > "$markdown" || rendered=$?
+          case "$rendered" in
+            0|1|2)
+              if [ -s "$markdown" ]; then
+                cat "$markdown" >> "$GITHUB_STEP_SUMMARY"
+                exit 0
+              fi ;;
+          esac
+          # Keep the validated report visible if Markdown rendering fails.
+          echo 'Markdown unavailable; original JSON report:' >> "$GITHUB_STEP_SUMMARY"
+          cat "$RUNNER_TEMP/dbt-plan-report.json" >> "$GITHUB_STEP_SUMMARY"
+
       - name: Gate
-        run: dbt-plan check
+        if: ${{ !cancelled() && steps.check.outcome == 'success' }}
+        env:
+          CODE: ${{ steps.check.outputs.exit-code }}
+          # warning: block warnings too; never: allow findings, but not execution errors.
+          FAIL_ON: destructive
+        run: |
+          case "$CODE" in
+            0|1|2) ;;
+            *) echo "::error::dbt-plan execution failed (exit $CODE). Fix the error and rerun."; exit 3 ;;
+          esac
+          case "$FAIL_ON" in
+            never) exit 0 ;;
+            destructive) [ "$CODE" != "1" ] || exit 1 ;;
+            warning) [ "$CODE" = "0" ] || exit 1 ;;
+            *) echo "::error::FAIL_ON must be destructive, warning, or never"; exit 3 ;;
+          esac
 """
 
 

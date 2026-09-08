@@ -16,6 +16,7 @@ from pathlib import Path
 import pytest
 
 from dbt_plan.cli import _CI_WORKFLOW, _do_ci_setup
+from tests.test_generated_ci_execution import script, step
 
 _REPOSITORY_CI_WORKFLOW = Path(__file__).parents[1] / ".github" / "workflows" / "ci.yml"
 _EXAMPLE_CI_WORKFLOW = Path(__file__).parents[1] / "examples" / "ci-workflow" / "dbt-plan.yml"
@@ -168,70 +169,36 @@ class TestStepsComplete:
         install_block = install_match.group(1)
         assert "uv sync" in install_block
 
-    def test_install_step_has_pip_install_dbt_plan(self):
-        """Install step includes 'pip install dbt-plan'."""
-        install_match = re.search(
-            r"- name: Install\s*\n\s*run: \|(.+?)(?=\n\s*- )", _CI_WORKFLOW, re.DOTALL
+    def test_install_step_targets_the_project_environment(self):
+        assert 'uv pip install --python "$UV_PROJECT_ENVIRONMENT/bin/python" dbt-plan' in script(
+            "Install"
         )
-        assert install_match, "Install step not found"
-        install_block = install_match.group(1)
-        assert "pip install dbt-plan" in install_block
 
     def test_snapshot_step_checks_out_base_sha(self):
-        """Snapshot step checks out the base SHA."""
-        snapshot_match = re.search(
-            r"- name: Snapshot base\s*\n\s*run: \|(.+?)(?=\n\s*- )", _CI_WORKFLOW, re.DOTALL
-        )
-        assert snapshot_match, "Snapshot base step not found"
-        snapshot_block = snapshot_match.group(1)
-        assert "github.event.pull_request.base.sha" in snapshot_block
+        assert "github.event.pull_request.base.sha" in step("Snapshot base")
+        assert 'git checkout --detach "$BASE_REF"' in script("Snapshot base")
 
     def test_snapshot_step_runs_dbt_compile(self):
-        """Snapshot step runs dbt compile."""
-        snapshot_match = re.search(
-            r"- name: Snapshot base\s*\n\s*run: \|(.+?)(?=\n\s*- )", _CI_WORKFLOW, re.DOTALL
-        )
-        assert snapshot_match
-        assert "dbt compile" in snapshot_match.group(1)
+        assert "dbt compile" in script("Snapshot base")
 
     def test_snapshot_step_runs_dbt_plan_snapshot(self):
-        """Snapshot step runs dbt-plan snapshot."""
-        snapshot_match = re.search(
-            r"- name: Snapshot base\s*\n\s*run: \|(.+?)(?=\n\s*- )", _CI_WORKFLOW, re.DOTALL
-        )
-        assert snapshot_match
-        assert "dbt-plan snapshot" in snapshot_match.group(1)
+        assert "dbt-plan snapshot" in script("Snapshot base")
 
     def test_check_step_checks_out_head_sha(self):
-        """Check step checks out the head SHA."""
-        check_match = re.search(
-            r"- name: Check current\s*\n\s*run: \|(.+?)(?=\n\s*- )", _CI_WORKFLOW, re.DOTALL
-        )
-        assert check_match, "Check current step not found"
-        check_block = check_match.group(1)
-        assert "github.event.pull_request.head.sha" in check_block
+        assert "github.event.pull_request.head.sha" in step("Check current")
+        assert 'git checkout --detach "$HEAD_REF"' in script("Check current")
 
     def test_check_step_runs_dbt_compile(self):
-        """Check step runs dbt compile."""
-        check_match = re.search(
-            r"- name: Check current\s*\n\s*run: \|(.+?)(?=\n\s*- )", _CI_WORKFLOW, re.DOTALL
-        )
-        assert check_match
-        assert "dbt compile" in check_match.group(1)
+        assert "dbt compile" in script("Check current")
 
-    def test_check_step_uses_format_github(self):
-        """Check step runs dbt-plan check --format github."""
-        check_match = re.search(
-            r"- name: Check current\s*\n\s*run: \|(.+?)(?=\n\s*- )", _CI_WORKFLOW, re.DOTALL
-        )
-        assert check_match
-        assert "dbt-plan check --format github" in check_match.group(1)
+    def test_check_and_report_have_separate_formats(self):
+        assert "dbt-plan check --format json" in script("Check current")
+        assert "dbt-plan check --format github" in script("Report")
 
-    def test_gate_step_runs_dbt_plan_check(self):
-        """Gate step runs dbt-plan check (for exit code)."""
-        gate_match = re.search(r"- name: Gate\s*\n\s*run:\s*(.+?)(?:\n|$)", _CI_WORKFLOW)
-        assert gate_match, "Gate step not found"
-        assert "dbt-plan check" in gate_match.group(1)
+    def test_gate_uses_the_captured_code_instead_of_rechecking(self):
+        assert "steps.check.outputs.exit-code" in step("Gate")
+        assert "dbt-plan check" not in script("Gate")
+        assert "FAIL_ON: destructive" in step("Gate")
 
     def test_preflight_fails_when_credentials_missing(self):
         """Preflight step exits non-zero with an actionable message when the secret is empty."""
@@ -253,6 +220,7 @@ class TestStepsComplete:
             "install": _CI_WORKFLOW.index("name: Install"),
             "snapshot": _CI_WORKFLOW.index("name: Snapshot base"),
             "check": _CI_WORKFLOW.index("name: Check current"),
+            "report": _CI_WORKFLOW.index("name: Report"),
             "gate": _CI_WORKFLOW.index("name: Gate"),
         }
         ordered = sorted(positions.keys(), key=lambda k: positions[k])
@@ -263,6 +231,7 @@ class TestStepsComplete:
             "install",
             "snapshot",
             "check",
+            "report",
             "gate",
         ]
 
@@ -367,7 +336,7 @@ class TestFilePlacement:
         assert (tmp_path / ".github" / "workflows").is_dir()
 
     def test_exits_3_if_file_already_exists(self, tmp_path):
-        """Second call exits with code 2 when file already exists."""
+        """Second call exits with code 3 when file already exists."""
         _run_ci_setup(tmp_path)
         with pytest.raises(SystemExit) as exc_info:
             _run_ci_setup(tmp_path)
@@ -397,7 +366,7 @@ class TestIdempotency:
         assert wf_path.exists()
 
     def test_second_call_exits_3(self, tmp_path):
-        """Second call exits with code 2."""
+        """Second call exits with code 3."""
         _run_ci_setup(tmp_path)
         with pytest.raises(SystemExit) as exc_info:
             _run_ci_setup(tmp_path)
