@@ -323,4 +323,8 @@ def test_versioned_defined_in_selection_keeps_source_refusal(tmp_path, capsys):
     (tmp_path / "models").mkdir()
     source = tmp_path / "models/orders_current.sql"
     source.write_text("select 1 as id")
+    # Force the stale-input precondition independently of Windows timestamp
+    # resolution; this test measures alias scoping, not write scheduling.
+    timestamp = (tmp_path / "target/manifest.json").stat().st_mtime + 2
+    os.utime(source, (timestamp, timestamp))
     assert check(tmp_path, capsys, "orders_v2")[0] == 2
