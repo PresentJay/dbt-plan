@@ -365,3 +365,128 @@ class TestRunJsonStdoutIsPureJson:
         json.loads(captured.out)  # raises if run wrote anything but JSON
         assert "Snapshot saved" in captured.err
         assert "Snapshot saved" not in captured.out
+
+
+class TestBorrowPreservesGitState:
+    @staticmethod
+    def prepare(tmp_path, *, ignored=False, nested=False):
+        repo = _repo(tmp_path)
+        _git(repo, "config", "core.autocrlf", "false")
+        project = repo / "analytics" if nested else repo
+        project.mkdir(exist_ok=True)
+        if ignored:
+            (project / ".gitignore").write_text(".dbt-plan/\n", encoding="utf-8")
+            _git(repo, "add", "-A")
+            _git(repo, "commit", "-qm", "ignore snapshots")
+        (repo / "model.sql").write_text("earlier work\n", encoding="utf-8")
+        _git(repo, "stash", "push", "-qm", "existing user stash")
+        snapshot = project / ".dbt-plan" / "base"
+        snapshot.mkdir(parents=True)
+        (snapshot / "saved.sql").write_text("snapshot\n", encoding="utf-8")
+        (repo / "model.sql").write_text("staged work\n", encoding="utf-8")
+        _git(repo, "add", "model.sql")
+        (repo / "model.sql").write_text("unstaged work\n", encoding="utf-8")
+        (repo / "notes.txt").write_bytes(b"untracked notes\n")
+        return repo, project, snapshot
+
+    @staticmethod
+    def state(repo):
+        return (
+            (repo / "model.sql").read_bytes(),
+            (repo / "notes.txt").read_bytes(),
+            _git(repo, "diff", "--binary").stdout,
+            _git(repo, "diff", "--cached", "--binary").stdout,
+            _git(repo, "stash", "list", "--format=%H").stdout,
+        )
+
+    @pytest.mark.parametrize("ignored", [False, True])
+    @pytest.mark.parametrize("nested", [False, True])
+    def test_repeated_borrow_keeps_snapshot_files_index_and_existing_stash(
+        self, tmp_path, ignored, nested
+    ):
+        from dbt_plan.stash import clean_worktree
+
+        repo, project, snapshot = self.prepare(tmp_path, ignored=ignored, nested=nested)
+        before = self.state(repo)
+        for _ in range(2):
+            with clean_worktree(project, has_changes=True) as state:
+                assert state.stashed
+                assert (repo / "model.sql").read_text(encoding="utf-8") == "SELECT 1 AS a\n"
+                assert not (repo / "notes.txt").exists()
+                assert (snapshot / "saved.sql").exists()
+            assert not state.restore_failed
+            assert self.state(repo) == before
+
+    def test_nonzero_push_with_new_stash_restores_before_aborting(self, tmp_path):
+        from dbt_plan import stash
+
+        repo, project, _ = self.prepare(tmp_path)
+        before = self.state(repo)
+        real_git = stash._git
+
+        def fail_after_push(directory, *args):
+            result = real_git(directory, *args)
+            if args[:2] == ("stash", "push"):
+                assert result.returncode == 0
+                return subprocess.CompletedProcess(
+                    result.args, 1, result.stdout, "late push failure"
+                )
+            return result
+
+        with (
+            patch.object(stash, "_git", side_effect=fail_after_push),
+            pytest.raises(stash.StashError, match="late push failure"),
+            stash.clean_worktree(project, has_changes=True),
+        ):
+            pytest.fail("must not compile a baseline after a failed push")
+        assert self.state(repo) == before
+
+    def test_failed_partial_push_restore_reports_recovery_not_untouched(self, tmp_path, capsys):
+        from dbt_plan import stash
+
+        repo, project, _ = self.prepare(tmp_path)
+        real_git = stash._git
+        created = None
+
+        def fail_push_and_restore(directory, *args):
+            nonlocal created
+            if args[:2] == ("stash", "pop"):
+                return subprocess.CompletedProcess(["git", *args], 1, "", "restore conflict")
+            result = real_git(directory, *args)
+            if args[:2] == ("stash", "push"):
+                assert result.returncode == 0
+                created = stash.current_stash_ref(directory)
+                return subprocess.CompletedProcess(
+                    result.args, 1, result.stdout, "late push failure"
+                )
+            return result
+
+        with (
+            patch.object(stash, "_git", side_effect=fail_push_and_restore),
+            patch("dbt_plan.cli._do_snapshot") as snapshot,
+        ):
+            assert _run(_args(project, "git --version")) == 2
+            snapshot.assert_not_called()
+        err = capsys.readouterr().err
+        assert "untouched" not in err
+        assert "Recover with:" in err
+        assert created in err
+        assert stash.current_stash_ref(repo) == created
+        assert _git(repo, "show", f"{created}^2:model.sql").stdout == "staged work\n"
+        assert _git(repo, "show", f"{created}:model.sql").stdout == "unstaged work\n"
+        assert _git(repo, "show", f"{created}^3:notes.txt").stdout == "untracked notes\n"
+
+    def test_no_new_stash_does_not_pop_a_users_entry(self, tmp_path):
+        from dbt_plan.stash import clean_worktree
+
+        repo = _repo(tmp_path)
+        (repo / "model.sql").write_text("earlier work\n", encoding="utf-8")
+        _git(repo, "stash", "push", "-qm", "existing user stash")
+        before = _git(repo, "stash", "list", "--format=%H").stdout
+        snapshot = repo / ".dbt-plan"
+        snapshot.mkdir()
+        (snapshot / "saved.sql").write_text("snapshot\n", encoding="utf-8")
+        with clean_worktree(repo, has_changes=True) as state:
+            assert not state.stashed
+        assert _git(repo, "stash", "list", "--format=%H").stdout == before
+        assert (repo / "model.sql").read_text(encoding="utf-8") == "SELECT 1 AS a\n"

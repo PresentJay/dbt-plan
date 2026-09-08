@@ -25,8 +25,8 @@ STASH_LABEL = "dbt-plan-run-temp"
 # tree stashed; the exclusion is relative to the project, which is where the
 # snapshot lives.
 #
-# The snapshot has to stay out. It is untracked, so `--include-untracked` would
-# take it -- and then `dbt-plan run` writes a new one before popping, and the pop
+# The snapshot has to stay out. When it is not ignored, `--include-untracked`
+# would take it -- and then `dbt-plan run` writes a new one before popping, and the pop
 # refuses because the untracked files it holds already exist. The user's real
 # work is left in the stash by a command that touched nothing of theirs.
 _STASH_PATHSPEC = (":/", ":(exclude).dbt-plan")
@@ -66,7 +66,7 @@ def _git(project_dir: Path, *args: str) -> subprocess.CompletedProcess[str]:
 def current_stash_ref(project_dir: Path) -> str | None:
     """Commit id of the stash entry on top, so we can restore that exact one."""
     rev = _git(project_dir, "rev-parse", "stash@{0}")
-    return rev.stdout.strip() if rev.returncode == 0 else None
+    return (rev.stdout.strip() or None) if rev.returncode == 0 else None
 
 
 def _restore(project_dir: Path, ref: str) -> bool:
@@ -82,18 +82,19 @@ def _restore(project_dir: Path, ref: str) -> bool:
             "Error: the stash entry dbt-plan created is no longer on top, so it "
             "was not restored automatically.\n"
             f"  Your changes are saved as commit {ref[:12]}.\n"
-            f"  Recover with: git stash apply {ref}",
+            f"  Recover with: git stash apply --index {ref}",
             file=sys.stderr,
         )
         return True
 
-    pop = _git(project_dir, "stash", "pop")
+    pop = _git(project_dir, "stash", "pop", "--index")
     if pop.returncode != 0:
         print(
             "Error: could not restore your stashed changes:\n"
             f"{pop.stderr.strip()}\n"
             "  Your work is NOT lost -- it is still in the stash.\n"
-            f"  Recover with: git stash pop   (entry: {STASH_LABEL})",
+            "  Inspect git status before retrying the restore.\n"
+            f"  Recover with: git stash apply --index {ref}",
             file=sys.stderr,
         )
         return True
@@ -104,13 +105,21 @@ def _restore(project_dir: Path, ref: str) -> bool:
 def clean_worktree(project_dir: Path, *, has_changes: bool) -> Iterator[StashState]:
     """Stash uncommitted work for the duration of the block, then restore it.
 
-    Raises StashError if the stash fails. Callers must not continue in that
-    case: the tree is still dirty, so a "baseline" compiled from it would match
-    the current state and report no changes -- and restoring would pop an entry
-    dbt-plan never created, possibly the user's own.
+    Raises StashError if the stash fails, after attempting recovery when a new
+    stash was created. Callers must not continue after a failed push: its tree
+    cannot be trusted as a clean baseline. Only a newly created entry belongs
+    to this operation; a no-op push must never consume the user's prior stash.
     """
     state = StashState()
     if has_changes:
+        # An ignored directory is already excluded by --include-untracked.
+        # Adding its exclusion pathspec can make Git save a stash, mutate the
+        # index, then fail. Keep :/ so nested projects still borrow the whole repo.
+        ignored = _git(project_dir, "check-ignore", "-q", ".dbt-plan/")
+        if ignored.returncode not in (0, 1):
+            raise StashError(ignored.stderr.strip() or "could not check snapshot ignore rules")
+        pathspec = _STASH_PATHSPEC[:1] if ignored.returncode == 0 else _STASH_PATHSPEC
+        previous = current_stash_ref(project_dir)
         push = _git(
             project_dir,
             "stash",
@@ -119,11 +128,23 @@ def clean_worktree(project_dir: Path, *, has_changes: bool) -> Iterator[StashSta
             STASH_LABEL,
             "--include-untracked",
             "--",
-            *_STASH_PATHSPEC,
+            *pathspec,
         )
+        current = current_stash_ref(project_dir)
+        if current is not None and current != previous:
+            state.ref = current
         if push.returncode != 0:
-            raise StashError(push.stderr.strip())
-        state.ref = current_stash_ref(project_dir)
+            # A failed push may already have saved and moved the user's work.
+            # Never compile that uncertain tree; attempt to put it back first.
+            detail = push.stderr.strip() or push.stdout.strip() or "git stash push failed"
+            if state.ref is not None:
+                state.restore_failed = _restore(project_dir, state.ref)
+                detail += (
+                    "\n  A stash was created before the failure; automatic restore failed."
+                    if state.restore_failed
+                    else "\n  The saved changes and index were restored."
+                )
+            raise StashError(detail)
 
     try:
         yield state

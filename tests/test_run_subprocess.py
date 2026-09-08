@@ -270,8 +270,11 @@ class TestGitStashSafety:
                 # Baseline compile fails
                 result.returncode = 1
                 result.stderr = "dbt compile failed"
-            elif cmd == ["git", "stash", "pop"]:
+            elif cmd == ["git", "stash", "pop", "--index"]:
                 result.returncode = 0
+            if cmd == ["git", "rev-parse", "stash@{0}"]:
+                pushed = any(c[:3] == ["git", "stash", "push"] for c in call_sequence)
+                result.stdout = "a" * 40 if pushed else ""
             return result
 
         mock_run.side_effect = side_effect
@@ -285,7 +288,7 @@ class TestGitStashSafety:
         for cmd in call_sequence:
             if isinstance(cmd, list) and "push" in cmd and "stash" in cmd:
                 stash_push_seen = True
-            if cmd == ["git", "stash", "pop"]:
+            if cmd == ["git", "stash", "pop", "--index"]:
                 stash_pop_seen = True
 
         assert stash_push_seen, "stash push should have been called"
@@ -723,6 +726,9 @@ class TestFullRunStructure:
 
             if cmd == ["git", "status", "--porcelain"]:
                 result.stdout = "M models/test.sql\n"
+            if cmd == ["git", "rev-parse", "stash@{0}"]:
+                pushed = any(c[:3] == ["git", "stash", "push"] for c in call_sequence)
+                result.stdout = "a" * 40 if pushed else ""
             return result
 
         mock_run.side_effect = side_effect
@@ -742,7 +748,7 @@ class TestFullRunStructure:
             ["git", "rev-parse", "stash@{0}"],
             ["dbt", "compile"],  # baseline
             ["git", "rev-parse", "stash@{0}"],  # identity re-checked before popping
-            ["git", "stash", "pop"],
+            ["git", "stash", "pop", "--index"],
             ["dbt", "compile"],  # current
         )
 
