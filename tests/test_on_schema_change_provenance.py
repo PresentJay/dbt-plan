@@ -58,7 +58,7 @@ class TestWhatTheIndexCarries:
         assert index["m"].on_schema_change == "sync_all_columns"
 
     def test_an_incremental_default_still_behaves_as_ignore(self):
-        """predict_ddl reads `on_schema_change or "ignore"`, which is dbt's real default."""
+        """Ignoring schema DDL does not guarantee a successful incremental build."""
         index = build_node_index(
             _manifest("incremental", unrendered={"materialized": "incremental"})
         )
@@ -66,7 +66,7 @@ class TestWhatTheIndexCarries:
         assert node.on_schema_change is None
         assert (
             predict_ddl("m", node.materialization, node.on_schema_change, ["a", "b"], ["a"]).safety
-            == Safety.SAFE
+            == Safety.WARNING
         )
 
     @pytest.mark.parametrize(

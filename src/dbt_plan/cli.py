@@ -951,6 +951,17 @@ def _do_check(args: argparse.Namespace) -> int:
     if uncompiled_models:
         _log(f"Uncompiled: {len(uncompiled_models)} manifest model(s) have no compiled SQL")
 
+    # The base manifest distinguishes a genuinely new model from missing input.
+    # A partial snapshot cannot establish safety, even when the diff says added.
+    base_stems = {f.stem for f in iter_model_sql(base_compiled, base_model_dirs)}
+    missing_base = sorted(
+        name
+        for name in base_node_index
+        if name not in base_stems and name not in config.ignore_models
+    )
+    if missing_base:
+        baseline_problem = "Baseline compiled SQL is missing for: " + ", ".join(missing_base)
+
     # Nothing in target/ says whether it is current. A source newer than the
     # manifest means it may not be, and every verdict below rests on it.
     stale_sources = _stale_sources(project_dir, manifest_path, manifest.get("source_dirs") or ())
@@ -1489,7 +1500,7 @@ Risk is materialization crossed with `on_schema_change`:
 | Config | Result |
 |---|---|
 | `table` / `view` | `CREATE OR REPLACE TABLE` / `CREATE OR REPLACE VIEW` — safe before downstream and contract checks |
-| `incremental` + `ignore` | NO DDL — safe |
+| `incremental` + `ignore` | NO DDL; changed or unknown columns require review |
 | `incremental` + `append_new_columns` | ADD COLUMN only — safe |
 | `incremental` + `append_new_columns`, column removed | STALE COLUMNS (not populated) — the old columns remain in the table; review their consumers |
 | `incremental` + `fail` | BUILD FAILURE on schema drift — warning |

@@ -257,23 +257,23 @@ class TestModifiedNonIncremental:
 
 
 class TestModifiedIncrementalIgnore:
-    def test_ignore_safe_even_with_column_changes(self):
+    def test_ignore_warns_on_column_changes(self):
         pred = _predict(
             on_schema_change="ignore",
             base_columns=["a", "b"],
             current_columns=["a", "c"],
         )
-        assert pred.safety == Safety.SAFE
-        assert "NO DDL" in _op_names(pred)
+        assert pred.safety == Safety.WARNING
+        assert any("BUILD FAILURE" in op for op in _op_names(pred))
 
     def test_none_osc_defaults_to_ignore(self):
-        """on_schema_change=None → 'ignore', stored in result."""
+        """Ignoring schema DDL does not guarantee a successful incremental build."""
         pred = _predict(
             on_schema_change=None,
             base_columns=["a", "b"],
             current_columns=["x"],
         )
-        assert pred.safety == Safety.SAFE
+        assert pred.safety == Safety.WARNING
         assert pred.on_schema_change == "ignore"
 
 
@@ -753,15 +753,15 @@ class TestCustomMaterialization:
     assertion about how that materialization behaves. With nothing set, dbt-plan
     has no rule to apply and says so rather than assuming "ignore"."""
 
-    def test_custom_mat_ignore_safe(self):
+    def test_custom_mat_ignore_warns(self):
         pred = _predict(
             materialization="custom_materialization",
             on_schema_change="ignore",
             base_columns=["a", "b"],
             current_columns=["a", "c"],
         )
-        assert pred.safety == Safety.SAFE
-        assert "NO DDL" in _op_names(pred)
+        assert pred.safety == Safety.WARNING
+        assert any("BUILD FAILURE" in op for op in _op_names(pred))
 
     def test_custom_mat_fail_with_changes(self):
         pred = _predict(

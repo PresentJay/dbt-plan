@@ -178,7 +178,7 @@ Ideas that look useful but contradict what this tool is:
 | view | any | `CREATE OR REPLACE VIEW` | SAFE |
 | ephemeral | any | (no physical object) | SAFE |
 | snapshot | any | `REVIEW REQUIRED` | WARNING |
-| incremental | ignore | no DDL | SAFE |
+| incremental | ignore | no schema DDL; existing targets may fail on column changes | WARNING on changed/unknown columns |
 | incremental | fail | build failure | WARNING |
 | incremental | append_new_columns | `ADD COLUMN` only | SAFE |
 | incremental | sync_all_columns | `ADD + DROP COLUMN` | DESTRUCTIVE if columns removed |

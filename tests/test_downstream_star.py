@@ -97,8 +97,12 @@ class TestInheritedColumnLoss:
             ["order_id", "customer_id"],
             ["order_id"],
         )
-        assert updated.downstream_impacts == []
-        assert updated.safety == Safety.SAFE
+        if materialization == "incremental":
+            assert updated.downstream_impacts[0].risk == "inherited_change"
+            assert updated.safety == Safety.WARNING
+        else:
+            assert updated.downstream_impacts == []
+            assert updated.safety == Safety.SAFE
 
     def test_a_downstream_whose_columns_are_unchanged_is_not_a_finding(self):
         """The ordinary case: it names its columns, so upstream cannot move them."""

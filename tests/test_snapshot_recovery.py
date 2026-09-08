@@ -275,7 +275,8 @@ class TestMissingCompiledInSnapshot:
         model_map = {m["model_name"]: m for m in result["models"]}
         assert model_map["model_a"]["safety"] == "safe"
         assert model_map["model_b"]["safety"] == "safe"
-        assert exit_code == 0
+        assert exit_code == 2
+        assert result["baseline_problem"]
 
 
 # ---------------------------------------------------------------------------
@@ -392,7 +393,8 @@ class TestPartialSnapshot:
         assert "model_b" in model_names  # added
         assert "model_c" in model_names  # added
         assert result["summary"]["total"] == 2
-        assert exit_code == 0  # added models are safe
+        assert exit_code == 2
+        assert result["baseline_problem"]  # added models are safe
 
 
 # ---------------------------------------------------------------------------
@@ -686,3 +688,26 @@ class TestBinaryFilesInSnapshot:
         assert result["summary"]["total"] == 1
         assert result["models"][0]["model_name"] == "model_a"
         assert exit_code == 0
+
+
+@pytest.mark.parametrize("missing", [["orders"], ["orders", "reader"]])
+def test_missing_baseline_sql_is_not_a_new_safe_model(tmp_path, capsys, missing):
+    from dbt_plan.cli import _do_check, _do_snapshot
+
+    manifest = _minimal_manifest({"orders": {}, "reader": {}})
+    _setup_target(
+        tmp_path,
+        {"orders": "select id, tax from raw", "reader": "select tax from orders"},
+        manifest,
+    )
+    _do_snapshot(_snapshot_args(tmp_path))
+    for name in missing:
+        next((tmp_path / ".dbt-plan/base/compiled").rglob(name + ".sql")).unlink()
+    _setup_target(
+        tmp_path, {"orders": "select id from raw", "reader": "select tax from orders"}, manifest
+    )
+    capsys.readouterr()
+    code = _do_check(_check_args(tmp_path))
+    report = json.loads(capsys.readouterr().out)
+    assert code != 0
+    assert "orders" in report["baseline_problem"]

@@ -52,6 +52,13 @@ def _sole_source(select: exp.Select) -> exp.Table | None:
     return source
 
 
+def _output_select(tree: exp.Expression) -> exp.Select | None:
+    """Read set-operation names from the left branch, including parentheses."""
+    while isinstance(tree, (exp.Subquery, exp.SetOperation)):
+        tree = tree.this
+    return tree if isinstance(tree, exp.Select) else None
+
+
 def _relation_key(table: exp.Table) -> str:
     """`"j"."main"."stg_orders"` -> `j.main.stg_orders`, to match manifest relations."""
     parts = [
@@ -102,6 +109,11 @@ def _resolve_star_columns(
     if len(seen) > _MAX_CTE_DEPTH:
         return None
 
+    # PIVOT/UNPIVOT transform a source schema. Never resolve its input star as
+    # the transformed output, including qualified stars referencing a CTE.
+    if any(table.args.get("pivots") for table in select.find_all(exp.Table)):
+        return None
+
     columns: list[tuple[str, str | None]] = []
     for expr in select.expressions:
         if not _is_star(expr):
@@ -114,11 +126,20 @@ def _resolve_star_columns(
         if _star_is_modified(expr):
             return None  # EXCEPT / EXCLUDE / REPLACE / RENAME -- not a plain star
 
-        # A qualified `t.*` names its own source, so it is safe beside a join --
-        # but mapping that alias back to a physical table is not attempted, so it
-        # only resolves against a CTE.
+        # Resolve the named source in this SELECT scope before consulting CTEs:
+        # a qualified physical relation must not be shadowed by a CTE name.
         if isinstance(expr, exp.Column) and expr.table:
-            source, table = expr.table, None
+            frm = select.args.get("from_") or select.args.get("from")
+            sources = ([frm.this] if frm else []) + [
+                join.this for join in select.args.get("joins") or []
+            ]
+            matches = [
+                t for t in sources if isinstance(t, exp.Table) and t.alias_or_name == expr.table
+            ]
+            if len(matches) != 1:
+                return None
+            table = matches[0]
+            source = table.name
         else:
             table = _sole_source(select)
             if table is None:
@@ -128,7 +149,7 @@ def _resolve_star_columns(
         if source in seen:
             return None
 
-        body = ctes.get(source)
+        body = ctes.get(source) if table is None or not (table.db or table.catalog) else None
         if body is not None:
             if not isinstance(body, exp.Select):
                 # A set operation or recursive CTE, whose column list is not a
@@ -145,7 +166,7 @@ def _resolve_star_columns(
 
         # Not a CTE: it is a physical relation, which for a dbt project is
         # another model whose compiled SQL the caller already has on disk.
-        if table is None or table_columns is None:
+        if table is None or table_columns is None or isinstance(expr, exp.Column):
             return None
         found = table_columns(_relation_key(table)) or table_columns(source.lower())
         if not found:
@@ -187,7 +208,7 @@ def extract_columns(
         # ValueError: unknown dialect; RecursionError: deeply nested SQL exceeds stack
         return None
 
-    select = tree.find(exp.Select)
+    select = _output_select(tree)
     if select is None:
         return None
 
@@ -255,7 +276,7 @@ def extract_cast_types(
     except (sqlglot.errors.ParseError, sqlglot.errors.TokenError, ValueError, RecursionError):
         return None
 
-    select = tree.find(exp.Select)
+    select = _output_select(tree)
     if select is None:
         return None
 

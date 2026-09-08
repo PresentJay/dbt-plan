@@ -124,6 +124,7 @@ def plan(
         ("columns_unreadable", report.get("parse_failures") or []),
         ("missing_from_manifest", report.get("skipped_models") or []),
         ("never_compiled", report.get("uncompiled_models") or []),
+        ("stale_sources", report.get("stale_sources") or []),
     ):
         if names:
             refusals.append({"reason": kind, "models": names})
@@ -138,15 +139,32 @@ def plan(
                     }
                 )
 
+    for model in report.get("models") or []:
+        for impact in model.get("downstream_impacts") or []:
+            if impact.get("risk") in {"unit_test_unreadable", "data_test_unreadable"}:
+                refusals.append(
+                    {
+                        "reason": impact["risk"],
+                        "models": [impact["model_name"]],
+                        "detail": impact.get("reason", ""),
+                    }
+                )
+
     if report.get("baseline_problem"):
         refusals.append(
             {"reason": "baseline_problem", "detail": report["baseline_problem"], "models": []}
         )
 
     verdict = _VERDICTS[result.returncode]
+    # A waiver changes the exit policy, not what the analysis found.
+    findings = {model.get("safety") for model in report.get("models") or []}
+    if "destructive" in findings:
+        verdict = "destructive"
+    elif "warning" in findings and verdict == "safe":
+        verdict = "warning"
     # warning_exit_code is configurable, so exit 0 alone does not guarantee that
     # every model was judged. Refusals always require human review.
-    if verdict == "safe" and refusals:
+    if verdict in {"safe", "warning"} and refusals:
         verdict = "review_required"
 
     return {

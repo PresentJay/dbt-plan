@@ -367,7 +367,7 @@ class TestPredictorNullSafety:
     """Verify predict_ddl handles None on_schema_change gracefully."""
 
     def test_predict_ddl_null_osc(self):
-        """None on_schema_change defaults to 'ignore' behavior."""
+        """Ignoring schema DDL does not guarantee a successful incremental build."""
         from dbt_plan.predictor import Safety, predict_ddl
 
         result = predict_ddl(
@@ -378,8 +378,7 @@ class TestPredictorNullSafety:
             current_columns=["id", "name", "email"],
             status="modified",
         )
-        # None osc → "ignore" → no DDL → SAFE
-        assert result.safety == Safety.SAFE
+        assert result.safety == Safety.WARNING
 
     def test_predict_ddl_null_materialization_treated_as_table(self):
         """If somehow a null materialization leaks through, test it doesn't crash."""

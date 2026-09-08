@@ -299,7 +299,7 @@ class TestCascade:
         assert updated.downstream_impacts == []
 
     def test_incremental_ignore_still_checks_its_own_unit_tests(self):
-        """No DDL runs, but a unit test executes the model's SELECT, not the merge."""
+        """Ignoring schema DDL does not guarantee a successful incremental build."""
         pred = predict_ddl(
             model_name="stg_orders",
             materialization="incremental",
@@ -307,7 +307,7 @@ class TestCascade:
             base_columns=["order_id", "customer_id"],
             current_columns=["order_id"],
         )
-        assert pred.safety == Safety.SAFE
+        assert pred.safety == Safety.WARNING
 
         updated = self._cascade(
             pred,
@@ -336,8 +336,6 @@ class TestCascade:
                 ),
             ],
         )
-        # Its own test breaks. Nothing downstream moves, because the physical
-        # table keeps the column.
         assert [i.model_name for i in updated.downstream_impacts] == ["test_shape"]
         assert updated.safety == Safety.WARNING
 

@@ -1032,3 +1032,46 @@ class TestADeletedModelAgainstRealDbt:
         assert "DESTRUCTIVE  doomed (incremental, sync_all_columns)" in result.stdout
         assert "MODEL REMOVED" in result.stdout
         assert result.returncode == 1, result.stdout
+
+
+@pytest.mark.parametrize("change", ["remove", "add"])
+def test_ignore_schema_changes_warn_before_real_incremental_failure(tmp_path, change):
+    """Build the old target first: a first build would hide the ignore failure."""
+    project = tmp_path / "ignore_project"
+    (project / "models").mkdir(parents=True)
+    (project / "dbt_project.yml").write_text(
+        'name: ignore_project\nversion: "1.0"\nconfig-version: 2\nprofile: ignore_project\n'
+    )
+    (project / "profiles.yml").write_text(
+        "ignore_project:\n  target: dev\n  outputs:\n    dev:\n      type: duckdb\n      path: warehouse.duckdb\n      threads: 1\n"
+    )
+    old = "select 1 as id, 2 as tax" if change == "remove" else "select 1 as id"
+    new = "select 1 as id" if change == "remove" else "select 1 as id, 2 as tax"
+    model = project / "models/orders.sql"
+    config = "{{ config(materialized='incremental', on_schema_change='ignore') }}\n"
+    model.write_text(config + old)
+    build = subprocess.run(
+        [_DBT, "run", "--profiles-dir", "."],
+        cwd=project,
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+    assert build.returncode == 0, build.stdout + build.stderr
+    assert _dbt_plan(["snapshot", "--project-dir", str(project)]).returncode == 0
+    model.write_text(config + new)
+    if change == "add":
+        (project / "models/reader.sql").write_text("select tax from {{ ref('orders') }}")
+    _dbt_compile(project)
+    check = _dbt_plan(["check", "--project-dir", str(project), "--format", "json"])
+    assert check.returncode != 0, check.stdout
+    assert "on_schema_change=ignore" in check.stdout
+    build = subprocess.run(
+        [_DBT, "run", "--profiles-dir", "."],
+        cwd=project,
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+    assert build.returncode != 0, build.stdout
+    assert "tax" in build.stdout + build.stderr
