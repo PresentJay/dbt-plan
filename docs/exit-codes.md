@@ -13,7 +13,10 @@ published versions and Action tags retain their behavior until upgraded.
 
 This table describes `check` and `run`. Setup commands and `--help`/`--version`
 exit 0 on success without producing an analysis report. Invalid CLI arguments
-also exit 3, including errors normally reported by argparse as 2.
+also exit 3, including errors normally reported by argparse as 2. Unsupported,
+empty, or unknown `--select` terms now exit 3 without a completed report, even
+when combined with valid terms. Earlier versions could warn and return 0. A known
+but unchanged model remains a valid empty selection; see [selection](selection.md).
 
 A review finding includes unparseable or non-UTF-8 model SQL, unknown rules,
 incomplete baselines, stale inputs, and potentially broken builds/tests that can

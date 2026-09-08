@@ -69,16 +69,31 @@ class TestGraphOperators:
         assert _select("rpt_top_books+") == ({"rpt_top_books"}, [])
 
     def test_a_name_not_in_the_manifest_still_selects_itself(self):
-        """Same as before: it matches nothing and the caller warns about that."""
+        """Keep the unresolved name so the caller rejects it rather than reporting no changes."""
         assert _select("typo_model+") == ({"typo_model"}, [])
 
-    @pytest.mark.parametrize("term", ["", "  ", "+", "++"])
-    def test_empty_terms_are_skipped(self, term):
-        assert _select(term) == (set(), [])
+    @pytest.mark.parametrize("term", ["", "  ", "+", "++", "dim_books,", ",dim_books"])
+    def test_empty_terms_are_rejected(self, term):
+        assert _select(term)[1]
 
 
 class TestUnsupportedSelectors:
-    @pytest.mark.parametrize("term", ["tag:nightly", "path:models/staging", "staging.*"])
+    @pytest.mark.parametrize(
+        "term",
+        [
+            "tag:nightly",
+            "path:models/staging",
+            "staging.*",
+            "fct_orders+2",
+            "2+dim_books",
+            "@fct_orders",
+            "dim_books++",
+            "++dim_books",
+            "dim_books fct_orders",
+            "dim?",
+            "dim[12]",
+        ],
+    )
     def test_they_are_reported_rather_than_matching_nothing(self, term):
         """Silently matching nothing is how a filter hides findings."""
         selected, unsupported = _select(term)
@@ -89,3 +104,50 @@ class TestUnsupportedSelectors:
         selected, unsupported = _select("dim_books, tag:nightly")
         assert selected == {"dim_books"}
         assert unsupported == ["tag:nightly"]
+
+
+class TestCompiledNames:
+    @pytest.fixture
+    def index(self):
+        return build_node_index(
+            {
+                "metadata": {"project_name": "p"},
+                "nodes": {
+                    "model.p.orders.v1": {
+                        "name": "orders",
+                        "version": 1,
+                        "path": "orders_v1.sql",
+                        "config": {},
+                    },
+                    "model.p.orders.v2": {
+                        "name": "orders",
+                        "version": 2,
+                        "path": "orders_current.sql",
+                        "config": {},
+                    },
+                    "model.p.reader": {"name": "reader", "path": "reader.sql", "config": {}},
+                },
+            }
+        )
+
+    @pytest.mark.parametrize("term", ["orders_current", "orders_v2"])
+    def test_explicit_version_and_defined_in_alias_use_compiled_stem(self, index, term):
+        assert _expand_selection(term, {}, index) == ({"orders_current"}, [])
+
+    def test_graph_resolves_node_id_back_to_the_actual_compiled_stem(self, index):
+        graph = {
+            "model.p.orders.v1": ["model.p.orders.v2"],
+            "model.p.orders.v2": ["model.p.reader"],
+        }
+        assert _expand_selection("orders_v1+", graph, index) == (
+            {"orders_v1", "orders_current", "reader"},
+            [],
+        )
+        assert _expand_selection("+reader", graph, index) == (
+            {"orders_v1", "orders_current", "reader"},
+            [],
+        )
+
+    def test_version_family_is_not_implicitly_expanded(self, index):
+        # The caller rejects this unresolved name and explains explicit version selection.
+        assert _expand_selection("orders", {}, index) == ({"orders"}, [])

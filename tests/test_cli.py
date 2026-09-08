@@ -684,8 +684,8 @@ class TestSelectFilter:
         model_names = sorted(m["model_name"] for m in data["models"])
         assert model_names == ["m1", "m3"]
 
-    def test_select_no_match_returns_empty(self, tmp_path, capsys):
-        """--select with non-existent model name results in empty output."""
+    def test_select_no_match_is_an_error(self, tmp_path, capsys):
+        """An unknown model is not evidence that nothing changed."""
         manifest = {
             "nodes": {
                 "model.p.m1": {
@@ -705,10 +705,10 @@ class TestSelectFilter:
 
         args = _make_check_args(project_dir, fmt="json", select="nonexistent")
         exit_code = _do_check(args)
-        assert exit_code == 0
+        assert exit_code == 3
         captured = capsys.readouterr()
-        data = json.loads(captured.out)
-        assert data["summary"]["total"] == 0
+        assert captured.out == ""
+        assert "unknown model" in captured.err
 
 
 class TestIgnoreModels:
@@ -1217,8 +1217,8 @@ class TestRunGitHandling:
 
 
 class TestSelectWarning:
-    def test_select_no_match_warns(self, tmp_path, capsys):
-        """--select with no matching changed models warns on stderr."""
+    def test_select_unknown_model_names_the_error(self, tmp_path, capsys):
+        """Unknown selections identify the typo on stderr."""
         manifest = {
             "nodes": {
                 "model.p.m1": {"name": "m1", "config": {"materialized": "table"}},
@@ -1235,7 +1235,7 @@ class TestSelectWarning:
         args = _make_check_args(project_dir, select="nonexistent")
         _do_check(args)
         err = capsys.readouterr().err
-        assert "matched no changed models" in err
+        assert "unknown model" in err and "nonexistent" in err
 
 
 class TestTargetDir:
@@ -1330,3 +1330,152 @@ class TestMainDispatch:
         with patch("sys.argv", ["dbt-plan", "stats", "--project-dir", str(project_dir)]):
             main()
         assert "1 model(s)" in capsys.readouterr().out
+
+
+@pytest.mark.parametrize(
+    "selector",
+    [
+        "tag:nightly",
+        "path:models",
+        "m1+2",
+        "2+m1",
+        "@m1",
+        "m1++",
+        "m1,tag:nightly",
+        "m1,typo",
+        "typo",
+        "",
+        " ",
+        "+",
+        "m1,",
+    ],
+)
+@pytest.mark.parametrize("changed", [True, False])
+def test_invalid_selection_is_an_execution_error_without_a_report(
+    tmp_path, capsys, selector, changed
+):
+    manifest = {
+        "nodes": {"model.p.m1": {"name": "m1", "config": {"materialized": "table"}}},
+        "child_map": {},
+    }
+    project = _make_project(
+        tmp_path,
+        models_sql={"m1": "SELECT a, b FROM t"},
+        base_sql={"m1": "SELECT a FROM t" if changed else "SELECT a, b FROM t"},
+        manifest=manifest,
+        base_manifest=manifest,
+    )
+    assert _do_check(_make_check_args(project, fmt="json", select=selector)) == 3
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert "Error: --select" in captured.err
+
+
+def test_known_unchanged_selection_is_a_valid_empty_report(tmp_path, capsys):
+    manifest = {
+        "nodes": {
+            f"model.p.{name}": {"name": name, "config": {"materialized": "table"}}
+            for name in ["m1", "m2"]
+        },
+        "child_map": {},
+    }
+    project = _make_project(
+        tmp_path,
+        models_sql={"m1": "SELECT a, b FROM t", "m2": "SELECT x FROM t"},
+        base_sql={"m1": "SELECT a FROM t", "m2": "SELECT x FROM t"},
+        manifest=manifest,
+        base_manifest=manifest,
+    )
+    assert _do_check(_make_check_args(project, fmt="json", select="m2")) == 0
+    captured = capsys.readouterr()
+    assert json.loads(captured.out)["models"] == []
+    assert "no changed models" in captured.err
+
+
+def test_selection_accepts_removed_models_from_baseline(tmp_path, capsys):
+    base = {
+        "nodes": {"model.p.removed": {"name": "removed", "config": {"materialized": "table"}}},
+        "child_map": {},
+    }
+    project = _make_project(
+        tmp_path,
+        models_sql={},
+        base_sql={"removed": "SELECT a FROM t"},
+        manifest={"nodes": {}, "child_map": {}},
+        base_manifest=base,
+    )
+    assert _do_check(_make_check_args(project, fmt="json", select="removed")) == 1
+    assert json.loads(capsys.readouterr().out)["models"][0]["model_name"] == "removed"
+
+
+@pytest.mark.parametrize("missing", ["current", "baseline", "neither"])
+def test_version_aliases_do_not_create_phantom_artifacts(tmp_path, capsys, missing):
+    manifest = {
+        "metadata": {"project_name": "p"},
+        "nodes": {
+            "model.p.orders.v2": {
+                "name": "orders",
+                "version": 2,
+                "path": "orders_current.sql",
+                "config": {"materialized": "table"},
+            }
+        },
+        "child_map": {},
+    }
+    sql = {"orders_current": "SELECT a FROM t"}
+    project = _make_project(
+        tmp_path,
+        models_sql={} if missing == "current" else sql,
+        base_sql={} if missing == "baseline" else sql,
+        manifest=manifest,
+        base_manifest=manifest,
+    )
+    code = _do_check(_make_check_args(project, fmt="json", select="orders_v2"))
+    data = json.loads(capsys.readouterr().out)
+    assert code == {"current": 1, "baseline": 2, "neither": 0}[missing]
+    assert data["uncompiled_models"] == (["orders_current"] if missing == "current" else [])
+    if missing == "baseline":
+        assert "orders_current" in data["baseline_problem"]
+        assert "orders_v2" not in data["baseline_problem"]
+
+
+def test_removed_version_is_reported_once_by_its_compiled_name(tmp_path, capsys):
+    baseline = {
+        "metadata": {"project_name": "p"},
+        "nodes": {
+            "model.p.orders.v2": {
+                "name": "orders",
+                "version": 2,
+                "path": "orders_current.sql",
+                "config": {"materialized": "table"},
+            }
+        },
+        "child_map": {},
+    }
+    project = _make_project(
+        tmp_path,
+        models_sql={"orders_current": "SELECT a FROM t"},
+        base_sql={"orders_current": "SELECT a FROM t"},
+        manifest={"nodes": {}, "child_map": {}},
+        base_manifest=baseline,
+    )
+    assert _do_check(_make_check_args(project, fmt="json")) == 1
+    data = json.loads(capsys.readouterr().out)
+    assert [m["model_name"] for m in data["models"]] == ["orders_current"]
+
+
+def test_invalid_selection_cannot_be_waived_by_warning_policy(tmp_path, capsys, monkeypatch):
+    monkeypatch.setenv("DBT_PLAN_WARNING_EXIT_CODE", "0")
+    manifest = {
+        "nodes": {"model.p.m1": {"name": "m1", "config": {"materialized": "table"}}},
+        "child_map": {},
+    }
+    project = _make_project(
+        tmp_path,
+        models_sql={"m1": "SELECT a FROM t"},
+        base_sql={"m1": "SELECT a FROM t"},
+        manifest=manifest,
+        base_manifest=manifest,
+    )
+    assert _do_check(_make_check_args(project, fmt="json", select="m1+2")) == 3
+    assert capsys.readouterr().out == ""
