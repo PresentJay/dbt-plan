@@ -528,8 +528,8 @@ class TestStatsWithDialect:
 class TestStatsWithCorruptManifest:
     """Scenario 7: Stats with corrupt manifest."""
 
-    def test_invalid_json_exits_2(self, tmp_path, capsys):
-        """manifest.json with invalid JSON should exit 2 with error message."""
+    def test_invalid_json_exits_3(self, tmp_path, capsys):
+        """manifest.json with invalid JSON should exit 3 with error message."""
         manifest_path = tmp_path / "manifest.json"
         manifest_path.write_text("{invalid json!!!")
 
@@ -537,17 +537,17 @@ class TestStatsWithCorruptManifest:
         with pytest.raises(SystemExit) as exc:
             _do_stats(args)
 
-        assert exc.value.code == 2
+        assert exc.value.code == 3
         err = capsys.readouterr().err
         assert "Could not parse manifest.json" in err
 
-    def test_missing_manifest_exits_2(self, tmp_path, capsys):
-        """Non-existent manifest should exit 2."""
+    def test_missing_manifest_exits_3(self, tmp_path, capsys):
+        """Non-existent manifest should exit 3."""
         args = _make_args(str(tmp_path), manifest=str(tmp_path / "nonexistent_manifest.json"))
         with pytest.raises(SystemExit) as exc:
             _do_stats(args)
 
-        assert exc.value.code == 2
+        assert exc.value.code == 3
         err = capsys.readouterr().err
         assert "manifest.json not found" in err
 

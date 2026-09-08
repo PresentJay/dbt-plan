@@ -50,6 +50,6 @@ dbt-plan check \
   > /dev/null 2>&1
 EXIT_CODE=$?
 set -e
-echo "exit code: $EXIT_CODE (0=safe, 1=destructive, 2=error)"
+echo "exit code: $EXIT_CODE (0=safe, 1=destructive, 2=warning, 3=execution error)"
 echo ""
 echo "이 예제에서는 int_order_enriched에 DROP COLUMN + fct_daily_sales cascade broken ref이 있으므로 exit 1 (destructive) 입니다."

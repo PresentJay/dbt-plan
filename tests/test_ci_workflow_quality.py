@@ -366,12 +366,12 @@ class TestFilePlacement:
         _run_ci_setup(tmp_path)
         assert (tmp_path / ".github" / "workflows").is_dir()
 
-    def test_exits_2_if_file_already_exists(self, tmp_path):
+    def test_exits_3_if_file_already_exists(self, tmp_path):
         """Second call exits with code 2 when file already exists."""
         _run_ci_setup(tmp_path)
         with pytest.raises(SystemExit) as exc_info:
             _run_ci_setup(tmp_path)
-        assert exc_info.value.code == 2
+        assert exc_info.value.code == 3
 
     def test_already_exists_message_includes_path(self, tmp_path, capsys):
         """Error message includes the workflow file path."""
@@ -396,12 +396,12 @@ class TestIdempotency:
         _run_ci_setup(tmp_path)
         assert wf_path.exists()
 
-    def test_second_call_exits_2(self, tmp_path):
+    def test_second_call_exits_3(self, tmp_path):
         """Second call exits with code 2."""
         _run_ci_setup(tmp_path)
         with pytest.raises(SystemExit) as exc_info:
             _run_ci_setup(tmp_path)
-        assert exc_info.value.code == 2
+        assert exc_info.value.code == 3
 
     def test_file_content_unchanged_after_failed_second_call(self, tmp_path):
         """File content is not modified when second call fails."""

@@ -1,3 +1,5 @@
+# Exit codes in the next minor release: 0 policy pass, 1 destructive, 2 review, 3 execution error.
+# Never allow code 3 as a warning. See docs/exit-codes.md before upgrading from 0.15.x.
 # dbt-plan CI workflow for GitHub Actions
 # Copy this file to your dbt project's .github/workflows/dbt-plan.yml
 #

@@ -13,7 +13,7 @@ import pytest
 import sqlglot.errors
 
 from dbt_plan.columns import extract_columns
-from dbt_plan.config import Config
+from dbt_plan.config import Config, ConfigError
 from dbt_plan.diff import diff_compiled_dirs
 from dbt_plan.manifest import load_manifest
 
@@ -194,27 +194,22 @@ class TestConfigExceptionHandling:
         config = Config.load(tmp_path)
         assert config.dialect == "bigquery"
 
-    def test_permission_denied_config_silently_ignored(self, tmp_path):
-        """PermissionError (subclass of OSError) -> silently ignored."""
+    def test_permission_denied_config_is_an_error(self, tmp_path):
+        """Unreadable policy is an execution failure, not a defaults fallback."""
         p = tmp_path / ".dbt-plan.yml"
         p.write_text("dialect: bigquery\n")
-        with patch("pathlib.Path.read_text", side_effect=PermissionError):
-            config = Config.load(tmp_path)
-        # Should fall back to defaults since file couldn't be read
-        assert config.dialect == "snowflake"
+        with (
+            patch("pathlib.Path.read_text", side_effect=PermissionError),
+            pytest.raises(ConfigError, match="Could not read configuration"),
+        ):
+            Config.load(tmp_path)
 
     def test_unicode_decode_error_in_config_file(self, tmp_path):
-        """FIXED: Binary content in .dbt-plan.yml now handled gracefully.
-
-        UnicodeDecodeError is NOT a subclass of OSError. The except clause
-        now catches (OSError, UnicodeDecodeError) so non-UTF-8 config files
-        are silently skipped (defaults used).
-        """
+        """A binary config cannot silently discard the user's settings."""
         p = tmp_path / ".dbt-plan.yml"
         p.write_bytes(b"dialect: \xff\xfe bigquery\n")
-        # Should not crash — falls back to defaults
-        config = Config.load(tmp_path)
-        assert config.dialect == "snowflake"  # default, since file was unreadable
+        with pytest.raises(ConfigError, match="Could not read configuration"):
+            Config.load(tmp_path)
 
     def test_config_bom_stripped(self, tmp_path):
         """BOM in config file is handled (stripped after read)."""
@@ -316,7 +311,7 @@ class TestCliCheckExceptionHandling:
     """
 
     def test_manifest_json_decode_error_caught(self, tmp_path):
-        """JSONDecodeError from manifest -> exit 2 with error message."""
+        """JSONDecodeError from manifest -> exit 3 with error message."""
         import argparse
 
         from dbt_plan.cli import _do_check
@@ -346,10 +341,10 @@ class TestCliCheckExceptionHandling:
             select=None,
         )
         exit_code = _do_check(args)
-        assert exit_code == 2
+        assert exit_code == 3
 
     def test_manifest_oserror_caught(self, tmp_path):
-        """Missing manifest -> exit 2 with error message."""
+        """Missing manifest -> exit 3 with error message."""
         import argparse
 
         from dbt_plan.cli import _do_check
@@ -375,14 +370,14 @@ class TestCliCheckExceptionHandling:
         )
         # manifest.json doesn't exist -> exits with 2
         exit_code = _do_check(args)
-        assert exit_code == 2
+        assert exit_code == 3
 
 
 class TestCliCheckManifestUnicodeError:
     """Verify cli.py _do_check now handles UnicodeDecodeError from manifest."""
 
     def test_binary_manifest_returns_exit_2(self, tmp_path):
-        """Binary manifest with invalid UTF-8 -> exit 2 (not crash)."""
+        """Binary manifest with invalid UTF-8 -> exit 3 (not crash)."""
         import argparse
 
         from dbt_plan.cli import _do_check
@@ -410,7 +405,7 @@ class TestCliCheckManifestUnicodeError:
             select=None,
         )
         exit_code = _do_check(args)
-        assert exit_code == 2
+        assert exit_code == 3
 
 
 class TestCliSnapshotExceptionHandling:
@@ -421,7 +416,7 @@ class TestCliSnapshotExceptionHandling:
     """
 
     def test_multiple_projects_raises_value_error(self, tmp_path):
-        """Multiple dbt projects -> ValueError caught, exit 2."""
+        """Multiple dbt projects -> ValueError caught, exit 3."""
         import argparse
 
         from dbt_plan.cli import _do_snapshot
@@ -438,7 +433,7 @@ class TestCliSnapshotExceptionHandling:
         )
         with pytest.raises(SystemExit) as exc_info:
             _do_snapshot(args)
-        assert exc_info.value.code == 2
+        assert exc_info.value.code == 3
 
 
 class TestCliRunExceptionHandling:
@@ -452,7 +447,7 @@ class TestCliRunExceptionHandling:
     """
 
     def test_missing_dbt_command(self, tmp_path):
-        """Missing compile command -> exit 2."""
+        """Missing compile command -> exit 3."""
         import argparse
 
         from dbt_plan.cli import _do_run
@@ -473,7 +468,7 @@ class TestCliRunExceptionHandling:
             compile_command="nonexistent_binary_xyz compile",
         )
         exit_code = _do_run(args)
-        assert exit_code == 2
+        assert exit_code == 3
 
 
 # ---------------------------------------------------------------------------
@@ -749,14 +744,11 @@ class TestIdentifiedGaps:
     """
 
     def test_gap_config_unicode_decode_error_fixed(self, tmp_path):
-        """FIXED [config.py]: _load_file now catches (OSError, UnicodeDecodeError).
-
-        Config file with non-UTF-8 encoding is silently skipped (defaults used).
-        """
+        """Non-UTF-8 config raises a diagnostic error instead of applying defaults."""
         p = tmp_path / ".dbt-plan.yml"
         p.write_bytes(b"dialect: \xff\xfe bigquery\n")
-        config = Config.load(tmp_path)
-        assert config.dialect == "snowflake"  # default
+        with pytest.raises(ConfigError, match="Could not read configuration"):
+            Config.load(tmp_path)
 
     def test_gap_diff_unicode_decode_error_fixed(self, tmp_path):
         """FIXED [diff.py]: read_text() UnicodeDecodeError now caught.

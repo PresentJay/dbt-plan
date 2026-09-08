@@ -14,6 +14,10 @@ from pathlib import Path
 # This avoids adding runtime dependencies per project rules
 
 
+class ConfigError(ValueError):
+    """A configuration cannot be used without changing the intended policy."""
+
+
 DEFAULT_DIALECT = "snowflake"
 
 # dbt adapter names are mostly sqlglot dialect names already, so only the ones
@@ -79,6 +83,10 @@ class Config:
         config = cls()
         config._load_file(Path(project_dir))
         config._load_env()
+        if config.warning_exit_code == 3:
+            raise ConfigError(
+                "warning_exit_code=3 is reserved for execution errors; choose 0 or 2"
+            )
         return config
 
     def _load_file(self, project_dir: Path) -> None:
@@ -89,10 +97,8 @@ class Config:
 
         try:
             text = config_path.read_text(encoding="utf-8")
-        except (OSError, UnicodeDecodeError):
-            # OSError: permission denied, I/O error, etc.
-            # UnicodeDecodeError: non-UTF-8 file content (not a subclass of OSError)
-            return
+        except (OSError, UnicodeDecodeError) as exc:
+            raise ConfigError(f"Could not read configuration {config_path}: {exc}") from exc
 
         # Strip BOM that some editors prepend to UTF-8 files
         text = text.lstrip("\ufeff")

@@ -115,7 +115,7 @@ class TestCorruptedManifest:
         assert result["models"][0]["safety"] == "safe"
 
     def test_corrupted_current_manifest_returns_error(self, tmp_path, capsys):
-        """Corrupted current manifest.json should return exit code 2 with error message."""
+        """Corrupted current manifest.json should return exit code 3 with error message."""
         project_dir = tmp_path / "project"
         project_dir.mkdir()
 
@@ -137,7 +137,7 @@ class TestCorruptedManifest:
         exit_code = _do_check(_check_args(project_dir))
         captured = capsys.readouterr()
 
-        assert exit_code == 2
+        assert exit_code == 3
         assert "Could not parse manifest.json" in captured.err
 
 
@@ -177,7 +177,7 @@ class TestEmptyManifest:
         assert result["summary"]["total"] == 1
 
     def test_empty_current_manifest_returns_error(self, tmp_path, capsys):
-        """Empty current manifest.json should return exit code 2 when diffs exist."""
+        """Empty current manifest.json should return exit code 3 when diffs exist."""
         project_dir = tmp_path / "project"
         project_dir.mkdir()
 
@@ -198,7 +198,7 @@ class TestEmptyManifest:
         exit_code = _do_check(_check_args(project_dir))
         captured = capsys.readouterr()
 
-        assert exit_code == 2
+        assert exit_code == 3
         assert "Could not parse manifest.json" in captured.err
 
     def test_empty_current_manifest_is_an_error_even_with_no_diff(self, tmp_path, capsys):
@@ -229,7 +229,7 @@ class TestEmptyManifest:
         exit_code = _do_check(_check_args(project_dir))
         captured = capsys.readouterr()
 
-        assert exit_code == 2
+        assert exit_code == 3
         assert "manifest" in captured.err.lower()
 
 
@@ -507,7 +507,7 @@ class TestSnapshotDirIsFile:
         capsys.readouterr()
 
         # Should return error exit code, not crash with unhandled exception
-        assert exit_code == 2
+        assert exit_code == 3
 
 
 # ---------------------------------------------------------------------------

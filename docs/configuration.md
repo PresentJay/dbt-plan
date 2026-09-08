@@ -96,7 +96,11 @@ dbt-plan --version    # dbt-plan 0.1.0
 |------|--------|-------------|---------|
 | 0 | SAFE | 안전한 변경 (CREATE OR REPLACE, ADD COLUMN) | 통과 |
 | 1 | DESTRUCTIVE | 파괴적 변경 (DROP COLUMN, MODEL REMOVED) | merge 차단 |
-| 2 | WARNING | 파싱 실패 또는 인프라 오류 | 통과 (경고) |
+| 2 | WARNING | SQL 분석의 불확실성 또는 잠재적 빌드 실패 | 기본 CLI에서는 실패; CI 정책에 따라 허용 |
+| 3 | ERROR | 입력·컴파일·복원·내부 오류로 실행을 완료하지 못함 | 차단 |
+
+다음 마이너 릴리스부터 적용하는 변경입니다. `warning_exit_code`의 기본값은 2이며,
+실행 오류에 쓰는 3은 경고 코드로 설정할 수 없습니다. [이전 버전에서 전환하기](exit-codes.md)를 참고하세요.
 
 ## 디렉토리 구조
 

@@ -120,22 +120,22 @@ class TestEmptyCompileCommandHandled:
     """
 
     @patch("dbt_plan.config.Config.load")
-    def test_empty_compile_command_returns_2(self, mock_config_load):
-        """Empty compile_command returns exit code 2 with helpful message."""
+    def test_empty_compile_command_returns_3(self, mock_config_load):
+        """Empty compile_command returns exit code 3 with helpful message."""
         mock_config_load.return_value = _mock_config("")
         args = _make_run_args("/tmp/fake", compile_command="")
 
         exit_code = _do_run(args)
-        assert exit_code == 2
+        assert exit_code == 3
 
     @patch("dbt_plan.config.Config.load")
-    def test_whitespace_compile_command_returns_2(self, mock_config_load):
-        """Whitespace-only compile_command returns exit code 2 with helpful message."""
+    def test_whitespace_compile_command_returns_3(self, mock_config_load):
+        """Whitespace-only compile_command returns exit code 3 with helpful message."""
         mock_config_load.return_value = _mock_config("   ")
         args = _make_run_args("/tmp/fake", compile_command="   ")
 
         exit_code = _do_run(args)
-        assert exit_code == 2
+        assert exit_code == 3
 
     @patch("dbt_plan.config.Config.load")
     def test_empty_compile_command_error_message(self, mock_config_load, capsys):
@@ -175,7 +175,7 @@ class TestVersionCheckLogic:
         mock_run.return_value = version_result
 
         exit_code = _do_run(args)
-        assert exit_code == 2
+        assert exit_code == 3
 
         # Verify it tried the --version check
         mock_run.assert_called_once_with(["mycli", "--version"], capture_output=True)
@@ -190,7 +190,7 @@ class TestVersionCheckLogic:
         mock_run.side_effect = FileNotFoundError("No such file")
 
         exit_code = _do_run(args)
-        assert exit_code == 2
+        assert exit_code == 3
 
     @patch("subprocess.run")
     @patch("dbt_plan.config.Config.load")
@@ -220,7 +220,7 @@ class TestVersionCheckLogic:
 
         exit_code = _do_run(args)
         # Should fail at git status step, not at version check
-        assert exit_code == 2
+        assert exit_code == 3
         assert call_count == 2
 
 
@@ -280,7 +280,7 @@ class TestGitStashSafety:
         mock_run.side_effect = side_effect
 
         exit_code = _do_run(args)
-        assert exit_code == 2
+        assert exit_code == 3
 
         # Verify stash pop was called after compile failure
         stash_push_seen = False
@@ -368,7 +368,7 @@ class TestGitStashSafety:
         # The function does NOT check stash push return code, so it continues
         exit_code = _do_run(args)
         # It proceeds to compile, which fails, then tries stash pop
-        assert exit_code == 2
+        assert exit_code == 3
 
 
 # ===========================================================================
@@ -406,7 +406,7 @@ class TestCompileFailureHandling:
         mock_run.side_effect = side_effect
 
         exit_code = _do_run(args)
-        assert exit_code == 2
+        assert exit_code == 3
 
         captured = capsys.readouterr()
         assert "Database connection timeout after 30s" in captured.err
@@ -449,7 +449,7 @@ class TestCompileFailureHandling:
         mock_run.side_effect = side_effect
 
         exit_code = _do_run(args)
-        assert exit_code == 2
+        assert exit_code == 3
 
         captured = capsys.readouterr()
         assert "Syntax error in model_x.sql line 42" in captured.err
@@ -630,8 +630,8 @@ class TestGitNotFound:
 
     @patch("subprocess.run")
     @patch("dbt_plan.config.Config.load")
-    def test_git_not_found_returns_2(self, mock_config_load, mock_run, tmp_path):
-        """If git binary is missing, return exit code 2 with helpful message."""
+    def test_git_not_found_returns_3(self, mock_config_load, mock_run, tmp_path):
+        """If git binary is missing, return exit code 3 with helpful message."""
         mock_config_load.return_value = _mock_config("dbt compile")
         args = _make_run_args(str(tmp_path), compile_command="dbt compile")
 
@@ -651,12 +651,12 @@ class TestGitNotFound:
         mock_run.side_effect = side_effect
 
         exit_code = _do_run(args)
-        assert exit_code == 2
+        assert exit_code == 3
 
     @patch("subprocess.run")
     @patch("dbt_plan.config.Config.load")
-    def test_not_a_git_repo_returns_2(self, mock_config_load, mock_run, tmp_path):
-        """If not in a git repo, git status returns non-zero -> exit code 2."""
+    def test_not_a_git_repo_returns_3(self, mock_config_load, mock_run, tmp_path):
+        """If not in a git repo, git status returns non-zero -> exit code 3."""
         mock_config_load.return_value = _mock_config("dbt compile")
         args = _make_run_args(str(tmp_path), compile_command="dbt compile")
 
@@ -675,7 +675,7 @@ class TestGitNotFound:
         mock_run.side_effect = side_effect
 
         exit_code = _do_run(args)
-        assert exit_code == 2
+        assert exit_code == 3
 
 
 # ===========================================================================
@@ -838,7 +838,7 @@ class TestStashPushFailureHalts:
         mock_run.side_effect = side_effect
 
         exit_code = _do_run(args)
-        assert exit_code == 2
+        assert exit_code == 3
 
         compile_cmds = [c for c in call_sequence if c == ["dbt", "compile"]]
         assert compile_cmds == [], "must not compile a baseline from a dirty tree"

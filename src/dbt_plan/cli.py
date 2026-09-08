@@ -10,7 +10,26 @@ from collections.abc import Iterable, Sequence
 from pathlib import Path, PurePosixPath
 from typing import NamedTuple
 
+from dbt_plan.config import ConfigError
 from dbt_plan.formatter import CheckResult, format_github, format_json, format_text
+
+ERROR_EXIT_CODE = 3
+
+
+class _ArgumentParser(argparse.ArgumentParser):
+    def error(self, message: str) -> None:
+        self.print_usage(sys.stderr)
+        self.exit(ERROR_EXIT_CODE, f"{self.prog}: error: {message}\n")
+
+
+def _read_diff_sql(cached: str | None, path: Path | None) -> str | None:
+    """An undecodable model is reviewable uncertainty, not a process failure."""
+    if cached is not None or path is None:
+        return cached
+    try:
+        return path.read_text(encoding="utf-8")
+    except UnicodeDecodeError:
+        return None
 
 
 def _configure_output_streams() -> None:
@@ -189,7 +208,7 @@ def _do_snapshot(args: argparse.Namespace) -> None:
         found = _find_compiled_dir(target_dir)
     except ValueError as e:
         print(f"Error: {e}", file=sys.stderr)
-        sys.exit(2)
+        sys.exit(ERROR_EXIT_CODE)
     compiled_dir = found[0] if found else None
     if compiled_dir is None:
         print(
@@ -197,7 +216,7 @@ def _do_snapshot(args: argparse.Namespace) -> None:
             "Run 'dbt compile' first to generate compiled SQL there.",
             file=sys.stderr,
         )
-        sys.exit(2)
+        sys.exit(ERROR_EXIT_CODE)
 
     if base_dir.exists():
         # Validate base_dir is inside project to prevent path traversal via symlinks
@@ -209,7 +228,7 @@ def _do_snapshot(args: argparse.Namespace) -> None:
                 "Error: snapshot base directory escapes project directory",
                 file=sys.stderr,
             )
-            sys.exit(2)
+            sys.exit(ERROR_EXIT_CODE)
         if base_dir.is_file():
             base_dir.unlink()
         else:
@@ -315,7 +334,7 @@ def _do_init(args: argparse.Namespace) -> None:
             "Edit it directly, or delete it and re-run 'dbt-plan init'.",
             file=sys.stderr,
         )
-        sys.exit(2)
+        sys.exit(ERROR_EXIT_CODE)
 
     config_path.write_text(_SAMPLE_CONFIG, encoding="utf-8")
     print(f"Created {config_path}")
@@ -343,13 +362,13 @@ def _do_stats(args: argparse.Namespace) -> None:
             "Run 'dbt compile' to generate it, or use --manifest to specify a custom path.",
             file=sys.stderr,
         )
-        sys.exit(2)
+        sys.exit(ERROR_EXIT_CODE)
 
     try:
         manifest = load_manifest(manifest_path)
     except (json.JSONDecodeError, OSError, UnicodeDecodeError) as e:
         print(f"Error: Could not parse manifest.json: {e}", file=sys.stderr)
-        sys.exit(2)
+        sys.exit(ERROR_EXIT_CODE)
 
     # Count over the same index `check` builds, so package models and disabled
     # ones are out of both. Counting models check never looks at is half of what
@@ -721,7 +740,7 @@ def _do_check(args: argparse.Namespace) -> int:
     """Analyze compiled SQL changes and warn about DDL risks.
 
     Returns:
-        Exit code: 0=safe, 1=destructive, 2=warning/error.
+        Exit code: 0=safe, 1=destructive, 2=warning, 3=execution error.
     """
     # Lazy imports: sqlglot and heavy modules only loaded when actually needed
     from dataclasses import replace as _replace
@@ -776,7 +795,7 @@ def _do_check(args: argparse.Namespace) -> int:
             f"Error: Base directory not found: {base_dir}. Run 'dbt-plan snapshot' first.",
             file=sys.stderr,
         )
-        return 2
+        return ERROR_EXIT_CODE
 
     # Resolve compiled SQL directories
     base_compiled = base_dir / "compiled"
@@ -789,7 +808,7 @@ def _do_check(args: argparse.Namespace) -> int:
         found = _find_compiled_dir(target_dir)
     except ValueError as e:
         print(f"Error: {e}", file=sys.stderr)
-        return 2
+        return ERROR_EXIT_CODE
     current_compiled, model_dirs = found if found else (None, ())
     # A snapshot taken before 0.14 was copied from inside the model directory, so
     # the prefix is already gone and filtering by it would find nothing at all --
@@ -805,7 +824,7 @@ def _do_check(args: argparse.Namespace) -> int:
             "Run 'dbt compile' first to generate compiled SQL there.",
             file=sys.stderr,
         )
-        return 2
+        return ERROR_EXIT_CODE
 
     if not manifest_path.exists():
         print(
@@ -813,7 +832,7 @@ def _do_check(args: argparse.Namespace) -> int:
             "Run 'dbt compile' to generate it, or use --manifest to specify a custom path.",
             file=sys.stderr,
         )
-        return 2
+        return ERROR_EXIT_CODE
 
     # 1. Diff compiled dirs
     _log(f"Manifest: {manifest_path}")
@@ -823,7 +842,7 @@ def _do_check(args: argparse.Namespace) -> int:
         )
     except (ValueError, FileNotFoundError) as e:
         print(f"Error: {e}", file=sys.stderr)
-        return 2
+        return ERROR_EXIT_CODE
     _log(f"Found {len(model_diffs)} changed model(s)")
     # Filter ignored models from config
     if config.ignore_models:
@@ -840,7 +859,7 @@ def _do_check(args: argparse.Namespace) -> int:
         # JSONDecodeError: invalid JSON; OSError: file I/O error;
         # UnicodeDecodeError: non-UTF-8 file (not a subclass of OSError)
         print(f"Error: Could not parse manifest.json: {e}", file=sys.stderr)
-        return 2
+        return ERROR_EXIT_CODE
 
     base_manifest_path = base_dir / "manifest.json"
     baseline_problem: str | None = None
@@ -1003,28 +1022,18 @@ def _do_check(args: argparse.Namespace) -> int:
             f"{diff.status.upper()} {diff.model_name}: "
             f"{node.materialization}, on_schema_change={node.on_schema_change}"
         )
-        base_cols = None
-        current_cols = None
-        if diff.base_sql is not None:
-            base_cols = extract_columns(
-                diff.base_sql, dialect=dialect, table_columns=base_table_columns
-            )
-        elif diff.base_path:
-            base_cols = extract_columns(
-                diff.base_path.read_text(encoding="utf-8"),
-                dialect=dialect,
-                table_columns=base_table_columns,
-            )
-        if diff.current_sql is not None:
-            current_cols = extract_columns(
-                diff.current_sql, dialect=dialect, table_columns=current_table_columns
-            )
-        elif diff.current_path:
-            current_cols = extract_columns(
-                diff.current_path.read_text(encoding="utf-8"),
-                dialect=dialect,
-                table_columns=current_table_columns,
-            )
+        base_sql = _read_diff_sql(diff.base_sql, diff.base_path)
+        current_sql = _read_diff_sql(diff.current_sql, diff.current_path)
+        base_cols = (
+            extract_columns(base_sql, dialect=dialect, table_columns=base_table_columns)
+            if base_sql is not None
+            else None
+        )
+        current_cols = (
+            extract_columns(current_sql, dialect=dialect, table_columns=current_table_columns)
+            if current_sql is not None
+            else None
+        )
 
         # Fallback: use manifest columns when SELECT * detected
         base_node = base_node_index.get(diff.model_name)
@@ -1046,7 +1055,10 @@ def _do_check(args: argparse.Namespace) -> int:
         # safe whatever the columns are -- true of the model itself, and false of
         # everything reading it. Unknown columns mean cascade cannot see a dropped
         # one, so the run must not exit 0 while the report says SAFE. See #131.
-        if diff.status == "modified" and (base_cols is None or current_cols is None):
+        parse_failed = (
+            diff.status == "modified" and (base_cols is None or current_cols is None)
+        ) or (diff.status == "added" and current_cols is None)
+        if parse_failed:
             parse_failures.append(diff.model_name)
             if base_cols == ["*"] or current_cols == ["*"]:
                 _log(
@@ -1063,6 +1075,13 @@ def _do_check(args: argparse.Namespace) -> int:
             status=diff.status,
         )
 
+        if diff.status == "added" and parse_failed and prediction.safety == Safety.SAFE:
+            prediction = _replace(
+                prediction,
+                safety=Safety.WARNING,
+                operations=[DDLOperation("REVIEW REQUIRED (could not extract columns)")],
+            )
+
         # An enforced contract is checked against the SQL, not against the base
         # revision, so a removed model has nothing left to check.
         if diff.status != "removed":
@@ -1070,10 +1089,9 @@ def _do_check(args: argparse.Namespace) -> int:
             # type is documentation, and this is the one place dbt enforces it.
             contract_casts = None
             if node.contract_enforced and node.column_types:
-                sql = diff.current_sql
-                if sql is None and diff.current_path:
-                    sql = diff.current_path.read_text(encoding="utf-8")
-                contract_casts = extract_cast_types(sql, dialect=dialect) if sql else None
+                contract_casts = (
+                    extract_cast_types(current_sql, dialect=dialect) if current_sql else None
+                )
             prediction = apply_contract(prediction, node, current_cols, contract_casts, dialect)
 
         # Detect materialization or on_schema_change config changes
@@ -1124,13 +1142,7 @@ def _do_check(args: argparse.Namespace) -> int:
         # difference between "fix your compile target" and "this tool is noisy,
         # add it to ignore_models".
         if prediction.safety == Safety.WARNING and any(
-            _star_macro_degraded(text)
-            for text in (
-                diff.current_sql
-                or (diff.current_path.read_text(encoding="utf-8") if diff.current_path else ""),
-                diff.base_sql
-                or (diff.base_path.read_text(encoding="utf-8") if diff.base_path else ""),
-            )
+            _star_macro_degraded(text) for text in (current_sql or "", base_sql or "")
         ):
             prediction = _replace(
                 prediction,
@@ -1157,18 +1169,9 @@ def _do_check(args: argparse.Namespace) -> int:
             "view",
             "ephemeral",
         ):
-            base_sql_text = diff.base_sql
-            if base_sql_text is None and diff.base_path:
-                base_sql_text = diff.base_path.read_text(encoding="utf-8")
-            current_sql_text = diff.current_sql
-            if current_sql_text is None and diff.current_path:
-                current_sql_text = diff.current_path.read_text(encoding="utf-8")
-
-            base_casts = (
-                extract_cast_types(base_sql_text, dialect=dialect) if base_sql_text else None
-            )
+            base_casts = extract_cast_types(base_sql, dialect=dialect) if base_sql else None
             current_casts = (
-                extract_cast_types(current_sql_text, dialect=dialect) if current_sql_text else None
+                extract_cast_types(current_sql, dialect=dialect) if current_sql else None
             )
             if base_casts and current_casts:
                 type_ops = [
@@ -1377,6 +1380,8 @@ jobs:
           dbt compile
           dbt-plan check --format github >> $GITHUB_STEP_SUMMARY
 
+      # Default CLI policy: 1 destructive, 2 review required, 3 execution error.
+      # Every nonzero code fails this workflow; 3 must never be allowed as a warning.
       - name: Gate
         run: dbt-plan check
 """
@@ -1394,7 +1399,7 @@ def _do_ci_setup(args: argparse.Namespace) -> None:
             "Edit it directly, or delete it and re-run 'dbt-plan ci-setup'.",
             file=sys.stderr,
         )
-        sys.exit(2)
+        sys.exit(ERROR_EXIT_CODE)
 
     workflows_dir.mkdir(parents=True, exist_ok=True)
     workflow_path.write_text(_CI_WORKFLOW, encoding="utf-8")
@@ -1431,11 +1436,13 @@ dbt-plan itself never connects to the warehouse and never runs SQL.
 
 ### Reading the result
 
-- `0` — every change is safe.
+- `0` — no blocking findings under the configured policy.
 - `1` — destructive: a column is being dropped, a model removed, or a downstream
   reference broken.
 - `2` — review needed: dbt-plan found a possible build/test failure or could not fully
-  assess the change. A human has to look. Invalid input or a command error also exits `2`.
+  assess the change. A human has to look.
+- `3` — execution failed: invalid input, a compile/recovery failure, or an internal
+  error prevented completion. Fix the error and rerun; there is no completed verdict.
 
 A warning is not automatically a blocker; it means "explain this before merging."
 
@@ -1527,7 +1534,7 @@ def _do_agent_setup(args: argparse.Namespace) -> None:
                 "Edit it directly, or delete that section and re-run 'dbt-plan agent-setup'.",
                 file=sys.stderr,
             )
-            sys.exit(2)
+            sys.exit(ERROR_EXIT_CODE)
         with path.open("a", encoding="utf-8") as f:
             f.write(("" if content.endswith("\n") else "\n") + "\n" + _AGENTS_GUIDE)
         print(f"Appended dbt-plan section to {path}")
@@ -1558,7 +1565,7 @@ def _do_run(args: argparse.Namespace) -> int:
     The dbt output directory can be customized with --target-dir (default: "target").
 
     Returns:
-        Exit code from check (0=safe, 1=destructive, 2=warning/error).
+        Exit code from check (0=safe, 1=destructive, 2=warning, 3=execution error).
     """
     import shlex
     import subprocess
@@ -1592,7 +1599,7 @@ def _do_run(args: argparse.Namespace) -> int:
             "  Check for unmatched quotes in compile_command.",
             file=sys.stderr,
         )
-        return 2
+        return ERROR_EXIT_CODE
     if not compile_argv:
         print(
             "Error: compile command is empty.\n"
@@ -1600,7 +1607,7 @@ def _do_run(args: argparse.Namespace) -> int:
             "  Examples: 'dbt compile', 'uv run dbt compile', 'poetry run dbt compile'",
             file=sys.stderr,
         )
-        return 2
+        return ERROR_EXIT_CODE
     try:
         result = subprocess.run([compile_argv[0], "--version"], capture_output=True)
     except FileNotFoundError:
@@ -1613,7 +1620,7 @@ def _do_run(args: argparse.Namespace) -> int:
             "  Examples: 'uv run dbt compile', 'poetry run dbt compile'",
             file=sys.stderr,
         )
-        return 2
+        return ERROR_EXIT_CODE
 
     _log(f"Compile command: {compile_command}")
 
@@ -1633,14 +1640,14 @@ def _do_run(args: argparse.Namespace) -> int:
             "Install git or use the manual workflow: dbt compile → dbt-plan snapshot → dbt-plan check",
             file=sys.stderr,
         )
-        return 2
+        return ERROR_EXIT_CODE
     if git_status.returncode != 0:
         print(
             "Error: not a git repository. The 'run' command uses git stash for baseline.\n"
             "Use the manual workflow instead: dbt compile → dbt-plan snapshot → dbt-plan check",
             file=sys.stderr,
         )
-        return 2
+        return ERROR_EXIT_CODE
     # dbt-plan's own snapshot is not the user's work. Counting it would stash it,
     # and the pop then collides with the snapshot this run is about to write --
     # leaving their real changes in the stash. `snapshot` gitignores it, so this
@@ -1660,7 +1667,7 @@ def _do_run(args: argparse.Namespace) -> int:
             baseline_ref = merge_base(project_dir, against)
         except CheckoutError as e:
             print(f"Error: {e}", file=sys.stderr)
-            return 2
+            return ERROR_EXIT_CODE
         _log(f"Baseline: where this branch left {against} ({baseline_ref[:12]})")
     else:
         head = subprocess.run(
@@ -1703,7 +1710,7 @@ def _do_run(args: argparse.Namespace) -> int:
                     f"Error: compile failed for baseline:\n{compile_base.stderr}",
                     file=sys.stderr,
                 )
-                return 2
+                return ERROR_EXIT_CODE
 
             _log("Saving snapshot...")
             _do_snapshot(argparse.Namespace(project_dir=str(project_dir), target_dir=target_dir))
@@ -1715,7 +1722,7 @@ def _do_run(args: argparse.Namespace) -> int:
             "  Your working tree and HEAD are where you left them.",
             file=sys.stderr,
         )
-        return 2
+        return ERROR_EXIT_CODE
     except StashError as e:
         print(
             "Error: could not stash your uncommitted changes, so a clean "
@@ -1724,10 +1731,10 @@ def _do_run(args: argparse.Namespace) -> int:
             "  the manual workflow: dbt compile -> dbt-plan snapshot -> dbt-plan check",
             file=sys.stderr,
         )
-        return 2
+        return ERROR_EXIT_CODE
 
     if stash.restore_failed:
-        return 2
+        return ERROR_EXIT_CODE
 
     # 5. Compile current state
     _log("Compiling current state...")
@@ -1744,7 +1751,7 @@ def _do_run(args: argparse.Namespace) -> int:
             f"Error: compile failed for current:\n{compile_curr.stderr}",
             file=sys.stderr,
         )
-        return 2
+        return ERROR_EXIT_CODE
 
     # 6. Run check
     _log("Checking for DDL risks...")
@@ -1763,11 +1770,11 @@ def _do_run(args: argparse.Namespace) -> int:
     return _do_check(check_args)
 
 
-def main() -> None:
+def _main() -> None:
     _configure_output_streams()
     from dbt_plan import __version__
 
-    parser = argparse.ArgumentParser(
+    parser = _ArgumentParser(
         prog="dbt-plan",
         description="Static analysis tool that warns about risky DDL changes before dbt run",
         epilog=(
@@ -1787,9 +1794,10 @@ def main() -> None:
             "  dbt-plan agent-setup       # tell coding agents how to use dbt-plan\n"
             "\n"
             "exit codes:\n"
-            "  0  all changes are safe\n"
+            "  0  no blocking findings under the configured policy\n"
             "  1  destructive changes detected\n"
-            "  2  warning or error (parse failure, missing files)\n"
+            "  2  review needed (SQL uncertainty or potential build failure)\n"
+            "  3  execution failed (invalid input, compile failure, internal error)\n"
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
@@ -1995,6 +2003,22 @@ def main() -> None:
         _do_ci_setup(args)
     elif args.command == "run":
         sys.exit(_do_run(args))
+
+
+def main() -> None:
+    """Keep operational and unexpected failures outside the verdict code space.
+
+    Exception deliberately excludes SystemExit and KeyboardInterrupt. Context
+    managers in run unwind before this boundary, preserving recovery behavior.
+    """
+    try:
+        _main()
+    except ConfigError as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        sys.exit(ERROR_EXIT_CODE)
+    except Exception as exc:
+        print(f"Error: dbt-plan could not complete ({type(exc).__name__}): {exc}", file=sys.stderr)
+        sys.exit(ERROR_EXIT_CODE)
 
 
 if __name__ == "__main__":

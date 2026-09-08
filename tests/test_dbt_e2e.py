@@ -1190,6 +1190,6 @@ class TestRunWithRealCompile:
         (run_project / ".dbt-plan").mkdir()
         before = _run_project_state(run_project)
         result = _real_run(run_project)
-        assert result.returncode == 2, result.stderr
+        assert result.returncode == 3, result.stderr
         assert f"compile failed for {phase}" in result.stderr
         assert _run_project_state(run_project) == before

@@ -465,7 +465,7 @@ class TestBorrowPreservesGitState:
             patch.object(stash, "_git", side_effect=fail_push_and_restore),
             patch("dbt_plan.cli._do_snapshot") as snapshot,
         ):
-            assert _run(_args(project, "git --version")) == 2
+            assert _run(_args(project, "git --version")) == 3
             snapshot.assert_not_called()
         err = capsys.readouterr().err
         assert "untouched" not in err
