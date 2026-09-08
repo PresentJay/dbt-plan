@@ -15,7 +15,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   reserved from warning configuration. See [migration instructions](docs/exit-codes.md). (#113)
 
 
+### Added
+- Required CI compares pinned real compilation with committed fixtures and executes
+  the composite Action against safe, warning, destructive and failed-compile projects.
+  A reproducible CLI benchmark replaces unsupported timing claims. (#164)
+
 ### Fixed
+- The Action preserves manifest dialect detection when its dialect input is empty;
+  explicit overrides apply consistently to JSON, summary and text reports. (#134)
 - Generated CI installs dbt/project dependencies and dbt-plan in one environment
   for uv projects or requirements.txt layouts, honors existing uv locks, and keeps
   the environment outside revision checkouts. Capture and validate the check report

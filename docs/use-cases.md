@@ -176,17 +176,13 @@ tables unless your macros introspect.
 Required checks have to be fast and they have to be reliable, or people start
 asking for merge overrides.
 
-Measured on a generated 200-model project, 20 of them dropping a column, chained
-lineage, three consecutive runs:
+The [CLI benchmark](performance.md) measures 50, 200, and 1,000 models with
+unchanged, one-changed, and all-changed workloads. It records every subprocess
+sample and checks the findings, so a fast but empty analysis fails the benchmark.
+Compilation is excluded and must be measured separately in your own project.
 
-```
-run1: real 0.41
-run2: real 0.27
-run3: real 0.25
-```
-
-No warehouse means nothing to be slow, nothing to be down, nothing to rate-limit,
-and no query bill for running it on all 40 pull requests you opened this week.
+The analysis reads local artifacts and makes no warehouse queries. Compilation
+may still connect through your adapter or macros.
 
 ### 4. Before you push
 
