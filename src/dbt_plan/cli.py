@@ -1720,7 +1720,7 @@ def _do_run(args: argparse.Namespace) -> int:
         print(
             "Error: could not stash your uncommitted changes, so a clean "
             f"baseline cannot be compiled:\n{e}\n"
-            "  Your working tree is untouched. Commit or stash manually, or use\n"
+            "  Check git status and any recovery instructions above before retrying, or use\n"
             "  the manual workflow: dbt compile -> dbt-plan snapshot -> dbt-plan check",
             file=sys.stderr,
         )

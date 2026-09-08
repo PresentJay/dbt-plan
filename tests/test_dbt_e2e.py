@@ -5,6 +5,8 @@ Skip if dbt is not installed.
 """
 
 import importlib.util
+import json
+import shlex
 import shutil
 import subprocess
 import sys
@@ -53,14 +55,14 @@ def _dbt_compile(project_dir: Path):
     assert result.returncode == 0, f"dbt compile failed: {result.stderr}"
 
 
-def _dbt_plan(args: list[str]) -> subprocess.CompletedProcess:
+def _dbt_plan(args: list[str], *, timeout: int = 30) -> subprocess.CompletedProcess:
     """Run dbt-plan CLI."""
     return subprocess.run(
         _DBT_PLAN_ARGV + args,
         capture_output=True,
         text=True,
         encoding="utf-8",
-        timeout=30,
+        timeout=timeout,
     )
 
 
@@ -1084,3 +1086,110 @@ def test_ignore_schema_changes_warn_before_real_incremental_failure(tmp_path, ch
     )
     assert build.returncode != 0, build.stdout
     assert "tax" in build.stdout + build.stderr
+
+
+def _run_git(project, *args):
+    result = subprocess.run(
+        ["git", *args], cwd=project, capture_output=True, text=True, encoding="utf-8", timeout=30
+    )
+    assert result.returncode == 0, result.stderr
+    return result.stdout
+
+
+_RUN_BASE_SQL = (
+    "{{ config(materialized='incremental', on_schema_change='sync_all_columns') }}\n"
+    "select 1 as order_id, 2 as amount\n"
+)
+_RUN_INVALID_SQL = "{{ exceptions.raise_compiler_error('intentional run test failure') }}\n"
+
+
+@pytest.fixture
+def run_project(tmp_path):
+    project = tmp_path / "run project"
+    (project / "models").mkdir(parents=True)
+    (project / "dbt_project.yml").write_text(
+        "name: run_project\nversion: '1.0.0'\nprofile: test_profile\n", encoding="utf-8"
+    )
+    shutil.copy2(DBT_PROJECT / "profiles.yml", project / "profiles.yml")
+    # --profiles-dir . makes dbt write its own .user.yml beside the test profile.
+    (project / ".gitignore").write_text("target/\nlogs/\n.user.yml\n", encoding="utf-8")
+    (project / "models" / "orders.sql").write_text(_RUN_BASE_SQL, encoding="utf-8")
+    _run_git(project, "init", "-q", "-b", "main")
+    _run_git(project, "config", "user.email", "test@example.com")
+    _run_git(project, "config", "user.name", "Run test")
+    _run_git(project, "config", "core.autocrlf", "false")
+    _run_git(project, "add", "-A")
+    _run_git(project, "commit", "-qm", "initial project")
+    model = project / "models" / "orders.sql"
+    model.write_text(_RUN_BASE_SQL + "-- earlier work\n", encoding="utf-8")
+    _run_git(project, "stash", "push", "-qm", "existing user stash")
+    initialized = _dbt_plan(["init", "--project-dir", str(project)])
+    assert initialized.returncode == 0, initialized.stderr
+    return project
+
+
+def _run_project_state(project):
+    return (
+        _run_git(project, "rev-parse", "HEAD"),
+        _run_git(project, "symbolic-ref", "--short", "HEAD"),
+        _run_git(project, "status", "--porcelain", "--untracked-files=all"),
+        _run_git(project, "diff", "--binary"),
+        _run_git(project, "diff", "--cached", "--binary"),
+        _run_git(project, "stash", "list", "--format=%H"),
+        (project / "models" / "orders.sql").read_bytes(),
+        (project / "notes.txt").read_bytes() if (project / "notes.txt").exists() else None,
+    )
+
+
+def _real_run(project):
+    command = shlex.join([_DBT, "compile", "--profiles-dir", ".", "--target-path", "target"])
+    return _dbt_plan(
+        ["run", "--project-dir", str(project), "--compile-command", command, "--format", "json"],
+        timeout=150,  # run invokes dbt twice, unlike the artifact-only commands
+    )
+
+
+class TestRunWithRealCompile:
+    def test_init_and_repeated_runs_preserve_work_and_report_column_drop(self, run_project):
+        before = _run_project_state(run_project)
+        first = _real_run(run_project)
+        assert first.returncode == 0, first.stderr
+        json.loads(first.stdout)
+        assert (run_project / ".dbt-plan" / "base").exists()
+        assert _run_project_state(run_project) == before
+
+        model = run_project / "models" / "orders.sql"
+        model.write_text(_RUN_BASE_SQL + "-- staged review note\n", encoding="utf-8")
+        _run_git(run_project, "add", "models/orders.sql")
+        model.write_text(_RUN_BASE_SQL.replace(", 2 as amount", ""), encoding="utf-8")
+        (run_project / "notes.txt").write_bytes(b"untracked review notes\n")
+        before = _run_project_state(run_project)
+        for _ in range(2):
+            result = _real_run(run_project)
+            assert result.returncode == 1, result.stderr
+            report = json.loads(result.stdout)
+            assert any(
+                model["model_name"] == "orders" and model["safety"] == "destructive"
+                for model in report["models"]
+            )
+            assert "amount" in result.stdout
+            assert _run_project_state(run_project) == before
+
+    @pytest.mark.parametrize("phase", ["baseline", "current"])
+    def test_failed_compile_preserves_work_index_and_existing_stash(self, run_project, phase):
+        model = run_project / "models" / "orders.sql"
+        if phase == "baseline":
+            model.write_text(_RUN_INVALID_SQL, encoding="utf-8")
+            _run_git(run_project, "add", "models/orders.sql")
+            _run_git(run_project, "commit", "-qm", "baseline that cannot compile")
+        model.write_text(_RUN_BASE_SQL + "-- staged review note\n", encoding="utf-8")
+        _run_git(run_project, "add", "models/orders.sql")
+        current = _RUN_BASE_SQL if phase == "baseline" else _RUN_INVALID_SQL
+        model.write_text(current, encoding="utf-8")
+        (run_project / "notes.txt").write_bytes(b"untracked review notes\n")
+        (run_project / ".dbt-plan").mkdir()
+        before = _run_project_state(run_project)
+        result = _real_run(run_project)
+        assert result.returncode == 2, result.stderr
+        assert f"compile failed for {phase}" in result.stderr
+        assert _run_project_state(run_project) == before

@@ -28,11 +28,12 @@ uv sync --extra test --extra dbt   # or: pip install -e ".[dev,dbt]"
 make test                          # the full suite
 ```
 
-The `dbt` extra is what makes the four end-to-end tests in `tests/test_dbt_e2e.py`
-actually run; they compile a real dbt project with duckdb. Without it those four
-skip, which is fine for most changes but means you are not exercising the
-`dbt-plan run` pipeline. Run `pytest -rs` to see why anything
-skipped — the reasons name the specific missing piece.
+The `dbt` extra enables `tests/test_dbt_e2e.py`, which compiles real projects
+with DuckDB. Its `run` cases use a real Git repository and real `dbt compile`
+to check repeated execution after `init`, destructive findings, and recovery
+from baseline/current compile failures, including staged and untracked work.
+Without the extra, this integration tier skips. Run `pytest -rs` to see why
+anything skipped; the required `integrations` CI job treats a skip as a failure.
 
 If those tests skip complaining that `dbt_plan is not importable`, your virtualenv
 lost the editable install:
@@ -163,12 +164,17 @@ prediction table comes from.
 ```bash
 make test          # everything, verbose
 make test-quick    # faster, quieter
-make test-cov      # coverage report (threshold 85%, currently 98%)
+make test-cov      # in-process coverage report (threshold 85%)
 make lint          # ruff check
 make format        # ruff format
 pytest -k sync     # by name pattern
 pytest -rs         # show skip reasons
 ```
+
+The coverage floor measures Python executed in the pytest process. It does not
+measure the CLI subprocesses in the real-dbt E2E tier. Those tests are enforced
+separately by the required `integrations` job; a coverage percentage is not a
+measure of end-to-end workflow or adapter coverage.
 
 ## Where to start
 
