@@ -12,9 +12,9 @@ verdict was "review required" -- the safe direction. The guard added with the
 feature only checked `except_` on the outer expression, but for a qualified
 `a.*` the modifier hangs off the inner Star node, so it was never seen.
 
-The fix is a whitelist rather than a list of known modifiers: a star with any
-argument at all is refused. A modifier this code has never heard of must not
-default to being ignored.
+Known EXCEPT/EXCLUDE modifiers resolve only when the source column list is
+known. RENAME, REPLACE and unknown modifiers refuse with None rather than
+falling back to a plain star that manifest documentation could make look safe.
 """
 
 from __future__ import annotations
@@ -25,21 +25,37 @@ from dbt_plan.columns import extract_columns
 from dbt_plan.predictor import predict_ddl
 
 
-class TestQualifiedStarModifiersAreRefused:
+class TestQualifiedStarModifiers:
     @pytest.mark.parametrize(
-        "dialect,sql",
+        "dialect,sql,expected",
         [
-            ("bigquery", "WITH a AS (SELECT p, q, s FROM t) SELECT a.* EXCEPT(s) FROM a"),
-            ("snowflake", "WITH a AS (SELECT p, q, s FROM t) SELECT a.* EXCLUDE (s) FROM a"),
-            ("snowflake", "WITH a AS (SELECT p, q FROM t) SELECT a.* RENAME (p AS r) FROM a"),
-            ("bigquery", "WITH a AS (SELECT p, q FROM t) SELECT a.* REPLACE(q + 1 AS q) FROM a"),
+            (
+                "bigquery",
+                "WITH a AS (SELECT p, q, s FROM t) SELECT a.* EXCEPT(s) FROM a",
+                ["p", "q"],
+            ),
+            (
+                "snowflake",
+                "WITH a AS (SELECT p, q, s FROM t) SELECT a.* EXCLUDE (s) FROM a",
+                ["p", "q"],
+            ),
+            (
+                "snowflake",
+                "WITH a AS (SELECT p, q FROM t) SELECT a.* RENAME (p AS r) FROM a",
+                None,
+            ),
+            (
+                "bigquery",
+                "WITH a AS (SELECT p, q FROM t) SELECT a.* REPLACE(q + 1 AS q) FROM a",
+                None,
+            ),
         ],
     )
-    def test_refuses(self, dialect, sql):
-        assert extract_columns(sql, dialect=dialect) == ["*"]
+    def test_resolves_known_exclusions_and_refuses_other_modifiers(self, dialect, sql, expected):
+        assert extract_columns(sql, dialect=dialect) == expected
 
 
-class TestUnqualifiedStarModifiersAreRefused:
+class TestUnqualifiedStarModifiers:
     @pytest.mark.parametrize(
         "dialect,sql",
         [
@@ -48,12 +64,12 @@ class TestUnqualifiedStarModifiersAreRefused:
         ],
     )
     def test_refuses(self, dialect, sql):
-        assert extract_columns(sql, dialect=dialect) == ["*"]
+        assert extract_columns(sql, dialect=dialect) is None
 
-    def test_except_keeps_its_existing_marker(self):
-        """The unqualified EXCEPT path predates resolution and is unchanged."""
+    def test_except_removes_known_cte_column(self):
+        """Known CTE columns allow exact EXCEPT expansion."""
         sql = "WITH a AS (SELECT p, q, s FROM t) SELECT * EXCEPT(s) FROM a"
-        assert extract_columns(sql, dialect="bigquery") == ["* except(s)"]
+        assert extract_columns(sql, dialect="bigquery") == ["p", "q"]
 
 
 class TestTheFalseSafeItself:
@@ -70,7 +86,8 @@ class TestTheFalseSafeItself:
         c = extract_columns(current, dialect="bigquery")
         verdict = predict_ddl("m", "incremental", "sync_all_columns", b, c, status="modified")
 
-        assert verdict.safety.name != "SAFE"
+        assert verdict.safety.name == "DESTRUCTIVE"
+        assert verdict.columns_removed == ["s"]
 
     def test_a_rename_is_not_safe_either(self):
         base = "WITH a AS (SELECT p, q FROM t) SELECT a.* FROM a"
@@ -80,7 +97,7 @@ class TestTheFalseSafeItself:
         c = extract_columns(current, dialect="snowflake")
         verdict = predict_ddl("m", "incremental", "sync_all_columns", b, c, status="modified")
 
-        assert verdict.safety.name != "SAFE"
+        assert verdict.safety.name == "WARNING"
 
 
 class TestPlainStarsStillResolve:

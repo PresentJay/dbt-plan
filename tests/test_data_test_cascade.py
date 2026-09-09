@@ -128,10 +128,13 @@ class TestCascade:
         assert impact.reason == "tests dropped column(s): customer_id"
         assert updated.safety == Safety.WARNING
 
-    def test_a_generic_test_on_a_surviving_column_is_not_a_finding(self):
+    def test_a_generic_test_on_a_surviving_column_is_not_a_finding(self, tmp_path):
+        sql = tmp_path / "not_null_stg_orders_order_id.sql"
+        sql.write_text("select order_id from stg_orders where order_id is null", encoding="utf-8")
         updated = self._cascade(
             tests={"t": _generic("not_null_stg_orders_order_id", "stg_orders", "order_id")},
             child_map={"model.p.stg_orders": ["test.p.t"]},
+            test_sql_index={"not_null_stg_orders_order_id": sql},
         )
         assert updated.downstream_impacts == []
         assert updated.safety == Safety.SAFE

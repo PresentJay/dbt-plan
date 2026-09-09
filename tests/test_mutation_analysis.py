@@ -303,8 +303,8 @@ class TestMutation6_RemoveLowerOnColumns:
     This would cause case-sensitive column names, breaking set comparisons
     when predictor.py computes column diffs.
 
-    VERDICT: CAUGHT — test_columns::TestStarExcept::test_star_except_lowercased
-    asserts lowercase output. test_manifest::TestManifestColumns also asserts
+    VERDICT: CAUGHT — test_column_names_must_be_lowercased
+    asserts lowercase unquoted output. test_manifest::TestManifestColumns also asserts
     lowercased columns from manifest. Multiple fixture tests rely on lowercase.
     """
 
@@ -350,11 +350,10 @@ class TestMutation7_StarReturnsNoneInsteadOfList:
         assert result == ["*"]
         assert result is not None
 
-    def test_star_except_returns_sentinel_not_none(self):
-        """SELECT * EXCEPT must return sentinel, not None."""
+    def test_star_except_without_source_refuses(self):
+        """An unresolved EXCEPT must refuse rather than masquerade as a plain star."""
         result = extract_columns("SELECT * EXCEPT(revenue) FROM t", dialect="bigquery")
-        assert result is not None
-        assert result == ["* except(revenue)"]
+        assert result is None
 
 
 class TestMutation8_RemoveBOMStripping:

@@ -7,8 +7,8 @@ from dbt_plan.predictor import Safety, predict_ddl
 class TestColumnReorderSyncAllColumns:
     """Scenario 1: Column reorder with sync_all_columns."""
 
-    def test_reorder_only_is_warning(self):
-        """Same columns in different order → WARNING with COLUMNS REORDERED."""
+    def test_reorder_only_is_safe(self):
+        """Projection order alone does not change dbt's column set or emit DDL."""
         result = predict_ddl(
             model_name="fct_ordered",
             materialization="incremental",
@@ -16,8 +16,8 @@ class TestColumnReorderSyncAllColumns:
             base_columns=["a", "b", "c"],
             current_columns=["c", "a", "b"],
         )
-        assert result.safety == Safety.WARNING
-        assert any(op.operation == "COLUMNS REORDERED" for op in result.operations)
+        assert result.safety == Safety.SAFE
+        assert result.operations == []
 
     def test_reorder_no_add_no_remove(self):
         """Reorder only → columns_added and columns_removed should be empty."""
@@ -200,8 +200,8 @@ class TestDuplicateColumns:
 class TestCaseOnlyReorder:
     """Scenario 7: Case-only reorder (lowercased columns, different order)."""
 
-    def test_case_only_reorder_detected(self):
-        """Lowercased columns in different order → COLUMNS REORDERED."""
+    def test_case_only_reorder_is_safe(self):
+        """Projection order alone does not change dbt's column set or emit DDL."""
         result = predict_ddl(
             model_name="fct_users",
             materialization="incremental",
@@ -209,11 +209,11 @@ class TestCaseOnlyReorder:
             base_columns=["user_id", "name"],
             current_columns=["name", "user_id"],
         )
-        assert result.safety == Safety.WARNING
-        assert any(op.operation == "COLUMNS REORDERED" for op in result.operations)
+        assert result.safety == Safety.SAFE
+        assert result.operations == []
 
     def test_case_only_reorder_three_columns(self):
-        """Three-column reorder with realistic names."""
+        """Projection order alone does not change dbt's column set or emit DDL."""
         result = predict_ddl(
             model_name="fct_orders",
             materialization="incremental",
@@ -221,8 +221,8 @@ class TestCaseOnlyReorder:
             base_columns=["order_id", "user_id", "created_at"],
             current_columns=["created_at", "order_id", "user_id"],
         )
-        assert result.safety == Safety.WARNING
-        assert any(op.operation == "COLUMNS REORDERED" for op in result.operations)
+        assert result.safety == Safety.SAFE
+        assert result.operations == []
 
     def test_extract_columns_lowercases_preserving_order(self):
         """extract_columns lowercases but preserves ordering."""
@@ -231,7 +231,7 @@ class TestCaseOnlyReorder:
         assert result == ["name", "user_id"]
 
     def test_mixed_case_reorder_via_extract(self):
-        """Mixed-case SELECT reorder: extract_columns feeds into predict_ddl."""
+        """Projection order alone does not change dbt's column set or emit DDL."""
         base_sql = "SELECT user_id, name FROM users"
         current_sql = "SELECT name, user_id FROM users"
         base_cols = extract_columns(base_sql)
@@ -246,5 +246,5 @@ class TestCaseOnlyReorder:
             base_columns=base_cols,
             current_columns=current_cols,
         )
-        assert result.safety == Safety.WARNING
-        assert any(op.operation == "COLUMNS REORDERED" for op in result.operations)
+        assert result.safety == Safety.SAFE
+        assert result.operations == []

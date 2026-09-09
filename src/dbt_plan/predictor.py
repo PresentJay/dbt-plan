@@ -53,6 +53,7 @@ RISK_SAFETY: dict[str, Safety] = {
     "inherited_change": Safety.WARNING,
     "data_test_failure": Safety.WARNING,
     "data_test_unreadable": Safety.WARNING,
+    "contract_violation": Safety.WARNING,
 }
 
 _SAFETY_RANK = {Safety.SAFE: 0, Safety.WARNING: 1, Safety.DESTRUCTIVE: 2}
@@ -381,12 +382,7 @@ def predict_ddl(
         ops += [DDLOperation("DROP COLUMN", col) for col in removed]
         safety = Safety.DESTRUCTIVE if removed else Safety.SAFE
 
-        # Detect column reordering: sync_all_columns drops + re-adds
-        # columns to match the new order even when the column set is unchanged
-        if not added and not removed and base_columns != current_columns:
-            ops = [DDLOperation("COLUMNS REORDERED")]
-            safety = Safety.WARNING
-
+        # dbt compares column sets; projection order alone does not cause DDL.
         return DDLPrediction(
             model_name=model_name,
             materialization=materialization,
@@ -558,9 +554,9 @@ def _data_test_impacts(
 
         Binder Error: Referenced column "customer_id" not found in FROM clause!
 
-    A generic test names its column in the manifest, so that answers it outright
-    and no file is read. A singular test names nothing there, so its compiled SQL
-    is searched for the dropped names -- the same check `broken_ref` runs against
+    A generic test names its primary column in the manifest. When it also has
+    predicates or custom arguments, that list is incomplete. Its compiled SQL,
+    like a singular test's SQL, is searched for the dropped names -- the same check `broken_ref` runs against
     a downstream model, and it reads only the current side for the same reason:
     the question is what the SQL names, not whether the file changed.
 
@@ -602,7 +598,8 @@ def _data_test_impacts(
             undescribed = [
                 model
                 for model in data_test.depends_on_models
-                if lost_by_model.get(model) and model not in data_test.columns_by_model
+                if lost_by_model.get(model)
+                and (model not in data_test.columns_by_model or data_test.requires_sql)
             ]
             if not undescribed:
                 continue
@@ -622,7 +619,7 @@ def _data_test_impacts(
                         on_schema_change=None,
                         risk="data_test_unreadable",
                         reason=(
-                            "names no column in the manifest and its compiled SQL was not "
+                            "the manifest does not describe every column read and compiled SQL was not "
                             "found, so dbt-plan cannot tell whether it reads the dropped "
                             "column(s)"
                         ),
@@ -780,9 +777,9 @@ def analyze_cascade_impacts(
             ds_node = node_index.get(ds_key) or base_node_index.get(ds_key)
             if not ds_node:
                 continue
-            if ds_node.materialization == "ephemeral":
-                continue  # CTE substitution, no physical table -- always safe
-            ds_nodes.append(ds_node)
+            # Ephemeral has no DDL, but its output still feeds tests and models.
+            if ds_node.materialization != "ephemeral":
+                ds_nodes.append(ds_node)
 
             ds_mat = ds_node.materialization
             ds_osc = ds_node.on_schema_change or "ignore"
@@ -893,8 +890,9 @@ def attach_downstream_exposures(
     all_downstream: dict[str, list[str]],
     child_map: dict[str, list[str]],
     exposure_index: dict,
+    model_cols: dict[str, tuple[list[str] | None, list[str] | None]] | None = None,
 ) -> list[DDLPrediction]:
-    """Name the exposures reading a model whose verdict is not safe.
+    """Name exposures downstream of unsafe changes or known SQL column losses.
 
     An exposure records that something outside the project -- a dashboard, a
     notebook, a reverse-ETL sync -- reads a model, and it declares that at model
@@ -903,8 +901,9 @@ def attach_downstream_exposures(
 
     Deliberately not a risk and deliberately not an escalation. An exposure
     existing does not make a change more dangerous, and inflating the verdict for
-    it would train people to ignore the line. For the same reason it is left off
-    safe verdicts: a list of dashboards under a green check is noise.
+    it would train people to ignore the line. Safe replacements are included only
+    when the SQL column diff proves a loss; additions and unchanged sets stay quiet.
+    `model_cols` carries that SQL diff even when the DDL prediction needs no ALTER.
 
     Exposures hang off every model they depend on as a direct child, so the
     changed model plus its downstream set covers them with no extra walk.
@@ -914,7 +913,8 @@ def attach_downstream_exposures(
 
     updated = list(predictions)
     for i, pred in enumerate(updated):
-        if pred.safety == Safety.SAFE:
+        _, removed = _column_diff(*(model_cols or {}).get(pred.model_name, (None, None)))
+        if pred.safety == Safety.SAFE and not removed:
             continue
         node_id = model_node_ids.get(pred.model_name)
         if not node_id:

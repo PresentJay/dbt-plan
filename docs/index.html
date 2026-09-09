@@ -276,21 +276,29 @@
     <h2>What you'll see</h2>
     <div class="output-demo"><span class="out-header">$ dbt-plan check</span>
 
-<span class="out-header">dbt-plan -- 3 model(s) changed</span>
+<span class="out-header">dbt-plan -- 4 model(s) changed</span>
+<span class="out-op">  dialect: snowflake (default; adapter: unknown)</span>
+<span class="out-op">  baseline: unknown revision, unknown snapshot time</span>
 
-<span class="out-dest">DESTRUCTIVE</span>  int_order_enriched (incremental, sync_all_columns)
-<span class="out-op">  DROP COLUMN  shipping_info
-  ADD COLUMN   shipping_city
-  Downstream: fct_orders, dim_customers (2 model(s))</span>
-  <span class="out-cascade">&gt;&gt; BROKEN_REF  fct_orders: references dropped column(s): shipping_info</span>
 
-<span class="out-warn">WARNING</span>  fct_strict (incremental, fail)
-<span class="out-op">  BUILD FAILURE</span>
+<span class="out-dest">DESTRUCTIVE  int_order_enriched (incremental, sync_all_columns)</span>
+<span class="out-op">  ADD COLUMN  billing_method</span>
+<span class="out-op">  ADD COLUMN  shipping_city</span>
+<span class="out-op">  DROP COLUMN  billing_info</span>
+<span class="out-op">  DROP COLUMN  shipping_info</span>
+<span class="out-op">  Downstream: dim_customers, fct_daily_sales (2 model(s))</span>
+<span class="out-cascade">  &gt;&gt; BROKEN_REF  fct_daily_sales: reads dropped column(s): shipping_info</span>
 
-<span class="out-safe">SAFE</span>  dim_customers (table)
+<span class="out-safe">SAFE  dim_customers (table)</span>
 <span class="out-op">  CREATE OR REPLACE TABLE</span>
 
-<span class="out-summary">dbt-plan: 3 checked, 1 safe, 1 warning, 1 destructive, 1 cascade risk(s)</span></div>
+<span class="out-safe">SAFE  dim_publishers (table)</span>
+<span class="out-op">  CREATE OR REPLACE TABLE</span>
+
+<span class="out-safe">SAFE  fct_daily_sales (incremental, append_new_columns)</span>
+<span class="out-op">  ADD COLUMN  total_sales</span>
+
+<span class="out-summary">dbt-plan: 4 checked, 3 safe, 0 warning, 1 destructive, 1 cascade risk(s)</span></div>
   </section>
 
   <!-- Features -->

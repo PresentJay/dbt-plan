@@ -162,7 +162,7 @@ class TestItSurvivesToTheOutput:
             "models/staging/stg_orders.sql"
         ]
 
-    @pytest.mark.parametrize("count,word", [(1, " is newer"), (2, " are newer")])
+    @pytest.mark.parametrize("count,word", [(1, " is not verified"), (2, " are not verified")])
     def test_the_sentence_agrees_with_itself(self, count, word):
         result = CheckResult(stale_sources=[f"models/m{i}.sql" for i in range(count)])
         assert word in format_text(result, color=False)
