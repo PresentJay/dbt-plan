@@ -201,6 +201,13 @@ class Config:
                     self.no_color = False
                 else:
                     self._warn_config(project_dir, line_number, f"cannot understand {key}")
+            elif key == "verbose":
+                if value.lower() in ("true", "1", "yes"):
+                    self.verbose = True
+                elif value.lower() in ("false", "0", "no"):
+                    self.verbose = False
+                else:
+                    self._warn_config(project_dir, line_number, f"cannot understand {key}")
             elif key == "dialect":
                 # Only allow alphanumeric dialect names (sqlglot dialect identifiers)
                 self.dialect_explicit = True
