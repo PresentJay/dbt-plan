@@ -7,7 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Breaking (next minor release, not a 0.15.x patch)
+## [0.16.0] - 2026-09-09
+
+### Breaking
+
 - Reject unsupported, empty and unknown `--select` terms with exit 3 and no completed
   report, including mixed valid/invalid selections. Existing unchanged selections
   remain valid. Versioned models require an explicit version/file name. (#145, #101)
@@ -17,13 +20,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Unreadable config is an error instead of silently loading defaults, and code 3 is
   reserved from warning configuration. See [migration instructions](docs/exit-codes.md). (#113)
 
-
 ### Added
+
+- Add a first-contribution guide with verified, scoped starter tasks. (#209)
+- Compare snapshot and Python-model changes through manifests, including projects
+  with no compiled SQL models. Changed Python models require review; DataFrame
+  schema inference remains unsupported. (#138, #144)
+- Report dialect selection and baseline revision/time, and support an explicit
+  instruction file with `agent-setup --file`. (#149, #170)
+- Check unchanged downstream contracts and surface exposure owners when safe
+  table/view replacement removes columns. (#159, #169)
 - Required CI compares pinned real compilation with committed fixtures and executes
   the composite Action against safe, warning, destructive and failed-compile projects.
   A reproducible CLI benchmark replaces unsupported timing claims. (#164)
 
 ### Fixed
+
+- Validate source content and compilation evidence for models and relevant data
+  tests. Partial compiles and orphaned test SQL no longer establish safety; shared
+  source warnings survive selection filtering and the diagnostic path limit.
+  (#133, #152, #168, #191, #200)
+- Detect relation/config changes with unchanged SQL and casts added or removed on
+  one side of an incremental change. (#140, #141)
+- Expand EXCLUDE/EXCEPT against known columns and retain readable names alongside
+  unknown projections. Refuse case-sensitive quoted identities rather than
+  folding them into false matches. (#142, #154, #160)
+- Inspect generic-test SQL even for local macros and built-in overrides; resolve
+  versioned unit-test inputs and propagate losses through ephemeral models.
+  (#143, #157, #167)
+- Validate SQL snapshot files with dbt's whole-file checksum and recognize
+  snapshot-only layouts containing compiled data tests. (#138, #200)
+- Treat projection reordering alone as no schema DDL under sync_all_columns. (#168)
+- Preserve the worktree, index and recovery information across run/stash failures. (#195)
+- Repair sample projections and synchronize generated English/Korean examples. (#163)
 - Resolve selection graph nodes and version aliases to compiled file stems, including
   `defined_in`. Aliases no longer create phantom missing/deleted artifacts. Real-dbt
   tests cover graph operators, explicit versions and invalid-selection recovery. (#101)
