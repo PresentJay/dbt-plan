@@ -90,6 +90,85 @@ When compiled SQL is missing, the error message shows the actual target director
 dbt-plan --version    # dbt-plan 0.1.0
 ```
 
+## Terminal output settings
+
+Three settings control how dbt-plan renders a report: the output `format`,
+colored terminal output, and `verbose` diagnostics. Defaults are `format: text`,
+`no_color: false`, `verbose: false`. None of them change what is decided — only
+how the decision is shown.
+
+### `format`
+
+`format` accepts one of three values:
+
+| Value    | Meaning                                                       |
+|----------|---------------------------------------------------------------|
+| `text`   | Human-readable terminal output (default).                     |
+| `github` | GitHub-flavored Markdown with status icons.                   |
+| `json`   | Machine-readable JSON report (example later in the JSON section). |
+
+### `no_color`
+
+Colored terminal output is on by default only when stdout is a terminal, and is
+**automatically disabled when output is piped** (for example `dbt-plan check | tee report.txt`).
+`no_color: true` disables colors even on an interactive terminal. There is no
+`--color` flag that forces colors back on.
+
+### `verbose`
+
+`verbose: true` prints diagnostic details (directories, columns, parse skips) to
+stderr. It is the first thing to turn on when a report does not match what you
+expected.
+
+### Where each setting can be set
+
+Every setting has a config-file key, an environment variable, and a `check`
+flag. Precedence is the usual one: CLI flag > environment variable > config file > default.
+
+| Setting  | Config file key | Environment variable | `check` flag  |
+|----------|-----------------|----------------------|---------------|
+| format   | `format`        | `DBT_PLAN_FORMAT`    | `--format`    |
+| no_color | `no_color`      | `DBT_PLAN_NO_COLOR`  | `--no-color`  |
+| verbose  | `verbose`       | `DBT_PLAN_VERBOSE`   | `--verbose`   |
+
+```yaml
+# .dbt-plan.yml
+format: github
+no_color: false
+verbose: false
+```
+
+```bash
+DBT_PLAN_FORMAT=json dbt-plan check
+```
+
+The JSON environment invocation above runs the checked-in sample project demo
+described in the
+[first-contribution guide](first-contribution.md); its destructive finding
+intentionally exits 1, and the JSON is still usable (see
+[the exit-code contract](exit-codes.md)).
+
+### Precedence rules
+
+`format` follows the usual precedence exactly: an explicit `--format` flag beats
+`DBT_PLAN_FORMAT`, which beats the config file, which beats the `text` default.
+The environment variable is applied on top of the file, so `DBT_PLAN_FORMAT`
+overrides a file `format` (including an explicit `format: text`).
+
+The boolean settings read from the environment have a deliberate asymmetry: only
+truthy values (`true`, `1`, `yes`, case-insensitive) enable them.
+`DBT_PLAN_NO_COLOR=false` does **not** undo a config file that sets
+`no_color: true`, and `DBT_PLAN_VERBOSE=false` does not disable a file
+`verbose: true`. Turning a file-level `true` back off means editing the config
+file.
+
+CLI boolean flags only enable behavior: `--no-color` and `--verbose` turn the
+corresponding feature on even when the config file or environment left it off.
+There is no `--color` or `--no-verbose` override to turn them off from the
+command line. In the config file, `no_color` and `verbose` accept a boolean
+spelling directly (`true` / `1` / `yes`, and `false` / `0` / `no`,
+case-insensitive).
+
 ## Exit Codes
 
 | Code | Safety | Description | CI 동작 |
