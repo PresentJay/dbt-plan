@@ -96,7 +96,12 @@ _STALE_TOLERANCE_SECONDS = 1.0
 
 
 def _stale_sources(
-    project_dir: Path, manifest_path: Path, source_dirs: Sequence[str], limit: int = 5
+    project_dir: Path,
+    manifest_path: Path,
+    source_dirs: Sequence[str],
+    limit: int = 5,
+    *,
+    excluded_paths: set[str] | None = None,
 ) -> list[str]:
     """Source files modified after the manifest that claims to describe them.
 
@@ -129,11 +134,14 @@ def _stale_sources(
         else:
             continue
         for path in paths:
+            relative = path.relative_to(project_dir).as_posix()
+            if excluded_paths and relative in excluded_paths:
+                continue  # Excluded models must not consume the diagnostic limit.
             try:
                 if path.stat().st_mtime_ns > cutoff:
                     # Forward slashes on every platform: this is read next to the
                     # manifest's own `original_file_path`, which is always posix.
-                    newer.append(path.relative_to(project_dir).as_posix())
+                    newer.append(relative)
             except OSError:
                 continue
             if len(newer) >= limit:
@@ -1242,16 +1250,7 @@ def _do_check(args: argparse.Namespace) -> int:
         set(manifest.get("source_dirs") or ())
         | set((base_manifest or {}).get("source_dirs") or ())
     )
-    stale_sources = _stale_sources(project_dir, manifest_path, source_dirs)
-    stale_sources += _provenance_problems(
-        project_dir,
-        manifest_path,
-        manifest,
-        base_manifest or {},
-        node_index,
-        current_paths,
-        relevant_names,
-    )
+    unrelated_paths: set[str] = set()
     if select_models:
         # Model files outside the selection's dependency/consumer graph do not
         # invalidate it. Macro/project/schema files remain shared dependencies.
@@ -1272,7 +1271,22 @@ def _do_check(args: argparse.Namespace) -> int:
             and node_index[model_key(nid)].name in relevant_names
         }
         unrelated_paths -= related_paths
-        stale_sources = [path for path in stale_sources if path not in unrelated_paths]
+    stale_sources = _stale_sources(
+        project_dir, manifest_path, source_dirs, excluded_paths=unrelated_paths
+    )
+    stale_sources += [
+        path
+        for path in _provenance_problems(
+            project_dir,
+            manifest_path,
+            manifest,
+            base_manifest or {},
+            node_index,
+            current_paths,
+            relevant_names,
+        )
+        if path not in unrelated_paths
+    ]
     stale_sources = sorted(set(stale_sources))
     provenance = {"revision": None, "created_at": None}
     try:
