@@ -1,8 +1,8 @@
 # Exit codes and migration
 
-This contract is implemented on main for the **next 0.x minor release**. It is a
-breaking CI-interface change and must not be released as a 0.15.x patch. Existing
-published versions and Action tags retain their behavior until upgraded.
+This contract starts with **0.16.0**. It is a breaking CI-interface change from
+0.15.x. Earlier package versions and Action tags retain their behavior until
+upgraded.
 
 | Default code | Meaning | Is there a completed check report? |
 |---|---|---|
@@ -75,6 +75,6 @@ section and rerun `dbt-plan agent-setup` to regenerate it.
 
 We chose a process code instead of only a JSON error envelope because shell
 consumers need the distinction too. The JSON report schema is unchanged; errors
-remain diagnostics on stderr. The next minor boundary follows the project's
+remain diagnostics on stderr. The 0.16.0 minor boundary follows the project's
 pre-1.0 status ([Semantic Versioning](https://semver.org/spec/v2.0.0.html#spec-item-4)),
 while this guide makes the compatibility change explicit.
