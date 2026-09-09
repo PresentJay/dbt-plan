@@ -5,27 +5,38 @@ Static analysis tool that warns about risky DDL changes before `dbt run`.
 Like `terraform plan` for dbt, and used the same way: you run it **before** the thing
 that changes your warehouse, not only in CI afterwards.
 
-Runs on compiled SQL. It reads files and nothing else, so it works with any warehouse —
-Snowflake, BigQuery, Redshift, Postgres, DuckDB — through one code path.
+Analyzes compiled SQL files from warehouses including Snowflake, BigQuery,
+Redshift, Postgres and DuckDB through one code path. SQL dialect support varies;
+see [analysis limits](docs/analysis-limits.md).
 
 ## What It Looks Like
 
 ```
 $ dbt-plan check
 
-dbt-plan -- 2 model(s) changed
+dbt-plan -- 4 model(s) changed
+  dialect: snowflake (default; adapter: unknown)
+  baseline: unknown revision, unknown snapshot time
+
 
 DESTRUCTIVE  int_order_enriched (incremental, sync_all_columns)
-  DROP COLUMN  shipping_info
+  ADD COLUMN  billing_method
+  ADD COLUMN  shipping_city
   DROP COLUMN  billing_info
-  ADD COLUMN   shipping_city
-  Downstream: dim_customers, fct_orders (2 model(s))
-  >> BROKEN_REF  fct_orders: references dropped column(s): shipping_info
+  DROP COLUMN  shipping_info
+  Downstream: dim_customers, fct_daily_sales (2 model(s))
+  >> BROKEN_REF  fct_daily_sales: reads dropped column(s): shipping_info
 
 SAFE  dim_customers (table)
   CREATE OR REPLACE TABLE
 
-dbt-plan: 2 checked, 1 safe, 0 warning, 1 destructive, 1 cascade risk(s)
+SAFE  dim_publishers (table)
+  CREATE OR REPLACE TABLE
+
+SAFE  fct_daily_sales (incremental, append_new_columns)
+  ADD COLUMN  total_sales
+
+dbt-plan: 4 checked, 3 safe, 0 warning, 1 destructive, 1 cascade risk(s)
 ```
 
 ## What It Does
@@ -43,7 +54,7 @@ dbt-plan analyzes compiled SQL diffs to catch dangerous schema changes at PR tim
 - **Type changes**: compares explicit `CAST` types between revisions
 - **`SELECT *` resolution**: reads the columns from the CTEs of the same statement, and follows a `ref()` into the referenced model's compiled SQL
 
-It does NOT execute anything, connect to any warehouse, or simulate `dbt run`. It reads files, compares them, and warns you.
+The analysis reads files, compares them, and warns; it does not connect to a warehouse or simulate `dbt run`. The optional `dbt-plan run` workflow invokes your compile command, which can require credentials and execute macros.
 
 ## Quick Start
 
@@ -345,10 +356,15 @@ Check its assignee and recent comments, then confirm ownership before starting.
 ## Supported
 
 - dbt-core 1.7+, and the dbt Fusion engine (verified against `2.0.0-preview.218`)
-- Any warehouse: Snowflake, BigQuery, Redshift, Postgres, DuckDB, etc. — read from the manifest, no flag needed
+- Snowflake, BigQuery, Redshift, Postgres, DuckDB and other mapped adapters: dialect inferred from the manifest. Unmapped adapters fall back to Snowflake; see [analysis limits](docs/analysis-limits.md).
 - Python 3.10+
 - CTE, UNION ALL, QUALIFY, window functions, VARIANT access
 
 ## License
 
 Apache-2.0
+
+For adapter dialect fallback, dbt Mesh consumers, and stars over sources or seeds,
+see [analysis limits](docs/analysis-limits.md). For CLI `compile_command` argv
+semantics, the Action's shell command input, and `dbt deps` setup, see
+[compile commands](docs/ci-integration.md#컴파일-명령과-dbt-패키지).

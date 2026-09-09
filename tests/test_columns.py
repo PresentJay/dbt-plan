@@ -249,35 +249,39 @@ class TestInvalidDialect:
 class TestStarExcept:
     """BigQuery SELECT * EXCEPT detection."""
 
-    def test_star_except_single_column(self):
-        """SELECT * EXCEPT(revenue) → returns sentinel with excluded column."""
+    def test_star_except_single_column_requires_source(self):
+        """SELECT * EXCEPT needs the unknown source column list."""
         sql = "SELECT * EXCEPT(revenue) FROM t"
         result = extract_columns(sql, dialect="bigquery")
-        assert result == ["* except(revenue)"]
+        assert result is None
 
-    def test_star_except_multiple_columns(self):
-        """SELECT * EXCEPT(revenue, cost) → returns sentinel with sorted columns."""
+    def test_star_except_multiple_columns_requires_source(self):
+        """Multiple exclusions still require the source column list."""
         sql = "SELECT * EXCEPT(revenue, cost) FROM t"
         result = extract_columns(sql, dialect="bigquery")
-        assert result == ["* except(cost, revenue)"]
+        assert result is None
 
-    def test_star_replace_returns_star(self):
-        """SELECT * REPLACE(expr AS col) → still returns ["*"] (can't enumerate)."""
+    def test_star_replace_refuses(self):
+        """REPLACE is unresolved and cannot use plain-star fallback."""
         sql = "SELECT * REPLACE(revenue * 100 AS revenue) FROM t"
         result = extract_columns(sql, dialect="bigquery")
-        assert result == ["*"]
+        assert result is None
 
-    def test_star_except_with_replace_returns_except(self):
-        """SELECT * EXCEPT(cost) REPLACE(revenue*100 AS revenue) → except sentinel."""
+    def test_star_except_with_replace_refuses(self):
+        """Combined EXCEPT/REPLACE must refuse unresolved modifiers."""
         sql = "SELECT * EXCEPT(cost) REPLACE(revenue * 100 AS revenue) FROM t"
         result = extract_columns(sql, dialect="bigquery")
-        assert result == ["* except(cost)"]
+        assert result is None
 
-    def test_star_except_lowercased(self):
-        """Column names in EXCEPT are lowercased."""
+    def test_star_except_mixed_case_requires_source(self):
+        """Unknown inputs refuse; known inputs apply case-insensitive exclusions."""
         sql = "SELECT * EXCEPT(Revenue, COST) FROM t"
         result = extract_columns(sql, dialect="bigquery")
-        assert result == ["* except(cost, revenue)"]
+        assert result is None
+        resolved = extract_columns(
+            sql, dialect="bigquery", table_columns=lambda _: ["id", "revenue", "cost"]
+        )
+        assert resolved == ["id"]
 
     def test_plain_star_bigquery(self):
         """Plain SELECT * on bigquery still returns ["*"]."""

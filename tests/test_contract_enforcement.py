@@ -227,11 +227,11 @@ class TestTheManifestColumnsAreTrustedUnderAContract:
             capsys.readouterr().out
         )
 
-    def test_with_one_the_declared_columns_are_the_answer(self, tmp_path, capsys):
-        assert self._check(tmp_path, enforced=True) == 0
+    def test_contract_declaration_cannot_prove_unknown_sql_columns(self, tmp_path, capsys):
+        assert self._check(tmp_path, enforced=True) == 2
         out = capsys.readouterr().out
         assert "columns came from the manifest" not in out
-        assert "SAFE" in out
+        assert "REVIEW REQUIRED (contract enforced" in out
 
 
 class TestTypeFamilies:

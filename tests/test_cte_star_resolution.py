@@ -92,12 +92,13 @@ class TestRefusals:
         sql = "with a as (select p from t union all select q from u) select * from a"
         assert cols(sql) == ["*"]
 
-    def test_recursive_cte_refuses(self):
+    def test_recursive_cte_with_unnamed_expression_refuses(self):
+        """The recursive branch has an unaliased expression with an unknown output name."""
         sql = (
             "with recursive r as (select 1 as n union all select n + 1 from r where n < 5) "
             "select * from r"
         )
-        assert cols(sql) == ["*"]
+        assert cols(sql) is None
 
     def test_star_over_a_real_table_refuses(self):
         """No CTE to resolve against, and dbt-plan does not query the warehouse."""
@@ -122,21 +123,21 @@ class TestRefusals:
         assert cols(sql) in (["*"], None)
 
 
-class TestExistingBehaviourIsUnchanged:
+class TestExplicitColumnsAndStarBoundaries:
     def test_explicit_columns_still_work(self):
         assert cols("select a, b as c from t") == ["a", "c"]
 
     def test_plain_select_star_still_returns_star(self):
         assert cols("select * from t") == ["*"]
 
-    def test_bigquery_except_is_untouched(self):
+    def test_bigquery_except_requires_source_columns(self):
         got = extract_columns("select * except(b) from t", dialect="bigquery")
-        assert got == ["* except(b)"]
+        assert got is None
 
-    def test_except_over_a_cte_is_not_resolved(self):
-        """EXCEPT plus resolution is two features; keep the existing marker."""
+    def test_except_over_a_cte_removes_known_column(self):
+        """Known CTE output makes exclusion resolvable."""
         sql = "with a as (select x, y from t) select * except(y) from a"
-        assert extract_columns(sql, dialect="bigquery") == ["* except(y)"]
+        assert extract_columns(sql, dialect="bigquery") == ["x"]
 
     def test_unparseable_sql_still_returns_none(self):
         assert cols("this is not sql at all !!!") is None

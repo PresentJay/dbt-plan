@@ -628,7 +628,7 @@ class TestOscAppendNewColumns:
 
 
 class TestOscSyncAllColumns:
-    """sync_all_columns: ADD + DROP, destructive if removed, reorder detection."""
+    """sync_all_columns: ADD + DROP, destructive if removed, no DDL for reordering."""
 
     def test_identical_columns_safe(self):
         pred = _predict(
@@ -675,15 +675,15 @@ class TestOscSyncAllColumns:
         assert any(op.operation == "ADD COLUMN" for op in pred.operations)
         assert any(op.operation == "DROP COLUMN" for op in pred.operations)
 
-    def test_columns_reordered_warning(self):
-        """Same column set, different order → WARNING + COLUMNS REORDERED."""
+    def test_columns_reordered_safe(self):
+        """Projection order alone does not change dbt's column set or emit DDL."""
         pred = _predict(
             on_schema_change="sync_all_columns",
             base_columns=["a", "b", "c"],
             current_columns=["c", "a", "b"],
         )
-        assert pred.safety == Safety.WARNING
-        assert "COLUMNS REORDERED" in _op_names(pred)
+        assert pred.safety == Safety.SAFE
+        assert pred.operations == []
         # Should NOT have ADD/DROP ops
         assert not any(op.operation in ("ADD COLUMN", "DROP COLUMN") for op in pred.operations)
 
@@ -1004,7 +1004,7 @@ class TestFullIncrementalMatrix:
         [
             ("fail", Safety.SAFE),
             ("append_new_columns", Safety.SAFE),
-            ("sync_all_columns", Safety.WARNING),
+            ("sync_all_columns", Safety.SAFE),
         ],
     )
     def test_reorder_only(self, osc, expected_safety):

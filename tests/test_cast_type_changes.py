@@ -176,11 +176,12 @@ class TestVerdict:
         assert payload["models"][0]["safety"] == "safe"
         assert code == 0
 
-    def test_a_cast_added_on_only_one_side_is_not_reported(self, check):
-        """Without a cast on both sides the other type is unknown, so say nothing."""
+    def test_a_cast_added_on_one_side_requires_review(self, check):
+        """The previous type is unknown, so adding a cast requires review."""
         code, payload = check(
             "SELECT a AS c FROM t",
             "SELECT CAST(a AS INT) AS c FROM t",
         )
         ops = [o["operation"] for o in payload["models"][0]["operations"]]
-        assert not any("TYPE CHANGED" in o for o in ops)
+        assert code == 2
+        assert any("TYPE CHANGED: unknown -> INT" in o for o in ops)

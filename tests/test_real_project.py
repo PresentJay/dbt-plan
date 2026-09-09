@@ -475,6 +475,14 @@ class TestFullCheckPipeline:
             "GROUP BY 1\n"
         )
 
+        # A compiled fixture must agree with the manifest from that invocation.
+        current_manifest_path = project_dir / "target" / "manifest.json"
+        current_manifest = json.loads(current_manifest_path.read_text(encoding="utf-8"))
+        current_manifest["nodes"]["model.test_project.dim_books"]["compiled_code"] = dim.read_text(
+            encoding="utf-8"
+        )
+        current_manifest_path.write_text(json.dumps(current_manifest), encoding="utf-8")
+
         monkeypatch.setattr(
             "sys.argv",
             [

@@ -58,6 +58,14 @@ class TestResolvesThroughTheDag:
         )
         assert got == ["a", "b"]
 
+    def test_qualified_star_resolves_physical_table_alias(self):
+        """The table alias resolves to the supplied physical relation schema."""
+        sql = 'SELECT t.* FROM "j"."main"."stg_orders" AS t'
+        got = extract_columns(
+            sql, dialect="duckdb", table_columns=lookup({"j.main.stg_orders": ["a"]})
+        )
+        assert got == ["a"]
+
 
 class TestRefusals:
     def test_unknown_relation_refuses(self):
@@ -78,14 +86,6 @@ class TestRefusals:
             sql,
             dialect="duckdb",
             table_columns=lookup({"j.main.a": ["x"], "j.main.b": ["y"]}),
-        )
-        assert got == ["*"]
-
-    def test_qualified_star_over_a_table_refuses(self):
-        """`t.*` needs alias-to-table mapping, which is deliberately not attempted."""
-        sql = 'SELECT t.* FROM "j"."main"."stg_orders" AS t'
-        got = extract_columns(
-            sql, dialect="duckdb", table_columns=lookup({"j.main.stg_orders": ["a"]})
         )
         assert got == ["*"]
 

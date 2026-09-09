@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import shutil
 import sys
@@ -88,14 +89,19 @@ def _manifest_layout(target_dir: Path) -> tuple[str | None, tuple[str, ...]]:
     return project, tuple(model_dirs)
 
 
-# A source written within this many seconds of the manifest is treated as older
-# than it. dbt writes the manifest after reading every source, so the real gap is
-# never that small; the tolerance is for filesystems whose mtimes are coarse.
+# Compiled-file age fallback allows for coarse filesystem timestamps. Source
+# mtimes use nanosecond ordering without a blind tolerance window; source content
+# and matching invocation evidence provide stronger checks where available.
 _STALE_TOLERANCE_SECONDS = 1.0
 
 
 def _stale_sources(
-    project_dir: Path, manifest_path: Path, source_dirs: Sequence[str], limit: int = 5
+    project_dir: Path,
+    manifest_path: Path,
+    source_dirs: Sequence[str],
+    limit: int = 5,
+    *,
+    excluded_paths: set[str] | None = None,
 ) -> list[str]:
     """Source files modified after the manifest that claims to describe them.
 
@@ -113,7 +119,7 @@ def _stale_sources(
     enough to point somebody at the compile.
     """
     try:
-        cutoff = manifest_path.stat().st_mtime + _STALE_TOLERANCE_SECONDS
+        cutoff = manifest_path.stat().st_mtime_ns
     except OSError:
         return []
 
@@ -128,16 +134,119 @@ def _stale_sources(
         else:
             continue
         for path in paths:
+            relative = path.relative_to(project_dir).as_posix()
+            if excluded_paths and relative in excluded_paths:
+                continue  # Excluded models must not consume the diagnostic limit.
             try:
-                if path.stat().st_mtime > cutoff:
+                if path.stat().st_mtime_ns > cutoff:
                     # Forward slashes on every platform: this is read next to the
                     # manifest's own `original_file_path`, which is always posix.
-                    newer.append(path.relative_to(project_dir).as_posix())
+                    newer.append(relative)
             except OSError:
                 continue
             if len(newer) >= limit:
                 return sorted(newer)
     return sorted(newer)
+
+
+def _compilation_results(manifest_path: Path, manifest: dict) -> dict | None:
+    """Execution evidence is useful only for the manifest's own invocation."""
+    # run_results and manifest must belong to the same invocation; an old file
+    # is no evidence that the current compile completed any particular model.
+    invocation = (manifest.get("metadata") or {}).get("invocation_id")
+    try:
+        report = json.loads(
+            (manifest_path.parent / "run_results.json").read_text(encoding="utf-8")
+        )
+        if invocation and (report.get("metadata") or {}).get("invocation_id") == invocation:
+            return {r.get("unique_id"): r.get("status") for r in report.get("results", [])}
+    except (OSError, ValueError, AttributeError, TypeError):
+        pass
+    return None
+
+
+def _compiled_input_is_current(node_id, raw, path, manifest_path, invocation, results):
+    """Validate model or test SQL before using it as evidence of safety."""
+    compiled_code = raw.get("compiled_code")
+    if raw.get("compiled") is False:
+        return False
+    try:
+        if isinstance(compiled_code, str) and compiled_code != _read_diff_sql(None, path):
+            return False  # Success cannot validate a replaced/orphaned file.
+        if results is not None:
+            if (raw.get("config") or {}).get("materialized") == "ephemeral":
+                # Ephemeral nodes never appear in execution results.
+                return bool(raw.get("compiled")) and isinstance(compiled_code, str)
+            return results.get(node_id) in ("success", "pass")
+        if isinstance(compiled_code, str):
+            return True
+        if invocation and isinstance(raw.get("raw_code"), str):
+            return False  # Modern parsed-only nodes lack compilation evidence.
+        return path.stat().st_mtime + _STALE_TOLERANCE_SECONDS >= manifest_path.stat().st_mtime
+    except OSError:
+        return False
+
+
+def _provenance_problems(
+    project_dir, manifest_path, manifest, base_manifest, node_index, compiled_paths, relevant_names
+):
+    """Refuse incomplete/currently invalid inputs using local manifest evidence."""
+    problems = []
+    root = project_dir.resolve()
+    invocation = (manifest.get("metadata") or {}).get("invocation_id")
+    results = _compilation_results(manifest_path, manifest)
+    complete_compile = results is not None and all(
+        results.get(node.node_id) in ("success", "pass")
+        for node in node_index.values()
+        if node.materialization not in ("snapshot", "ephemeral")
+    )
+    has_sources = (project_dir / "dbt_project.yml").is_file() or any(
+        (project_dir / name).is_dir() for name in manifest.get("source_dirs", ())
+    )
+    for source in (manifest, base_manifest) if has_sources else ():
+        for field in ("source_files", "source_macros", "source_snapshots"):
+            for filename, expected in source.get(field, {}).items():
+                if source is base_manifest and complete_compile:
+                    continue
+                path = project_dir / filename
+                # Only project-local source files, never package paths or escapes.
+                if not path.resolve().is_relative_to(root):
+                    continue
+                try:
+                    content = path.read_text(encoding="utf-8")
+                except (OSError, UnicodeError):
+                    problems.append(filename)
+                    continue
+                # Old baseline content is supposed to differ. It only tells us
+                # which deleted directories must remain visible after recompile.
+                if source is base_manifest:
+                    current_known = filename in manifest.get(field, {})
+                    if not current_known and not complete_compile:
+                        problems.append(filename)
+                    continue
+                if field == "source_snapshots":
+                    digest = hashlib.sha256(content.strip().encode("utf-8")).hexdigest()
+                    matches = bool(expected) and all(value == digest for value in expected)
+                elif field == "source_files":
+                    matches = content.strip() == expected.strip()
+                else:
+                    matches = all(block in content for block in expected)
+                if not matches:
+                    problems.append(filename)
+    for name, node in node_index.items():
+        if name not in relevant_names:
+            continue
+        raw = manifest.get("nodes", {}).get(node.node_id, {})
+        if raw.get("language") == "python" or node.materialization == "snapshot":
+            continue
+        path = compiled_paths.get(name)
+        if path is None:
+            continue
+        if not _compiled_input_is_current(
+            node.node_id, raw, path, manifest_path, invocation, results
+        ):
+            problems.append(raw.get("original_file_path") or f"compiled model {name}")
+    return problems
 
 
 def _find_compiled_dir(target_dir: Path) -> CompiledLayout | None:
@@ -156,6 +265,27 @@ def _find_compiled_dir(target_dir: Path) -> CompiledLayout | None:
     identified from the manifest; only a genuinely undecidable case raises.
     """
     compiled = target_dir / "compiled"
+    try:
+        raw = json.loads((target_dir / "manifest.json").read_text(encoding="utf-8"))
+        project = (raw.get("metadata") or {}).get("project_name")
+        resources = [
+            node
+            for nid, node in raw.get("nodes", {}).items()
+            if nid.startswith(("model.", "snapshot."))
+            and (not project or nid.split(".")[1] == project)
+            and (node.get("config") or {}).get("enabled", True)
+        ]
+        if resources and all(
+            node.get("resource_type") == "snapshot" or node.get("language") == "python"
+            for node in resources
+        ):
+            # These resources are compared through the manifest, not SQL.
+            return CompiledLayout(
+                compiled if compiled.is_dir() else target_dir,
+                ("__dbt_plan_manifest_only__",),
+            )
+    except (OSError, ValueError, AttributeError):
+        pass
     if not compiled.exists():
         return None
 
@@ -236,7 +366,10 @@ def _do_snapshot(args: argparse.Namespace) -> None:
 
     # Save compiled SQL (symlinks=True prevents following symlinks outside project)
     compiled_dest = base_dir / "compiled"
-    shutil.copytree(compiled_dir, compiled_dest, symlinks=True)
+    if found and found.model_dirs == ("__dbt_plan_manifest_only__",):
+        compiled_dest.mkdir(parents=True)
+    else:
+        shutil.copytree(compiled_dir, compiled_dest, symlinks=True)
 
     # Save manifest.json alongside compiled SQL
     manifest_src = target_dir / "manifest.json"
@@ -250,6 +383,35 @@ def _do_snapshot(args: argparse.Namespace) -> None:
             file=sys.stderr,
         )
 
+    import subprocess
+    from datetime import datetime, timezone
+
+    from dbt_plan import __version__
+
+    revision = None
+    try:
+        git = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            cwd=project_dir,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            check=False,
+        )
+        if git.returncode == 0:
+            revision = git.stdout.strip()
+    except OSError:
+        pass
+    (base_dir / "provenance.json").write_text(
+        json.dumps(
+            {
+                "revision": revision,
+                "created_at": datetime.now(timezone.utc).isoformat(),
+                "dbt_plan_version": __version__,
+            }
+        ),
+        encoding="utf-8",
+    )
     print(f"Snapshot saved to {base_dir}", file=sys.stderr)
 
 
@@ -753,19 +915,24 @@ def _do_check(args: argparse.Namespace) -> int:
     # Lazy imports: sqlglot and heavy modules only loaded when actually needed
     from dataclasses import replace as _replace
 
-    from dbt_plan.columns import extract_cast_types, extract_columns
-    from dbt_plan.config import Config
+    from dbt_plan.columns import extract_cast_types, extract_column_details, extract_columns
+    from dbt_plan.config import Config, sqlglot_dialect_for_adapter
     from dbt_plan.diff import ModelDiff, diff_compiled_dirs, iter_model_sql, iter_non_model_sql
     from dbt_plan.manifest import (
+        ModelNode,
         build_data_test_index,
         build_exposure_index,
         build_node_index,
         build_unit_test_index,
+        find_downstream,
         find_downstream_batch,
         load_manifest,
+        model_key,
     )
     from dbt_plan.predictor import (
         DDLOperation,
+        DDLPrediction,
+        DownstreamImpact,
         Safety,
         analyze_cascade_impacts,
         apply_contract,
@@ -913,6 +1080,56 @@ def _do_check(args: argparse.Namespace) -> int:
     model_names = {node.name for node in node_index.values()}
     base_model_names = {node.name for node in base_node_index.values()}
 
+    # Manifest-only resources and configuration can change without changing SQL.
+    non_sql_names: set[str] = set()
+    for source, index in ((manifest, node_index), (base_manifest or {}, base_node_index)):
+        project_name = (source.get("metadata") or {}).get("project_name")
+        for nid, raw in source.get("nodes", {}).items():
+            if project_name and nid.split(".")[1] != project_name:
+                continue
+            if not (raw.get("config") or {}).get("enabled", True):
+                continue
+            if nid.startswith("snapshot."):
+                name = model_key(nid)
+                index[name] = ModelNode(nid, name, "snapshot", None)
+                non_sql_names.add(name)
+            elif nid.startswith("model.") and raw.get("language") == "python":
+                non_sql_names.add(model_key(nid))
+    model_names = {node.name for node in node_index.values()}
+    base_model_names = {node.name for node in base_node_index.values()}
+    current_paths = {f.stem: f for f in iter_model_sql(current_compiled, model_dirs)}
+    base_paths = {f.stem: f for f in iter_model_sql(base_compiled, base_model_dirs)}
+    already_changed = {d.model_name for d in model_diffs}
+    metadata_fields = (
+        "config",
+        "unrendered_config",
+        "database",
+        "schema",
+        "alias",
+        "columns",
+        "language",
+    )
+    for name, node in node_index.items():
+        if name in already_changed or name in config.ignore_models:
+            continue
+        raw = manifest.get("nodes", {}).get(node.node_id, {})
+        old_node = base_node_index.get(name)
+        old = (base_manifest or {}).get("nodes", {}).get(old_node.node_id, {}) if old_node else {}
+        fields = (*metadata_fields, "raw_code") if name in non_sql_names else metadata_fields
+        if old_node and all(raw.get(k) == old.get(k) for k in fields):
+            continue
+        # Ordinary new SQL models already have a file diff; missing SQL is a refusal.
+        if name not in non_sql_names and name not in current_paths:
+            continue
+        model_diffs.append(
+            ModelDiff(
+                name,
+                "modified" if old_node else "added",
+                base_paths.get(name),
+                current_paths.get(name),
+            )
+        )
+
     # A deleted model is not in the diff. `dbt compile` never removes what it wrote
     # before, so the orphaned compiled file is on both sides with identical bytes,
     # and the MODEL REMOVED rule that exists for exactly this case could never fire
@@ -932,10 +1149,13 @@ def _do_check(args: argparse.Namespace) -> int:
 
     # Filter: --select. After the manifest, because `fct_orders+` needs the graph.
     select_models = getattr(args, "select", None)
+    relevant_names = model_names | base_model_names
     if select_models is not None:
         select_set, unsupported = _expand_selection(
             select_models, child_map, {**base_node_index, **node_index}
         )
+        if not select_set and not unsupported:
+            unsupported = [select_models]
         if unsupported:
             print(
                 f"Error: --select does not support {', '.join(unsupported)}. "
@@ -952,6 +1172,22 @@ def _do_check(args: argparse.Namespace) -> int:
                 file=sys.stderr,
             )
             return ERROR_EXIT_CODE
+        relevant_names = set(select_set)
+        parent_map: dict[str, list[str]] = {}
+        for parent, children in child_map.items():
+            for child in children:
+                parent_map.setdefault(child, []).append(parent)
+        for name in select_set:
+            selected_node = node_index.get(name) or base_node_index.get(name)
+            if selected_node:
+                for graph in (child_map, parent_map):
+                    relevant_names.update(
+                        (
+                            node_index.get(model_key(nid)) or base_node_index.get(model_key(nid))
+                        ).name
+                        for nid in find_downstream(selected_node.node_id, graph)
+                        if node_index.get(model_key(nid)) or base_node_index.get(model_key(nid))
+                    )
         before_select = len(model_diffs)
         model_diffs = [d for d in model_diffs if d.model_name in select_set]
         _log(f"Selected {len(model_diffs)} of {before_select} changed model(s)")
@@ -986,7 +1222,10 @@ def _do_check(args: argparse.Namespace) -> int:
     uncompiled_models = sorted(
         name
         for name in model_names
-        if name not in compiled_stems and name not in config.ignore_models
+        if name not in compiled_stems
+        and name not in config.ignore_models
+        and name not in non_sql_names
+        and name in relevant_names
     )
     if uncompiled_models:
         _log(f"Uncompiled: {len(uncompiled_models)} manifest model(s) have no compiled SQL")
@@ -997,14 +1236,86 @@ def _do_check(args: argparse.Namespace) -> int:
     missing_base = sorted(
         name
         for name in base_model_names
-        if name not in base_stems and name not in config.ignore_models
+        if name not in base_stems
+        and name not in config.ignore_models
+        and name not in non_sql_names
+        and name in relevant_names
     )
     if missing_base:
         baseline_problem = "Baseline compiled SQL is missing for: " + ", ".join(missing_base)
 
     # Nothing in target/ says whether it is current. A source newer than the
     # manifest means it may not be, and every verdict below rests on it.
-    stale_sources = _stale_sources(project_dir, manifest_path, manifest.get("source_dirs") or ())
+    source_dirs = sorted(
+        set(manifest.get("source_dirs") or ())
+        | set((base_manifest or {}).get("source_dirs") or ())
+    )
+    unrelated_paths: set[str] = set()
+    if select_models:
+        # Model files outside the selection's dependency/consumer graph do not
+        # invalidate it. Macro/project/schema files remain shared dependencies.
+        unrelated_paths = {
+            raw.get("original_file_path")
+            for nid, raw in manifest.get("nodes", {}).items()
+            if nid.startswith("model.")
+            and (
+                node_index.get(model_key(nid)) is None
+                or node_index[model_key(nid)].name not in relevant_names
+            )
+        }
+        related_paths = {
+            raw.get("original_file_path")
+            for nid, raw in manifest.get("nodes", {}).items()
+            if nid.startswith("model.")
+            and node_index.get(model_key(nid)) is not None
+            and node_index[model_key(nid)].name in relevant_names
+        }
+        unrelated_paths -= related_paths
+    stale_sources = _stale_sources(
+        project_dir, manifest_path, source_dirs, excluded_paths=unrelated_paths
+    )
+    stale_sources += [
+        path
+        for path in _provenance_problems(
+            project_dir,
+            manifest_path,
+            manifest,
+            base_manifest or {},
+            node_index,
+            current_paths,
+            relevant_names,
+        )
+        if path not in unrelated_paths
+    ]
+    stale_sources = sorted(set(stale_sources))
+    provenance = {"revision": None, "created_at": None}
+    try:
+        stored = json.loads((base_dir / "provenance.json").read_text(encoding="utf-8"))
+        if isinstance(stored, dict):
+            provenance.update(stored)
+    except (OSError, ValueError):
+        pass
+    adapter = (manifest.get("metadata") or {}).get("adapter_type")
+    analysis = {
+        "dialect": dialect,
+        "adapter_type": adapter,
+        "dialect_source": "cli"
+        if cli_dialect
+        else "config"
+        if config.dialect_explicit
+        else "manifest"
+        if sqlglot_dialect_for_adapter(adapter)
+        else "fallback (unmapped adapter)"
+        if adapter
+        else "default",
+        "baseline": provenance,
+        "selection": select_models,
+        "unsupported_languages": sorted(
+            name
+            for name in non_sql_names
+            if (node_index.get(name) and node_index[name].materialization != "snapshot")
+        ),
+    }
     if stale_sources:
         _log(f"Stale: {', '.join(stale_sources)} newer than {manifest_path.name}")
 
@@ -1013,6 +1324,7 @@ def _do_check(args: argparse.Namespace) -> int:
             uncompiled_models=uncompiled_models,
             stale_sources=stale_sources,
             baseline_problem=baseline_problem,
+            analysis=analysis,
         )
         if fmt == "json":
             print(format_json(empty))
@@ -1056,6 +1368,36 @@ def _do_check(args: argparse.Namespace) -> int:
             else None
         )
 
+        raw_node = manifest.get("nodes", {}).get(node.node_id, {})
+        is_python = raw_node.get("language") == "python"
+        non_sql = is_python or node.materialization == "snapshot"
+        # Preserve known names for cascade even when another projection is opaque.
+        base_detail = (
+            extract_column_details(base_sql, dialect=dialect, table_columns=base_table_columns)
+            if base_sql
+            else None
+        )
+        current_detail = (
+            extract_column_details(
+                current_sql, dialect=dialect, table_columns=current_table_columns
+            )
+            if current_sql
+            else None
+        )
+        partial_unknown = any(
+            d is not None and d.has_unknown for d in (base_detail, current_detail)
+        )
+        if base_detail and base_detail.columns and base_detail.has_unknown:
+            base_cols = base_detail.columns
+        if current_detail and current_detail.columns and current_detail.has_unknown:
+            current_cols = current_detail.columns
+        sql_current_cols = None if partial_unknown else current_cols
+        if dialect not in ("duckdb", "bigquery", "sqlite", "tsql", "mysql") and any(
+            isinstance(col, dict) and col.get("quote")
+            for col in (raw_node.get("columns") or {}).values()
+        ):
+            sql_current_cols = None
+
         # Fallback: use manifest columns when SELECT * detected
         base_node = base_node_index.get(diff.model_name)
         used_manifest_columns = False
@@ -1079,6 +1421,7 @@ def _do_check(args: argparse.Namespace) -> int:
         parse_failed = (
             diff.status == "modified" and (base_cols is None or current_cols is None)
         ) or (diff.status == "added" and current_cols is None)
+        parse_failed = (parse_failed or partial_unknown) and not non_sql
         if parse_failed:
             parse_failures.append(diff.model_name)
             if base_cols == ["*"] or current_cols == ["*"]:
@@ -1095,6 +1438,19 @@ def _do_check(args: argparse.Namespace) -> int:
             current_columns=current_cols,
             status=diff.status,
         )
+
+        if non_sql and diff.status != "removed":
+            prediction = _replace(
+                prediction,
+                safety=Safety.WARNING,
+                operations=[
+                    DDLOperation(
+                        "REVIEW REQUIRED (Python model is not SQL-analyzable)"
+                        if is_python
+                        else "REVIEW REQUIRED (snapshot changed)"
+                    )
+                ],
+            )
 
         if diff.status == "added" and parse_failed and prediction.safety == Safety.SAFE:
             prediction = _replace(
@@ -1113,12 +1469,26 @@ def _do_check(args: argparse.Namespace) -> int:
                 contract_casts = (
                     extract_cast_types(current_sql, dialect=dialect) if current_sql else None
                 )
-            prediction = apply_contract(prediction, node, current_cols, contract_casts, dialect)
+            prediction = apply_contract(
+                prediction, node, sql_current_cols, contract_casts, dialect
+            )
 
         # Detect materialization or on_schema_change config changes
         if base_node and diff.status == "modified":
             extra_ops: list[DDLOperation] = []
             config_safety = prediction.safety
+
+            base_raw = (base_manifest or {}).get("nodes", {}).get(base_node.node_id, {})
+            for field in ("database", "schema", "alias"):
+                before = base_raw.get(field, (base_raw.get("config") or {}).get(field))
+                after = raw_node.get(field, (raw_node.get("config") or {}).get(field))
+                if before != after:
+                    extra_ops.append(
+                        DDLOperation(
+                            f"RELATION CHANGED ({field}): {before} -> {after}; existing incremental history is not moved"
+                        )
+                    )
+                    config_safety = Safety.WARNING
 
             if base_node.materialization != node.materialization:
                 extra_ops.append(
@@ -1194,11 +1564,16 @@ def _do_check(args: argparse.Namespace) -> int:
             current_casts = (
                 extract_cast_types(current_sql, dialect=dialect) if current_sql else None
             )
-            if base_casts and current_casts:
+            if base_casts is not None and current_casts is not None:
                 type_ops = [
-                    DDLOperation(f"TYPE CHANGED: {before} -> {current_casts[col]}", col)
-                    for col, before in sorted(base_casts.items())
-                    if col in current_casts and current_casts[col] != before
+                    DDLOperation(
+                        f"TYPE CHANGED: {base_casts.get(col, 'unknown')} -> {current_casts.get(col, 'unknown')}",
+                        col,
+                    )
+                    for col in sorted(set(base_casts) | set(current_casts))
+                    if col in (base_cols or [])
+                    and col in (current_cols or [])
+                    and base_casts.get(col) != current_casts.get(col)
                 ]
                 if type_ops:
                     prediction = _replace(
@@ -1256,6 +1631,21 @@ def _do_check(args: argparse.Namespace) -> int:
         for sql_file in iter_non_model_sql(current_compiled, model_dirs):
             test_sql_index[sql_file.stem] = sql_file
 
+    # A partial compile can leave older test files beside current model SQL.
+    # Omit unverified files: cascade then reports data_test_unreadable only when
+    # that test's SQL is needed, without blocking unrelated selected models.
+    invocation = (manifest.get("metadata") or {}).get("invocation_id")
+    results = _compilation_results(manifest_path, manifest)
+    for nid, raw in manifest.get("nodes", {}).items():
+        if not nid.startswith("test."):
+            continue
+        name = raw.get("name") or nid.split(".")[-1]
+        path = test_sql_index.get(name)
+        if path is not None and not _compiled_input_is_current(
+            nid, raw, path, manifest_path, invocation, results
+        ):
+            del test_sql_index[name]
+
     # 3d. Cascade impact analysis (extracted to predictor module)
     predictions, downstream_map = analyze_cascade_impacts(
         predictions=predictions,
@@ -1279,12 +1669,59 @@ def _do_check(args: argparse.Namespace) -> int:
             _build_relation_index(base_manifest or manifest, base_node_index or node_index),
         ),
     )
+    # A contract on an unchanged downstream SELECT * can break when upstream
+    # columns change. Resolve its SQL independently of its declared contract.
+    for pos, prediction in enumerate(predictions):
+        impacts = list(prediction.downstream_impacts)
+        for nid in all_downstream.get(model_node_ids.get(prediction.model_name), []):
+            dependent = node_index.get(model_key(nid))
+            if dependent is None or not dependent.contract_enforced:
+                continue
+            path = compiled_sql_index.get(dependent.name)
+            sql = _read_diff_sql(None, path)
+            columns = (
+                extract_columns(sql, dialect=dialect, table_columns=current_table_columns)
+                if sql
+                else None
+            )
+            contract = apply_contract(
+                DDLPrediction(
+                    dependent.name,
+                    dependent.materialization,
+                    dependent.on_schema_change,
+                    Safety.SAFE,
+                ),
+                dependent,
+                columns,
+                extract_cast_types(sql, dialect=dialect) if sql else None,
+                dialect,
+            )
+            if contract.safety != Safety.SAFE:
+                impacts.append(
+                    DownstreamImpact(
+                        dependent.name,
+                        dependent.materialization,
+                        dependent.on_schema_change,
+                        risk="contract_violation",
+                        reason="; ".join(op.operation for op in contract.operations),
+                    )
+                )
+        if len(impacts) != len(prediction.downstream_impacts):
+            predictions[pos] = _replace(
+                prediction,
+                downstream_impacts=impacts,
+                safety=prediction.safety
+                if prediction.safety == Safety.DESTRUCTIVE
+                else Safety.WARNING,
+            )
+
     predictions = attach_downstream_exposures(
         predictions=predictions,
         model_node_ids=model_node_ids,
         all_downstream=all_downstream,
         child_map=child_map,
         exposure_index=build_exposure_index(manifest),
+        model_cols=model_cols,
     )
     for pred in predictions:
         if pred.downstream_impacts:
@@ -1302,6 +1739,7 @@ def _do_check(args: argparse.Namespace) -> int:
         stale_sources,
         acknowledge_models=config.acknowledge_models,
         baseline_problem=baseline_problem,
+        analysis=analysis,
     )
     if fmt == "json":
         print(format_json(check_result))
@@ -1600,6 +2038,10 @@ These edits will silence a real finding, and none of them makes the change safe:
 If a destructive change is intentional, say so in the pull request. Do not edit config to
 make the warning disappear.
 
+`RELATION CHANGED` warns that database, schema, or alias moved; existing incremental history is not copied.
+
+A downstream `CONTRACT_VIOLATION` means an upstream change breaks an enforced contract, or its produced columns cannot be established.
+
 ### Why a change is judged risky
 
 Risk is materialization crossed with `on_schema_change`:
@@ -1611,8 +2053,8 @@ Risk is materialization crossed with `on_schema_change`:
 | `incremental` + `append_new_columns` | ADD COLUMN only — safe |
 | `incremental` + `append_new_columns`, column removed | STALE COLUMNS (not populated) — the old columns remain in the table; review their consumers |
 | `incremental` + `fail` | BUILD FAILURE on schema drift — warning |
-| `incremental` + `sync_all_columns` | ADD COLUMN and DROP COLUMN — destructive if a column was removed; COLUMNS REORDERED alone is a warning |
-| `snapshot` | review required — warning |
+| `incremental` + `sync_all_columns` | ADD COLUMN and DROP COLUMN — destructive if a column was removed; column reordering alone causes no schema DDL |
+| `snapshot` | changed SQL/config in the manifest requires review — warning |
 | model deleted | MODEL REMOVED — destructive; an ephemeral model has no physical object |
 
 When dbt-plan cannot extract columns it reports "review required" rather than "safe", and
@@ -1624,13 +2066,14 @@ are acceptable here; a false all-clear is not.
 def _do_agent_setup(args: argparse.Namespace) -> None:
     """Write dbt-plan guidance into the project's AGENTS.md for coding agents."""
     project_dir = Path(args.project_dir)
-    path = project_dir / "AGENTS.md"
+    path = project_dir / getattr(args, "file", "AGENTS.md")
+    path.parent.mkdir(parents=True, exist_ok=True)
 
     if path.exists():
         content = path.read_text(encoding="utf-8")
         if _AGENTS_MARKER in content:
             print(
-                f"AGENTS.md already has a dbt-plan section: {path}\n"
+                f"{path.name} already has a dbt-plan section: {path}\n"
                 "Edit it directly, or delete that section and re-run 'dbt-plan agent-setup'.",
                 file=sys.stderr,
             )
@@ -1639,9 +2082,9 @@ def _do_agent_setup(args: argparse.Namespace) -> None:
             f.write(("" if content.endswith("\n") else "\n") + "\n" + _AGENTS_GUIDE)
         print(f"Appended dbt-plan section to {path}")
     else:
-        path.write_text(f"# AGENTS.md\n\n{_AGENTS_GUIDE}", encoding="utf-8")
+        path.write_text(f"# {path.name}\n\n{_AGENTS_GUIDE}", encoding="utf-8")
         print(f"Created {path}")
-    print("Coding agents that read AGENTS.md will pick this up automatically.")
+    print(f"Coding agents that read {path.name} will pick this up automatically.")
 
 
 def _is_snapshot_path(status_line: str) -> bool:
@@ -2014,6 +2457,12 @@ def _main() -> None:
         "agent-setup", help="Write dbt-plan guidance into AGENTS.md for coding agents"
     )
     agent_cmd.add_argument("--project-dir", default=".", help="dbt project directory (default: .)")
+
+    agent_cmd.add_argument(
+        "--file",
+        default="AGENTS.md",
+        help="Instruction file to append or create (default: AGENTS.md)",
+    )
 
     # run
     run_cmd = subparsers.add_parser(

@@ -163,8 +163,8 @@ class TestIncrementalAppendAndSync:
         assert result.columns_added == []
         assert result.columns_removed == []
 
-    def test_sync_reorder_warning(self):
-        """incremental + sync_all_columns + columns reordered → WARNING."""
+    def test_sync_reorder_safe(self):
+        """Projection order alone does not change dbt's column set or emit DDL."""
         result = predict_ddl(
             model_name="int_order_enriched",
             materialization="incremental",
@@ -172,8 +172,8 @@ class TestIncrementalAppendAndSync:
             base_columns=["a", "b", "c"],
             current_columns=["c", "a", "b"],
         )
-        assert result.safety == Safety.WARNING
-        assert any("REORDER" in op.operation for op in result.operations)
+        assert result.safety == Safety.SAFE
+        assert result.operations == []
 
 
 class TestNewModel:

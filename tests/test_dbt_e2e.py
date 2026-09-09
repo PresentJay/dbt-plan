@@ -267,6 +267,11 @@ class TestUnitTestsAreReachedByCascade:
         )
         assert compiled_unit_tests, "dbt did not compile the unit test; the guard is untested"
 
+        # The partial build rewrites the manifest for only stg_orders. Refresh
+        # all model compilation evidence while retaining the generated unit-test
+        # artifact whose exclusion this regression actually measures.
+        _dbt_compile(dbt_project)
+        assert all(path.exists() for path in compiled_unit_tests)
         result = _dbt_plan(["check", "--project-dir", str(dbt_project), "--no-color"])
         assert "test_stg_orders_shape" not in result.stdout
         assert "not found in manifest" not in result.stdout
@@ -1246,6 +1251,163 @@ def test_generated_workflow_compiles_reports_and_gates_real_changes(
     assert _run_git(run_project, "rev-parse", "HEAD").strip() == head
 
 
+class TestAudit24RulesAgainstRealDbt:
+    """Issue #151: compare the static plan with an already-built DuckDB target."""
+
+    @pytest.fixture
+    def rule_project(self, tmp_path):
+        project = tmp_path / "audit24_rules"
+        (project / "models").mkdir(parents=True)
+        (project / "macros").mkdir()
+        (project / "dbt_project.yml").write_text(
+            "name: audit24_rules\nversion: '1.0'\nprofile: audit24_rules\n",
+            encoding="utf-8",
+        )
+        (project / "profiles.yml").write_text(
+            "audit24_rules:\n  target: dev\n  outputs:\n    dev:\n"
+            "      type: duckdb\n      path: dev.duckdb\n      threads: 1\n",
+            encoding="utf-8",
+        )
+        return project
+
+    def _snapshot_built(self, project):
+        built = _dbt_run(project)
+        assert built.returncode == 0, built.stdout + built.stderr
+        snapshot = _dbt_plan(["snapshot", "--project-dir", str(project)])
+        assert snapshot.returncode == 0, snapshot.stdout + snapshot.stderr
+
+    def _check(self, project):
+        _dbt_compile(project)
+        result = _dbt_plan(
+            ["check", "--project-dir", str(project), "--dialect", "duckdb", "--format", "json"]
+        )
+        assert result.returncode in (0, 1, 2), result.stdout + result.stderr
+        report = json.loads(result.stdout)
+        assert report["stale_sources"] == [], result.stdout
+        assert report["uncompiled_models"] == [], result.stdout
+        return result, report
+
+    @pytest.mark.parametrize("osc", ["ignore", "fail", "append_new_columns", "sync_all_columns"])
+    @pytest.mark.parametrize("change", ["add", "remove"])
+    def test_incremental_schema_change_on_existing_target(self, rule_project, osc, change):
+        config = "{{ config(materialized='incremental', on_schema_change='" + osc + "') }}\n"
+        narrow = "select 1 as order_id, 'open' as status\n"
+        wide = "select 1 as order_id, 'open' as status, 2 as amount\n"
+        old, new = (narrow, wide) if change == "add" else (wide, narrow)
+        model = rule_project / "models/fct_orders.sql"
+        model.write_text(config + old, encoding="utf-8")
+        self._snapshot_built(rule_project)
+        assert _fct_orders_columns(rule_project) == (
+            ["order_id", "status"] if change == "add" else ["order_id", "status", "amount"]
+        )
+        model.write_text(config + new, encoding="utf-8")
+        check, report = self._check(rule_project)
+        expected_code = (
+            2
+            if osc in {"ignore", "fail"} or (osc == "append_new_columns" and change == "remove")
+            else (1 if osc == "sync_all_columns" and change == "remove" else 0)
+        )
+        assert check.returncode == expected_code, check.stdout + check.stderr
+        assert report["parse_failures"] == []
+        assert any(item["model_name"] == "fct_orders" for item in report["models"])
+        if osc == "sync_all_columns" and change == "remove":
+            assert "DROP COLUMN" in check.stdout and "amount" in check.stdout
+        built = _dbt_run(rule_project)
+        should_fail = osc == "fail" or (osc == "ignore" and change == "remove")
+        assert (built.returncode != 0) == should_fail, built.stdout + built.stderr
+        expected = ["order_id", "status"]
+        if (change == "remove" and osc != "sync_all_columns") or (
+            change == "add" and osc in {"append_new_columns", "sync_all_columns"}
+        ):
+            expected.append("amount")
+        assert _fct_orders_columns(rule_project) == expected
+        import duckdb
+
+        with duckdb.connect(str(rule_project / "dev.duckdb"), read_only=True) as connection:
+            assert connection.execute("select count(*) from fct_orders").fetchone() == (
+                1 if should_fail else 2,
+            )
+            if osc == "append_new_columns":
+                # Schema retention is not backfill: an added/retired column has
+                # one original value and one NULL across the two successful runs.
+                assert connection.execute(
+                    "select amount from fct_orders order by amount nulls last"
+                ).fetchall() == [(2,), (None,)]
+
+    def test_ephemeral_star_uses_real_inlined_cte(self, rule_project):
+        stage = rule_project / "models/stg_orders.sql"
+        config = "{{ config(materialized='ephemeral') }}\n"
+        stage.write_text(config + "select 1 as order_id, 2 as amount\n", encoding="utf-8")
+        downstream = rule_project / "models/fct_orders.sql"
+        downstream.write_text(
+            "{{ config(materialized='incremental', on_schema_change='sync_all_columns') }}\n"
+            "select * from {{ ref('stg_orders') }}\n",
+            encoding="utf-8",
+        )
+        self._snapshot_built(rule_project)
+        original_model = downstream.read_bytes()
+        compiled = rule_project / "target/compiled/audit24_rules/models/fct_orders.sql"
+        assert "__dbt__cte__stg_orders" in compiled.read_text(encoding="utf-8")
+        stage.write_text(config + "select 1 as order_id\n", encoding="utf-8")
+        check, report = self._check(rule_project)
+        assert downstream.read_bytes() == original_model
+        assert "__dbt__cte__stg_orders" in compiled.read_text(encoding="utf-8")
+        assert report["parse_failures"] == []
+        assert check.returncode == 1, check.stdout + check.stderr
+        assert "DROP COLUMN" in check.stdout and "amount" in check.stdout
+        built = _dbt_run(rule_project)
+        assert built.returncode == 0, built.stdout + built.stderr
+        assert _fct_orders_columns(rule_project) == ["order_id"]
+
+    def test_materialization_change_is_reported_and_executed(self, rule_project):
+        model = rule_project / "models/fct_orders.sql"
+        model.write_text(
+            "{{ config(materialized='view') }}\nselect 1 as order_id\n", encoding="utf-8"
+        )
+        self._snapshot_built(rule_project)
+        model.write_text(
+            "{{ config(materialized='table') }}\nselect 1 as order_id\n", encoding="utf-8"
+        )
+        check, report = self._check(rule_project)
+        assert "materialization" in check.stdout.lower(), check.stdout
+        assert "view" in check.stdout and "table" in check.stdout
+        assert report["parse_failures"] == []
+        built = _dbt_run(rule_project)
+        assert built.returncode == 0, built.stdout + built.stderr
+        import duckdb
+
+        with duckdb.connect(str(rule_project / "dev.duckdb"), read_only=True) as connection:
+            assert connection.execute(
+                "select table_type from information_schema.tables where table_name='fct_orders'"
+            ).fetchone() == ("BASE TABLE",)
+
+    def test_macro_only_edit_changes_compiled_schema(self, rule_project):
+        macro = rule_project / "macros/order_columns.sql"
+        macro.write_text(
+            "{% macro order_columns() %}1 as order_id, 2 as amount{% endmacro %}\n",
+            encoding="utf-8",
+        )
+        model = rule_project / "models/fct_orders.sql"
+        model.write_text(
+            "{{ config(materialized='incremental', on_schema_change='sync_all_columns') }}\n"
+            "select {{ order_columns() }}\n",
+            encoding="utf-8",
+        )
+        self._snapshot_built(rule_project)
+        original = model.read_bytes()
+        macro.write_text(
+            "{% macro order_columns() %}1 as order_id{% endmacro %}\n", encoding="utf-8"
+        )
+        check, report = self._check(rule_project)
+        assert model.read_bytes() == original
+        assert check.returncode == 1, check.stdout + check.stderr
+        assert report["parse_failures"] == []
+        assert "DROP COLUMN" in check.stdout and "amount" in check.stdout
+        built = _dbt_run(rule_project)
+        assert built.returncode == 0, built.stdout + built.stderr
+        assert _fct_orders_columns(rule_project) == ["order_id"]
+
+
 def test_select_graph_operators_on_real_compilation(dbt_project):
     _dbt_compile(dbt_project)
     snapshot = _dbt_plan(["snapshot", "--project-dir", str(dbt_project)])
@@ -1354,3 +1516,125 @@ def test_run_invalid_selection_restores_work_after_real_compile(run_project):
     assert result.stdout == ""
     assert "Error: --select" in result.stderr
     assert _run_project_state(run_project) == before
+
+
+class TestPR200ReviewFixes:
+    @staticmethod
+    def project(tmp_path):
+        (tmp_path / "dbt_project.yml").write_text(
+            'name: review\nversion: "1.0"\nprofile: review\n', encoding="utf-8"
+        )
+        (tmp_path / "profiles.yml").write_text(
+            "review:\n  target: dev\n  outputs:\n    dev:\n      type: duckdb\n      path: review.duckdb\n",
+            encoding="utf-8",
+        )
+        return tmp_path
+
+    @pytest.mark.parametrize("name", ["active_id", "not_null"])
+    def test_local_test_and_builtin_override_cannot_hide_dropped_column(self, tmp_path, name):
+        p = self.project(tmp_path)
+        (p / "models").mkdir()
+        (p / "macros").mkdir()
+        model = p / "models/orders.sql"
+        model.write_text("select 1 as id, 2 as tax", encoding="utf-8")
+        (p / "models/schema.yml").write_text(
+            f"version: 2\nmodels:\n  - name: orders\n    columns:\n      - name: id\n        data_tests: [{name}]\n",
+            encoding="utf-8",
+        )
+        (p / "macros/custom_test.sql").write_text(
+            "{% test " + name + "(model, column_name) %}\n"
+            "select {{ column_name }} from {{ model }} where tax < 0\n{% endtest %}",
+            encoding="utf-8",
+        )
+        _dbt_compile(p)
+        assert _dbt_plan(["snapshot", "--project-dir", str(p)]).returncode == 0
+        model.write_text("select 1 as id", encoding="utf-8")
+        _dbt_compile(p)
+        result = _dbt_plan(["check", "--project-dir", str(p), "--format", "json"])
+        report = json.loads(result.stdout)
+        assert result.returncode == 2, report
+        assert not report.get("stale_sources")
+        assert "data_test_failure" in result.stdout
+        build = subprocess.run(
+            [_DBT, "build", "--profiles-dir", "."],
+            cwd=p,
+            capture_output=True,
+            text=True,
+            timeout=60,
+        )
+        assert build.returncode != 0 and 'column "tax" not found' in build.stdout
+
+    def test_partial_compile_does_not_trust_old_test_file(self, tmp_path):
+        p = self.project(tmp_path)
+        (p / "models").mkdir()
+        model = p / "models/orders.sql"
+        schema = p / "models/schema.yml"
+        model.write_text("select 1 as id, 2 as tax", encoding="utf-8")
+        schema.write_text(
+            'version: 2\nmodels:\n  - name: orders\n    columns:\n      - name: id\n        data_tests:\n          - not_null:\n              config:\n                where: "id > 0"\n',
+            encoding="utf-8",
+        )
+        _dbt_compile(p)
+        assert _dbt_plan(["snapshot", "--project-dir", str(p)]).returncode == 0
+        model.write_text("select 1 as id", encoding="utf-8")
+        schema.write_text(
+            schema.read_text(encoding="utf-8").replace("id > 0", "tax > 0"), encoding="utf-8"
+        )
+        compile_result = subprocess.run(
+            [
+                _DBT,
+                "compile",
+                "--profiles-dir",
+                ".",
+                "--select",
+                "orders",
+                "--indirect-selection",
+                "empty",
+            ],
+            cwd=p,
+            capture_output=True,
+            text=True,
+            timeout=60,
+        )
+        assert compile_result.returncode == 0, compile_result.stdout
+        result = _dbt_plan(["check", "--project-dir", str(p), "--format", "json"])
+        assert result.returncode == 2, result.stdout
+        assert "data_test_unreadable" in result.stdout
+        _dbt_compile(p)
+        fresh = _dbt_plan(["check", "--project-dir", str(p), "--format", "json"])
+        assert fresh.returncode == 2 and "data_test_failure" in fresh.stdout
+        assert "data_test_unreadable" not in fresh.stdout
+
+    @pytest.mark.parametrize("mixed", [False, True])
+    @pytest.mark.parametrize("with_test", [False, True])
+    def test_snapshot_sources_and_test_only_compiled_layout(self, tmp_path, mixed, with_test):
+        p = self.project(tmp_path)
+        (p / "snapshots").mkdir()
+        source = p / "snapshots/history.sql"
+        source.write_text(
+            "{% snapshot history %}\n"
+            "{{ config(target_schema='main', unique_key='id', strategy='check', check_cols=['tax']) }}\n"
+            "select 1 as id, 2 as tax\n{% endsnapshot %}\n",
+            encoding="utf-8",
+        )
+        if mixed:
+            (p / "models").mkdir()
+            (p / "models/orders.sql").write_text("select 1 as id", encoding="utf-8")
+        if with_test:
+            (p / "snapshots/schema.yml").write_text(
+                "version: 2\nsnapshots:\n  - name: history\n    columns:\n      - name: id\n        data_tests: [not_null]\n",
+                encoding="utf-8",
+            )
+        _dbt_compile(p)
+        snapshot = _dbt_plan(["snapshot", "--project-dir", str(p)])
+        assert snapshot.returncode == 0, snapshot.stderr
+        clean = _dbt_plan(["check", "--project-dir", str(p), "--format", "json"])
+        assert clean.returncode == 0, clean.stdout + clean.stderr
+        source.write_text(
+            source.read_text(encoding="utf-8").replace("2 as tax", "3 as tax"), encoding="utf-8"
+        )
+        _dbt_compile(p)
+        changed = _dbt_plan(["check", "--project-dir", str(p), "--format", "json"])
+        assert changed.returncode == 2, changed.stdout + changed.stderr
+        assert "snapshot changed" in changed.stdout
+        assert not json.loads(changed.stdout).get("stale_sources")
