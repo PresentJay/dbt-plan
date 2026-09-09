@@ -1516,3 +1516,125 @@ def test_run_invalid_selection_restores_work_after_real_compile(run_project):
     assert result.stdout == ""
     assert "Error: --select" in result.stderr
     assert _run_project_state(run_project) == before
+
+
+class TestPR200ReviewFixes:
+    @staticmethod
+    def project(tmp_path):
+        (tmp_path / "dbt_project.yml").write_text(
+            'name: review\nversion: "1.0"\nprofile: review\n', encoding="utf-8"
+        )
+        (tmp_path / "profiles.yml").write_text(
+            "review:\n  target: dev\n  outputs:\n    dev:\n      type: duckdb\n      path: review.duckdb\n",
+            encoding="utf-8",
+        )
+        return tmp_path
+
+    @pytest.mark.parametrize("name", ["active_id", "not_null"])
+    def test_local_test_and_builtin_override_cannot_hide_dropped_column(self, tmp_path, name):
+        p = self.project(tmp_path)
+        (p / "models").mkdir()
+        (p / "macros").mkdir()
+        model = p / "models/orders.sql"
+        model.write_text("select 1 as id, 2 as tax", encoding="utf-8")
+        (p / "models/schema.yml").write_text(
+            f"version: 2\nmodels:\n  - name: orders\n    columns:\n      - name: id\n        data_tests: [{name}]\n",
+            encoding="utf-8",
+        )
+        (p / "macros/custom_test.sql").write_text(
+            "{% test " + name + "(model, column_name) %}\n"
+            "select {{ column_name }} from {{ model }} where tax < 0\n{% endtest %}",
+            encoding="utf-8",
+        )
+        _dbt_compile(p)
+        assert _dbt_plan(["snapshot", "--project-dir", str(p)]).returncode == 0
+        model.write_text("select 1 as id", encoding="utf-8")
+        _dbt_compile(p)
+        result = _dbt_plan(["check", "--project-dir", str(p), "--format", "json"])
+        report = json.loads(result.stdout)
+        assert result.returncode == 2, report
+        assert not report.get("stale_sources")
+        assert "data_test_failure" in result.stdout
+        build = subprocess.run(
+            [_DBT, "build", "--profiles-dir", "."],
+            cwd=p,
+            capture_output=True,
+            text=True,
+            timeout=60,
+        )
+        assert build.returncode != 0 and 'column "tax" not found' in build.stdout
+
+    def test_partial_compile_does_not_trust_old_test_file(self, tmp_path):
+        p = self.project(tmp_path)
+        (p / "models").mkdir()
+        model = p / "models/orders.sql"
+        schema = p / "models/schema.yml"
+        model.write_text("select 1 as id, 2 as tax", encoding="utf-8")
+        schema.write_text(
+            'version: 2\nmodels:\n  - name: orders\n    columns:\n      - name: id\n        data_tests:\n          - not_null:\n              config:\n                where: "id > 0"\n',
+            encoding="utf-8",
+        )
+        _dbt_compile(p)
+        assert _dbt_plan(["snapshot", "--project-dir", str(p)]).returncode == 0
+        model.write_text("select 1 as id", encoding="utf-8")
+        schema.write_text(
+            schema.read_text(encoding="utf-8").replace("id > 0", "tax > 0"), encoding="utf-8"
+        )
+        compile_result = subprocess.run(
+            [
+                _DBT,
+                "compile",
+                "--profiles-dir",
+                ".",
+                "--select",
+                "orders",
+                "--indirect-selection",
+                "empty",
+            ],
+            cwd=p,
+            capture_output=True,
+            text=True,
+            timeout=60,
+        )
+        assert compile_result.returncode == 0, compile_result.stdout
+        result = _dbt_plan(["check", "--project-dir", str(p), "--format", "json"])
+        assert result.returncode == 2, result.stdout
+        assert "data_test_unreadable" in result.stdout
+        _dbt_compile(p)
+        fresh = _dbt_plan(["check", "--project-dir", str(p), "--format", "json"])
+        assert fresh.returncode == 2 and "data_test_failure" in fresh.stdout
+        assert "data_test_unreadable" not in fresh.stdout
+
+    @pytest.mark.parametrize("mixed", [False, True])
+    @pytest.mark.parametrize("with_test", [False, True])
+    def test_snapshot_sources_and_test_only_compiled_layout(self, tmp_path, mixed, with_test):
+        p = self.project(tmp_path)
+        (p / "snapshots").mkdir()
+        source = p / "snapshots/history.sql"
+        source.write_text(
+            "{% snapshot history %}\n"
+            "{{ config(target_schema='main', unique_key='id', strategy='check', check_cols=['tax']) }}\n"
+            "select 1 as id, 2 as tax\n{% endsnapshot %}\n",
+            encoding="utf-8",
+        )
+        if mixed:
+            (p / "models").mkdir()
+            (p / "models/orders.sql").write_text("select 1 as id", encoding="utf-8")
+        if with_test:
+            (p / "snapshots/schema.yml").write_text(
+                "version: 2\nsnapshots:\n  - name: history\n    columns:\n      - name: id\n        data_tests: [not_null]\n",
+                encoding="utf-8",
+            )
+        _dbt_compile(p)
+        snapshot = _dbt_plan(["snapshot", "--project-dir", str(p)])
+        assert snapshot.returncode == 0, snapshot.stderr
+        clean = _dbt_plan(["check", "--project-dir", str(p), "--format", "json"])
+        assert clean.returncode == 0, clean.stdout + clean.stderr
+        source.write_text(
+            source.read_text(encoding="utf-8").replace("2 as tax", "3 as tax"), encoding="utf-8"
+        )
+        _dbt_compile(p)
+        changed = _dbt_plan(["check", "--project-dir", str(p), "--format", "json"])
+        assert changed.returncode == 2, changed.stdout + changed.stderr
+        assert "snapshot changed" in changed.stdout
+        assert not json.loads(changed.stdout).get("stale_sources")

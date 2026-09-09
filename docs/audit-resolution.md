@@ -49,3 +49,29 @@ cannot prove whether absent source code changed. A matching `run_results.json`
 helps establish compile coverage; an ephemeral node is verified through its compiled
 manifest SQL because dbt does not give it an execution result. Timestamp checks
 remain a fallback, not a complete content provenance system.
+
+## Follow-up review fixes
+
+The review of PR #200 reproduced four gaps after the initial audit tests passed.
+All four have dedicated regressions in `tests/test_pr200_review_fixes.py` and
+`TestPR200ReviewFixes` in `tests/test_dbt_e2e.py`:
+
+- Generic data tests require SQL inspection even when they use only the standard
+  arguments and have no namespace. A project can implement a custom test or
+  override a built-in such as `not_null`; either may read additional columns.
+- Test SQL used by cascade analysis must have current compilation evidence, just
+  like model SQL. A file left by an earlier compile is not proof after
+  `dbt compile --select orders --indirect-selection empty`. Unverified SQL causes
+  a `data_test_unreadable` warning when that test is relevant to a column loss.
+- SQL snapshot source checks use dbt's SHA-256 checksum of the full stripped
+  file, including block delimiters and every snapshot declared in that file.
+  Snapshot `raw_code` contains only the block body. Missing checksum evidence
+  remains a review warning when the source checkout is present.
+- Snapshot-only projects use manifest comparison even when data tests have
+  created a `target/compiled` directory without any compiled model SQL.
+
+Real-dbt regressions cover custom tests and built-in overrides, partial versus
+complete test compilation, and snapshot projects with and without ordinary models
+and data tests. The unit cases also verify edits to either block in a multi-snapshot
+file, changed block names, deleted sources, mismatched SQL, failed results and
+missing checksum evidence.

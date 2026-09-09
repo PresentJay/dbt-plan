@@ -125,14 +125,9 @@ def build_data_test_index(manifest: dict) -> dict[str, DataTestNode]:
             name=node.get("name") or node_id.split(".")[-1],
             columns_by_model={model: frozenset(cols) for model, cols in columns.items()},
             depends_on_models=depends,
-            requires_sql=bool(
-                config.get("where")
-                or any(
-                    key not in {"model", "column_name", "to", "field", "values", "quote"}
-                    for key in (metadata.get("kwargs") or {})
-                )
-                or metadata.get("namespace")
-            ),
+            # Even a built-in name can be overridden by a project macro. Neither
+            # its namespace nor its argument names prove all columns it reads.
+            requires_sql=bool(metadata or config.get("where")),
         )
     return index
 
@@ -227,11 +222,14 @@ def _source_provenance(manifest: dict) -> dict:
     source_files maps project-relative node paths to their exact raw_code string.
     source_macros maps macro file paths to all macro_sql blocks in that file;
     blocks are fragments, so callers must check containment, not file equality.
+    source_snapshots retains file checksums because snapshot raw_code contains
+    only a block body. Missing snapshot checksums explicitly require review.
     Missing text is omitted rather than invented for older/synthetic manifests.
     """
     project = (manifest.get("metadata") or {}).get("project_name")
     files: dict[str, str] = {}
     macros: dict[str, list[str]] = {}
+    snapshots: dict[str, list[str | None]] = {}
     for section, text_key in (("nodes", "raw_code"), ("macros", "macro_sql")):
         for nid, node in (manifest.get(section) or {}).items():
             parts = nid.split(".")
@@ -244,7 +242,17 @@ def _source_provenance(manifest: dict) -> dict:
                 # Generic tests point at YAML but raw_code is generated SQL, not
                 # the YAML file's contents. Only source-code files can be compared.
                 if PurePosixPath(path).suffix.lower() in {".sql", ".py"}:
-                    files[path] = content
+                    if nid.startswith("snapshot."):
+                        # SQL snapshot raw_code is only the block body. dbt's
+                        # checksum covers the complete stripped source file,
+                        # including block names and other snapshots in that file.
+                        checksum = node.get("checksum") or {}
+                        digest = (
+                            checksum.get("checksum") if checksum.get("name") == "sha256" else None
+                        )
+                        snapshots.setdefault(path, []).append(digest)
+                    else:
+                        files[path] = content
             else:
                 macros.setdefault(path, []).append(content)
     result: dict = {}
@@ -252,6 +260,8 @@ def _source_provenance(manifest: dict) -> dict:
         result["source_files"] = files
     if macros:
         result["source_macros"] = macros
+    if snapshots:
+        result["source_snapshots"] = snapshots
     return result
 
 

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import shutil
 import sys
@@ -140,25 +141,52 @@ def _stale_sources(
     return sorted(newer)
 
 
-def _provenance_problems(
-    project_dir, manifest_path, manifest, base_manifest, node_index, compiled_paths, relevant_names
-):
-    """Refuse incomplete/currently invalid inputs using local manifest evidence."""
-
-    problems = []
-    root = project_dir.resolve()
+def _compilation_results(manifest_path: Path, manifest: dict) -> dict | None:
+    """Execution evidence is useful only for the manifest's own invocation."""
     # run_results and manifest must belong to the same invocation; an old file
     # is no evidence that the current compile completed any particular model.
     invocation = (manifest.get("metadata") or {}).get("invocation_id")
-    results = None
     try:
         report = json.loads(
             (manifest_path.parent / "run_results.json").read_text(encoding="utf-8")
         )
         if invocation and (report.get("metadata") or {}).get("invocation_id") == invocation:
-            results = {r.get("unique_id"): r.get("status") for r in report.get("results", [])}
+            return {r.get("unique_id"): r.get("status") for r in report.get("results", [])}
     except (OSError, ValueError, AttributeError, TypeError):
         pass
+    return None
+
+
+def _compiled_input_is_current(node_id, raw, path, manifest_path, invocation, results):
+    """Validate model or test SQL before using it as evidence of safety."""
+    compiled_code = raw.get("compiled_code")
+    if raw.get("compiled") is False:
+        return False
+    try:
+        if isinstance(compiled_code, str) and compiled_code != _read_diff_sql(None, path):
+            return False  # Success cannot validate a replaced/orphaned file.
+        if results is not None:
+            if (raw.get("config") or {}).get("materialized") == "ephemeral":
+                # Ephemeral nodes never appear in execution results.
+                return bool(raw.get("compiled")) and isinstance(compiled_code, str)
+            return results.get(node_id) in ("success", "pass")
+        if isinstance(compiled_code, str):
+            return True
+        if invocation and isinstance(raw.get("raw_code"), str):
+            return False  # Modern parsed-only nodes lack compilation evidence.
+        return path.stat().st_mtime + _STALE_TOLERANCE_SECONDS >= manifest_path.stat().st_mtime
+    except OSError:
+        return False
+
+
+def _provenance_problems(
+    project_dir, manifest_path, manifest, base_manifest, node_index, compiled_paths, relevant_names
+):
+    """Refuse incomplete/currently invalid inputs using local manifest evidence."""
+    problems = []
+    root = project_dir.resolve()
+    invocation = (manifest.get("metadata") or {}).get("invocation_id")
+    results = _compilation_results(manifest_path, manifest)
     complete_compile = results is not None and all(
         results.get(node.node_id) in ("success", "pass")
         for node in node_index.values()
@@ -168,7 +196,7 @@ def _provenance_problems(
         (project_dir / name).is_dir() for name in manifest.get("source_dirs", ())
     )
     for source in (manifest, base_manifest) if has_sources else ():
-        for field in ("source_files", "source_macros"):
+        for field in ("source_files", "source_macros", "source_snapshots"):
             for filename, expected in source.get(field, {}).items():
                 if source is base_manifest and complete_compile:
                     continue
@@ -188,11 +216,13 @@ def _provenance_problems(
                     if not current_known and not complete_compile:
                         problems.append(filename)
                     continue
-                matches = (
-                    content.strip() == expected.strip()
-                    if field == "source_files"
-                    else all(block in content for block in expected)
-                )
+                if field == "source_snapshots":
+                    digest = hashlib.sha256(content.strip().encode("utf-8")).hexdigest()
+                    matches = bool(expected) and all(value == digest for value in expected)
+                elif field == "source_files":
+                    matches = content.strip() == expected.strip()
+                else:
+                    matches = all(block in content for block in expected)
                 if not matches:
                     problems.append(filename)
     for name, node in node_index.items():
@@ -204,27 +234,9 @@ def _provenance_problems(
         path = compiled_paths.get(name)
         if path is None:
             continue
-        compiled_code = raw.get("compiled_code")
-        if raw.get("compiled") is False:
-            stale = True
-        elif isinstance(compiled_code, str) and compiled_code != _read_diff_sql(None, path):
-            # Success does not validate a subsequently replaced/orphaned file.
-            stale = True
-        elif results is not None:
-            if node.materialization == "ephemeral":
-                # Ephemeral nodes compile into CTEs, never execution results.
-                stale = not raw.get("compiled") or not isinstance(compiled_code, str)
-            else:
-                stale = results.get(node.node_id) not in ("success", "pass")
-        elif isinstance(compiled_code, str):
-            stale = False  # manifest SQL and file agree for this node
-        elif invocation and isinstance(raw.get("raw_code"), str):
-            # Modern parsed-only nodes have source code but no compile evidence.
-            # A recently written orphan file cannot establish coverage.
-            stale = True
-        else:
-            stale = path.stat().st_mtime + _STALE_TOLERANCE_SECONDS < manifest_path.stat().st_mtime
-        if stale:
+        if not _compiled_input_is_current(
+            node.node_id, raw, path, manifest_path, invocation, results
+        ):
             problems.append(raw.get("original_file_path") or f"compiled model {name}")
     return problems
 
@@ -245,25 +257,28 @@ def _find_compiled_dir(target_dir: Path) -> CompiledLayout | None:
     identified from the manifest; only a genuinely undecidable case raises.
     """
     compiled = target_dir / "compiled"
+    try:
+        raw = json.loads((target_dir / "manifest.json").read_text(encoding="utf-8"))
+        project = (raw.get("metadata") or {}).get("project_name")
+        resources = [
+            node
+            for nid, node in raw.get("nodes", {}).items()
+            if nid.startswith(("model.", "snapshot."))
+            and (not project or nid.split(".")[1] == project)
+            and (node.get("config") or {}).get("enabled", True)
+        ]
+        if resources and all(
+            node.get("resource_type") == "snapshot" or node.get("language") == "python"
+            for node in resources
+        ):
+            # These resources are compared through the manifest, not SQL.
+            return CompiledLayout(
+                compiled if compiled.is_dir() else target_dir,
+                ("__dbt_plan_manifest_only__",),
+            )
+    except (OSError, ValueError, AttributeError):
+        pass
     if not compiled.exists():
-        try:
-            raw = json.loads((target_dir / "manifest.json").read_text(encoding="utf-8"))
-            project = (raw.get("metadata") or {}).get("project_name")
-            resources = [
-                node
-                for nid, node in raw.get("nodes", {}).items()
-                if nid.startswith(("model.", "snapshot."))
-                and (not project or nid.split(".")[1] == project)
-                and (node.get("config") or {}).get("enabled", True)
-            ]
-            if resources and all(
-                node.get("resource_type") == "snapshot" or node.get("language") == "python"
-                for node in resources
-            ):
-                # These resources are compared through the manifest, not SQL.
-                return CompiledLayout(target_dir, ("__dbt_plan_manifest_only__",))
-        except (OSError, ValueError, AttributeError):
-            pass
         return None
 
     root_project, model_dirs = _manifest_layout(target_dir)
@@ -1601,6 +1616,21 @@ def _do_check(args: argparse.Namespace) -> int:
             compiled_sql_index[sql_file.stem] = sql_file
         for sql_file in iter_non_model_sql(current_compiled, model_dirs):
             test_sql_index[sql_file.stem] = sql_file
+
+    # A partial compile can leave older test files beside current model SQL.
+    # Omit unverified files: cascade then reports data_test_unreadable only when
+    # that test's SQL is needed, without blocking unrelated selected models.
+    invocation = (manifest.get("metadata") or {}).get("invocation_id")
+    results = _compilation_results(manifest_path, manifest)
+    for nid, raw in manifest.get("nodes", {}).items():
+        if not nid.startswith("test."):
+            continue
+        name = raw.get("name") or nid.split(".")[-1]
+        path = test_sql_index.get(name)
+        if path is not None and not _compiled_input_is_current(
+            nid, raw, path, manifest_path, invocation, results
+        ):
+            del test_sql_index[name]
 
     # 3d. Cascade impact analysis (extracted to predictor module)
     predictions, downstream_map = analyze_cascade_impacts(
