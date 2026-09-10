@@ -44,9 +44,10 @@ starter:
 
 ### Direct equivalents of the `make` targets
 
-`make test`, `make lint`, `make format` and `make format-check` all read their
-Python commands from the repository's `pyproject.toml` extras. The same
-commands, run without `make`:
+`make test`, `make lint`, `make format` and `make format-check` run the commands
+defined directly in the repository's `Makefile`; `pyproject.toml` contributes
+only the extras those commands need (`test` for pytest, `dev` for Ruff). The
+same commands, run without `make`:
 
 | `make …`        | PowerShell equivalent                                        |
 |-----------------|--------------------------------------------------------------|
