@@ -379,6 +379,43 @@ class TestCascade:
         )
         assert updated[0] == pred
 
+    def test_a_dropped_column_in_a_csv_fixture_is_reported(self):
+        pred = self._view_dropping_customer_id()
+        updated = self._cascade(
+            pred,
+            child_map={"model.p.stg_orders": ["unit_test.p.stg_orders.test_shape"]},
+            unit_tests=[
+                _unit_test(
+                    "unit_test.p.stg_orders.test_shape",
+                    "stg_orders",
+                    expect={"format": "csv", "rows": "order_id,customer_id
+1,2"},
+                )
+            ],
+        )
+        impact = updated.downstream_impacts[0]
+        assert impact.risk == "unit_test_failure"
+        assert "customer_id" in impact.reason
+
+    def test_a_malformed_csv_fixture_is_a_warning(self):
+        pred = self._view_dropping_customer_id()
+        updated = self._cascade(
+            pred,
+            child_map={"model.p.stg_orders": ["unit_test.p.stg_orders.test_shape"]},
+            unit_tests=[
+                _unit_test(
+                    "unit_test.p.stg_orders.test_shape",
+                    "stg_orders",
+                    expect={"format": "csv", "rows": '"order_id,customer_id
+1,2'},
+                )
+            ],
+        )
+        impact = updated.downstream_impacts[0]
+        assert impact.risk == "unit_test_unreadable"
+        assert "malformed CSV" in impact.reason
+        assert updated.safety == Safety.WARNING
+
 
 class TestCompiledUnitTestSqlIsNotAModel:
     """dbt compiles unit tests into target/, under the schema file that declared them.

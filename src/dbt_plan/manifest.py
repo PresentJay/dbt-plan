@@ -261,8 +261,36 @@ def _fixture_columns(block: dict) -> tuple[frozenset[str] | None, str]:
         # already handled above.
         if not isinstance(rows, str) or not rows.strip():
             return None, "is CSV with no inline header to read"
-        header = rows.strip().splitlines()[0]
-        return frozenset(c.strip().lower() for c in header.split(",") if c.strip()), ""
+            
+        import csv
+        import io
+        
+        # Strip UTF-8 BOM if present
+        content = rows.lstrip('\ufeff')
+        if not content.strip():
+            return None, "is CSV with no inline header to read"
+            
+        try:
+            reader = csv.reader(io.StringIO(content), strict=True)
+            header = next(reader)
+        except csv.Error:
+            return None, "is malformed CSV"
+        except StopIteration:
+            return None, "is CSV with no inline header to read"
+            
+        if not header:
+            return None, "has an empty CSV header"
+            
+        normalized = []
+        for c in header:
+            name = c.strip().lower()
+            if not name:
+                return None, "has a blank column name in CSV header"
+            if name in normalized:
+                return None, "has duplicate column names in CSV header"
+            normalized.append(name)
+            
+        return frozenset(normalized), ""
 
     # format: sql, or something dbt added after this was written.
     return None, f"is in '{fmt}' format, which dbt-plan does not read"
