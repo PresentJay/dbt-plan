@@ -100,6 +100,21 @@ class TestConfigFile:
         config = Config.load(tmp_path)
         assert config.dialect == "snowflake"  # stays default
 
+    def test_malicious_dialect_does_not_suppress_manifest_inference(self, tmp_path, capsys):
+        """A rejected dialect value must not block manifest adapter inference."""
+        (tmp_path / ".dbt-plan.yml").write_text("dialect: ; rm -rf /\n")
+        config = Config.load(tmp_path)
+        assert config.dialect_explicit is False
+        assert config.resolve_dialect("bigquery") == "bigquery"
+        assert ":1: warning: cannot understand dialect" in capsys.readouterr().err
+
+    def test_file_dialect_sets_explicit(self, tmp_path):
+        """A valid dialect value is treated as an explicit human choice."""
+        (tmp_path / ".dbt-plan.yml").write_text("dialect: bigquery\n")
+        config = Config.load(tmp_path)
+        assert config.dialect_explicit is True
+        assert config.resolve_dialect("duckdb") == "bigquery"
+
     def test_missing_file_uses_defaults(self, tmp_path):
         """No config file → all defaults."""
         config = Config.load(tmp_path)
