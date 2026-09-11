@@ -12,6 +12,18 @@ from pathlib import Path, PurePosixPath
 _VERSION_TAIL = re.compile(r"^v[0-9]+$")
 
 
+def dbt_path_parts(path: str) -> list[str]:
+    """Split a dbt-reported file path on either separator.
+
+    The manifest's `original_file_path` carries the host platform's own
+    separator, so on a Windows checkout it reads `models\\fct_orders.sql`.
+    `PurePosixPath` would treat that backslash as part of one long name and
+    hide the first segment -- the exact directory a model lives in. Everything
+    here that locates files by that field splits both ways.
+    """
+    return [part for part in path.replace("\\", "/").split("/") if part]
+
+
 def model_key(node_id: str) -> str:
     """The name a model's compiled SQL is written under, derived from its node_id.
 
@@ -216,6 +228,18 @@ def load_manifest(manifest_path: str | Path) -> dict:
     return result
 
 
+def _universal_newlines(text: str) -> str:
+    """Match how ``path.read_text()`` decodes a source file.
+
+    Python translates ``\\r\\n`` (and lone ``\\r``) to ``\\n`` when reading, but
+    dbt embeds ``raw_code``/``macro_sql`` with the file's own ``\\r\\n`` on
+    Windows. Comparing the two never matches, which flagged every model with
+    CRLF sources as "stale" on Windows. Author text is stored against itself
+    through this normalization.
+    """
+    return text.replace("\r\n", "\n").replace("\r", "\n")
+
+
 def _source_provenance(manifest: dict) -> dict:
     """Keep authored text for detecting edits inside filesystem timestamp tolerance.
 
@@ -241,7 +265,7 @@ def _source_provenance(manifest: dict) -> dict:
             if section == "nodes":
                 # Generic tests point at YAML but raw_code is generated SQL, not
                 # the YAML file's contents. Only source-code files can be compared.
-                if PurePosixPath(path).suffix.lower() in {".sql", ".py"}:
+                if dbt_path_parts(path)[-1].lower().endswith((".sql", ".py")):
                     if nid.startswith("snapshot."):
                         # SQL snapshot raw_code is only the block body. dbt's
                         # checksum covers the complete stripped source file,
@@ -252,9 +276,9 @@ def _source_provenance(manifest: dict) -> dict:
                         )
                         snapshots.setdefault(path, []).append(digest)
                     else:
-                        files[path] = content
+                        files[path] = _universal_newlines(content)
             else:
-                macros.setdefault(path, []).append(content)
+                macros.setdefault(path, []).append(_universal_newlines(content))
     result: dict = {}
     if files:
         result["source_files"] = files
@@ -286,7 +310,7 @@ def _source_dirs(manifest: dict) -> tuple[str, ...]:
                 continue
             declared = node.get("original_file_path")
             if isinstance(declared, str) and declared:
-                dirs[PurePosixPath(declared).parts[0]] = None
+                dirs[dbt_path_parts(declared)[0]] = None
     return tuple(dirs)
 
 
