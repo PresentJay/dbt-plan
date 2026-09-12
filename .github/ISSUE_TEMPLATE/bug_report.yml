@@ -7,7 +7,9 @@ body:
       value: |
         dbt-plan decides everything from compiled SQL plus a model's config, so a
         report without those is usually not reproducible. The fields below are the
-        minimum needed to turn this into a failing test.
+        minimum needed to turn this into a failing test. Full manifests,
+        credentials and private schema details are unnecessary; the minimal
+        metadata this form asks for is enough.
 
   - type: textarea
     id: compiled-sql
@@ -30,9 +32,17 @@ body:
     id: dialect
     attributes:
       label: Dialect
-      description: The `--dialect` value, or the default if you did not set one.
+      description: |
+        What SQL dialect dbt-plan parsed your SQL with. Pick `automatic (inferred
+        from the manifest) / not sure` unless you set an explicit `--dialect`, a
+        `DBT_PLAN_DIALECT` override or a file `dialect:` — dbt-plan otherwise
+        infers the dialect from the compiled manifest's `metadata.adapter_type`
+        and falls back to snowflake only when nothing says otherwise. If you did
+        override it, include the explicit value and how you set it (flag, env or
+        file). No dialect is a universal default.
       options:
-        - snowflake (default)
+        - automatic (inferred from the manifest) / not sure
+        - snowflake
         - bigquery
         - redshift
         - postgres
@@ -66,8 +76,12 @@ body:
     attributes:
       label: What you expected, and what happened
       description: >
-        Include the `dbt-plan` output and its exit code if you have them
-        (0 safe, 1 destructive, 2 warning or error).
+        Include the `dbt-plan` output and its exit code if you have them.
+        Completed-verdict codes: 0 safe, 1 destructive, 2 review required. Exit 3
+        means dbt-plan could not complete (compilation, restore or an internal
+        error) and does not produce a reliable verdict — see the exit-code
+        contract (docs/exit-codes.md), which starts at 0.16.0. Releases before
+        0.16.0 did not distinguish every error this way.
       placeholder: |
         Expected: DESTRUCTIVE, because revenue is dropped
         Got:      dbt-plan -- no model changes detected  (exit 0)
@@ -79,7 +93,7 @@ body:
     attributes:
       label: Versions
       description: "Output of: `dbt-plan --version` and `python -c 'import sqlglot; print(sqlglot.__version__)'`"
-      placeholder: dbt-plan 0.5.2, sqlglot 30.17.0
+      placeholder: dbt-plan 0.16.x, sqlglot 30.17.0
     validations:
       required: true
 
