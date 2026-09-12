@@ -210,9 +210,9 @@ class Config:
                     self._warn_config(project_dir, line_number, f"cannot understand {key}")
             elif key == "dialect":
                 # Only allow alphanumeric dialect names (sqlglot dialect identifiers)
-                self.dialect_explicit = True
                 if value.isalnum():
                     self.dialect = self._unquote_scalar(value)
+                    self.dialect_explicit = True
                 else:
                     self._warn_config(project_dir, line_number, f"cannot understand {key}")
             elif key == "include_packages":
