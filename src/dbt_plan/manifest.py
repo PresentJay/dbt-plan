@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import ast
+import csv
+import io
 import json
 import re
 from collections import deque
@@ -313,12 +315,25 @@ def _fixture_columns(block: dict) -> tuple[frozenset[str] | None, str]:
         return frozenset(columns), ""
 
     if fmt == "csv":
-        # Inline CSV carries its header on the first line; a `fixture:` CSV was
-        # already handled above.
+        # Inline CSV carries its header in the first record; a `fixture:` CSV was
+        # already handled above. Parse every record strictly so a malformed later
+        # row cannot turn an unknown fixture schema into an all-clear.
         if not isinstance(rows, str) or not rows.strip():
             return None, "is CSV with no inline header to read"
-        header = rows.strip().splitlines()[0]
-        return frozenset(c.strip().lower() for c in header.split(",") if c.strip()), ""
+        try:
+            parsed_rows = list(
+                csv.reader(io.StringIO(rows.lstrip("\ufeff"), newline=""), strict=True)
+            )
+        except csv.Error as exc:
+            return None, f"has unreadable CSV: {exc}"
+        if not parsed_rows or not parsed_rows[0]:
+            return None, "has unreadable CSV header"
+        csv_columns = [column.strip().lower() for column in parsed_rows[0]]
+        if not all(csv_columns):
+            return None, "has unreadable CSV header with a blank column name"
+        if len(set(csv_columns)) != len(csv_columns):
+            return None, "has unreadable CSV header with duplicate column names"
+        return frozenset(csv_columns), ""
 
     # format: sql, or something dbt added after this was written.
     return None, f"is in '{fmt}' format, which dbt-plan does not read"
