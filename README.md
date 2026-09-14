@@ -1,5 +1,8 @@
 # dbt-plan
 
+[![CI](https://github.com/PresentJay/dbt-plan/actions/workflows/ci.yml/badge.svg)](https://github.com/PresentJay/dbt-plan/actions/workflows/ci.yml)
+[![PyPI](https://img.shields.io/pypi/v/dbt-plan.svg)](https://pypi.org/project/dbt-plan/)
+
 Static analysis tool that warns about risky DDL changes before `dbt run`.
 
 Like `terraform plan` for dbt, and used the same way: you run it **before** the thing
@@ -58,13 +61,33 @@ The analysis reads files, compares them, and warns; it does not connect to a war
 
 ## Quick Start
 
+### See a result without a warehouse
+
+The repository includes before/after compiled SQL and a manifest, so you can try the
+analysis without installing dbt or configuring warehouse credentials:
+
 ```bash
-pip install dbt-plan
+git clone --depth 1 https://github.com/PresentJay/dbt-plan
+cd dbt-plan
+python -m pip install dbt-plan
+bash examples/sample-project/run-example.sh
+```
+
+The sample prints text, GitHub markdown and JSON output. It intentionally contains a
+dropped column, so the inner check reports exit code `1` (`destructive`); the example
+script itself completes successfully. See the [sample scenario](docs/use-cases.md) for
+the expected finding.
+
+### Use it with your dbt project
+
+```bash
+python -m pip install dbt-plan
 dbt-plan run               # compile baseline → compile current → check
 ```
 
-`dbt-plan run` does the whole thing in one command, and needs whatever credentials your
-`dbt compile` normally needs.
+`dbt-plan run` does the whole thing in one command and needs whatever credentials your
+`dbt compile` normally needs. If your project already has compiled artifacts, use
+`dbt-plan check` directly; it only reads local files and does not connect to a warehouse.
 
 ### The loop it is built for
 

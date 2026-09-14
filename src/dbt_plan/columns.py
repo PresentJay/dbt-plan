@@ -90,7 +90,7 @@ def _sole_source(select: exp.Select) -> exp.Table | None:
 
 def _output_select(tree: exp.Expression) -> exp.Select | None:
     """Read set-operation names from the left branch, including parentheses."""
-    while isinstance(tree, (exp.Subquery, exp.SetOperation)):
+    while isinstance(tree, exp.Subquery | exp.SetOperation):
         tree = tree.this
     return tree if isinstance(tree, exp.Select) else None
 

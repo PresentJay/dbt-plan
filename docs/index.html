@@ -251,24 +251,27 @@
 
   <!-- Quick Start -->
   <section>
-    <h2>Get started in 2 minutes</h2>
+    <h2>See a result in 2 minutes</h2>
     <div class="steps">
       <div class="step">
         <div><span class="step-num">1</span><span class="step-title">Install</span></div>
         <div class="step-desc">One package, one dependency (sqlglot). Nothing else to configure.</div>
-        <pre>pip install dbt-plan</pre>
+        <pre>python -m pip install dbt-plan</pre>
       </div>
       <div class="step">
-        <div><span class="step-num">2</span><span class="step-title">Run</span></div>
-        <div class="step-desc">One command handles everything: compile baseline, compile current, check.</div>
+        <div><span class="step-num">2</span><span class="step-title">Try the sample</span></div>
+        <div class="step-desc">The committed before/after SQL needs no dbt installation or warehouse credentials.</div>
+        <pre>git clone --depth 1 https://github.com/PresentJay/dbt-plan
+cd dbt-plan
+bash examples/sample-project/run-example.sh</pre>
+      </div>
+      <div class="step">
+        <div><span class="step-num">3</span><span class="step-title">Use it in your project</span></div>
+        <div class="step-desc"><code>dbt-plan run</code> compiles twice and therefore uses the same credentials as your normal <code>dbt compile</code>.</div>
         <pre>dbt-plan run</pre>
       </div>
-      <div class="step">
-        <div><span class="step-num">3</span><span class="step-title">Add to CI</span></div>
-        <div class="step-desc">Generate a GitHub Actions workflow that blocks destructive PRs.</div>
-        <pre>dbt-plan ci-setup</pre>
-      </div>
     </div>
+    <p class="step-desc">Already have compiled artifacts? Run <code>dbt-plan check</code> directly. It reads local files and does not connect to a warehouse. <a href="ci-integration.html">Add it to CI</a> when you're ready.</p>
   </section>
 
   <!-- Output Example -->
