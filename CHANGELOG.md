@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.16.1] - 2026-09-15
+
+### Added
+
+- Add regression fixtures for PostgreSQL, BigQuery, Snowflake, DuckDB and Trino
+  projection syntax, covering the dialects users can select in compiled SQL.
+  (#201–#205, #211–#213, #233–#240)
+- Document warehouse-free reproduction, terminal output precedence, configuration
+  syntax, the stats report, Windows development and the first-run onboarding path.
+  (#206, #207, #214–#216, #241, #290)
+
+### Fixed
+
+- Parse inline unit-test CSV headers with Python's strict CSV parser instead of
+  splitting on commas. Malformed, blank and duplicate headers remain review-required
+  rather than being treated as reliable column evidence. (#227, #287)
+
 ## [0.16.0] - 2026-09-09
 
 ### Breaking
