@@ -62,3 +62,24 @@ def test_committed_showcase_matches_current_cli():
     page = (ROOT / "docs/index.html").read_text(encoding="utf-8")
     rendered = html.unescape(re.sub(r"<[^>]+>", "", page))
     assert expected.rstrip() in rendered
+
+
+def test_readme_puts_credential_free_first_run_before_dbt_run():
+    readme = (ROOT / "README.md").read_text(encoding="utf-8")
+    no_warehouse = readme.index("### See a result without a warehouse")
+    project = readme.index("### Use it with your dbt project")
+
+    assert no_warehouse < project
+    assert "bash examples/sample-project/run-example.sh" in readme
+    assert "does not connect to a warehouse" in readme
+    assert "needs whatever credentials your" in readme
+
+
+def test_landing_page_distinguishes_sample_and_project_paths():
+    page = (ROOT / "docs/index.html").read_text(encoding="utf-8")
+    rendered = html.unescape(re.sub(r"<[^>]+>", "", page))
+
+    assert "See a result in 2 minutes" in rendered
+    assert "bash examples/sample-project/run-example.sh" in rendered
+    assert "same credentials as your normal dbt compile" in rendered
+    assert "Add it to CI" in rendered
