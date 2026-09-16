@@ -137,6 +137,92 @@ class TestSourceDirsComeFromTheManifest:
         )
         assert load_manifest(manifest)["source_dirs"] == ("models",)
 
+    def test_backslash_separators_name_the_same_directory(self, tmp_path):
+        """dbt writes `original_file_path` with `\\` on Windows. The directory is
+        the first segment either way; `PurePosixPath` used to read the whole
+        ``"models\\a.sql"`` as one long name."""
+        manifest = tmp_path / "manifest.json"
+        manifest.write_text(
+            json.dumps(
+                {
+                    "metadata": {"project_name": "p"},
+                    "nodes": {
+                        "model.p.a": {"original_file_path": "models\\a.sql"},
+                        "test.p.t": {"original_file_path": "checks\\t.sql"},
+                    },
+                }
+            ),
+            encoding="utf-8",
+        )
+        assert set(load_manifest(manifest)["source_dirs"]) == {"models", "checks"}
+
+
+class TestProvenanceLineEndings:
+    """dbt embeds raw_code/macro_sql with the file's own `\\r\\n` on Windows, but
+    ``read_text()`` universal-newline translation returns `\\n`. Comparing the two
+    verbatim flagged every CRLF source as stale on Windows. The stored author text
+    is normalized so the comparisons read both sides the same way."""
+
+    def _manifest(self, project, raw_code: str | None, macro_sql: str | None = None) -> dict:
+        nodes = {}
+        if raw_code is not None:
+            nodes["model.p.a"] = {
+                "original_file_path": "models/a.sql",
+                "raw_code": raw_code,
+                "config": {},
+            }
+        macros = {}
+        if macro_sql is not None:
+            macros["macro.p.m"] = {
+                "original_file_path": "macros/m.sql",
+                "macro_sql": macro_sql,
+                "config": {},
+            }
+        manifest = project / "target" / "manifest.json"
+        manifest.parent.mkdir(parents=True)
+        manifest.write_text(
+            json.dumps({"metadata": {"project_name": "p"}, "nodes": nodes, "macros": macros}),
+            encoding="utf-8",
+        )
+        return load_manifest(manifest)
+
+    def test_a_crlf_source_file_matches_its_manifest(self, tmp_path):
+        from dbt_plan.cli import _provenance_problems
+        from dbt_plan.manifest import build_node_index
+
+        project = tmp_path / "proj"
+        (project / "models").mkdir(parents=True)
+        (project / "dbt_project.yml").write_text("name: p\n", encoding="utf-8")
+        (project / "models" / "a.sql").write_bytes(b"select 1\r\n")
+        manifest_path = project / "target" / "manifest.json"
+        manifest = self._manifest(project, "select 1\r\n")
+        problems = _provenance_problems(
+            project,
+            manifest_path,
+            manifest,
+            {},
+            build_node_index(manifest),
+            {},
+            {"a"},
+        )
+        assert problems == []
+
+    def test_crlf_macro_blocks_are_contained_in_the_file(self, tmp_path):
+        from dbt_plan.cli import _provenance_problems
+
+        project = tmp_path / "proj"
+        (project / "macros").mkdir(parents=True)
+        (project / "dbt_project.yml").write_text("name: p\n", encoding="utf-8")
+        (project / "macros" / "m.sql").write_bytes(
+            b"{% macro m() %}\nselect 1\n{% endmacro %}\r\n"
+        )
+        manifest_path = project / "target" / "manifest.json"
+        manifest = self._manifest(
+            project, None, macro_sql="{% macro m() %}\r\nselect 1\r\n{% endmacro %}\r\n"
+        )
+        problems = _provenance_problems(project, manifest_path, manifest, {}, {}, {}, set())
+        assert problems == []
+
 
 class TestItSurvivesToTheOutput:
     """An empty diff is exactly what a failed compile produces, so this has to
