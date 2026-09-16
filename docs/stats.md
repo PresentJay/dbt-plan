@@ -40,6 +40,32 @@ the checked-in fixture. The command is implemented in `_do_stats` in
 builds, so package models and disabled models are left out of every figure the
 same way.
 
+## JSON output
+
+Use `--format json` when another tool needs to consume the counts:
+
+```bash
+uv run --no-sync dbt-plan stats --project-dir tests/dbt_project --format json | jq .summary
+```
+
+The JSON document follows the same top-level `summary` convention as
+`check --format json`:
+
+- `summary.total` and `summary.materializations` count the indexed models.
+- `summary.on_schema_change` counts explicit policies on incremental models.
+- `summary.select_star` contains `used`, `compiled`, `percentage`, and
+  `resolved_through_ref_or_cte`.
+- `summary.columns_readable` contains `readable`, `compiled`, and `unreadable`.
+- `summary.cascade_risk` and `summary.ddl_rules` expose the remaining readiness
+  counts.
+- `details` contains manifest-column fallback counts and materialization/policy
+  combinations without a DDL rule.
+
+When no compiled SQL directory is available, the manifest-derived fields remain
+available and `summary.select_star` and `summary.columns_readable` are `null`.
+This distinguishes “not measured” from zero compiled models. Text remains the
+default output.
+
 ## What the counts mean
 
 ### Materializations
