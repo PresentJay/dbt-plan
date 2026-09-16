@@ -83,6 +83,19 @@ class TestRealManifestLoading:
         assert "model.test_project.dim_books" in model_nodes
         assert "model.test_project.fct_orders" in model_nodes
 
+    def test_model_nodes_keep_unrendered_config(self, real_manifest):
+        """The generated fixture preserves the authored-config signal we rely on."""
+        model_nodes = {
+            key: node
+            for key, node in real_manifest["nodes"].items()
+            if key.startswith("model.")
+        }
+
+        assert all(isinstance(node.get("unrendered_config"), dict) for node in model_nodes.values())
+        assert model_nodes["model.test_project.fct_orders"]["unrendered_config"][
+            "on_schema_change"
+        ] == "sync_all_columns"
+
     def test_materializations(self, real_manifest):
         """Models have expected materializations."""
         nodes = real_manifest["nodes"]
