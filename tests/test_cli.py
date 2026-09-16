@@ -963,7 +963,7 @@ class TestInit:
 
 
 class TestStats:
-    def _make_stats_args(self, project_dir, manifest=None, dialect=None):
+    def _make_stats_args(self, project_dir, manifest=None, dialect=None, fmt=None):
         import argparse
 
         return argparse.Namespace(
@@ -971,6 +971,7 @@ class TestStats:
             target_dir="target",
             manifest=manifest,
             dialect=dialect,
+            format=fmt,
         )
 
     def test_stats_counts_materializations(self, tmp_path, capsys):
@@ -1021,6 +1022,82 @@ class TestStats:
         output = capsys.readouterr().out
         assert "Cascade risk" in output
         assert "1 incremental model(s)" in output
+
+    def test_stats_json_contains_counts(self, tmp_path, capsys):
+        """stats --format json exposes the same readiness counts as text."""
+        project_dir = _make_project(
+            tmp_path,
+            models_sql={
+                "m1": "SELECT a FROM t",
+                "m2": "SELECT * FROM t",
+            },
+            manifest={
+                "nodes": {
+                    "model.p.m1": {
+                        "name": "m1",
+                        "config": {"materialized": "table"},
+                    },
+                    "model.p.m2": {
+                        "name": "m2",
+                        "config": {"materialized": "incremental", "on_schema_change": "fail"},
+                    },
+                    "model.p.m3": {
+                        "name": "m3",
+                        "config": {"materialized": "view"},
+                    },
+                },
+                "child_map": {},
+            },
+        )
+        from dbt_plan.cli import _do_stats
+
+        _do_stats(self._make_stats_args(project_dir, fmt="json"))
+        data = json.loads(capsys.readouterr().out)
+
+        assert data["summary"] == {
+            "total": 3,
+            "materializations": {"incremental": 1, "table": 1, "view": 1},
+            "on_schema_change": {"fail": 1},
+            "select_star": {
+                "used": 1,
+                "compiled": 2,
+                "percentage": 50,
+                "resolved_through_ref_or_cte": 0,
+            },
+            "columns_readable": {"readable": 1, "compiled": 2, "unreadable": 1},
+            "cascade_risk": 1,
+            "ddl_rules": {"matched": 3, "total": 3},
+        }
+        assert data["details"] == {
+            "unreadable_with_docs": 0,
+            "unreadable_without_docs": 1,
+            "no_rule": {},
+        }
+
+    def test_stats_json_marks_compiled_counts_unavailable(self, tmp_path, capsys):
+        """stats JSON does not turn a manifest-only project into zero coverage."""
+        project_dir = tmp_path / "project"
+        project_dir.mkdir()
+        target = project_dir / "target"
+        target.mkdir()
+        (target / "manifest.json").write_text(
+            json.dumps(
+                {
+                    "nodes": {
+                        "model.p.m": {"name": "m", "config": {"materialized": "view"}},
+                    },
+                    "child_map": {},
+                }
+            )
+        )
+        from dbt_plan.cli import _do_stats
+
+        _do_stats(self._make_stats_args(project_dir, fmt="json"))
+        data = json.loads(capsys.readouterr().out)
+
+        assert data["summary"]["total"] == 1
+        assert data["summary"]["select_star"] is None
+        assert data["summary"]["columns_readable"] is None
 
     def test_stats_missing_manifest_exits_3(self, tmp_path):
         """stats exits 3 when manifest.json is missing."""

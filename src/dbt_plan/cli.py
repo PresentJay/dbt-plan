@@ -590,6 +590,44 @@ def _do_stats(args: argparse.Namespace) -> None:
                 if node is not None and node.columns:
                     unreadable_with_docs += 1
 
+    # Cascade risk: reuse already-computed counter instead of re-scanning manifest
+    fail_chains = incremental_osc.get("fail", 0)
+
+    compiled_stats = None
+    if sql_count:
+        compiled_stats = {
+            "select_star": {
+                "used": star_written,
+                "compiled": sql_count,
+                "percentage": star_written * 100 // sql_count,
+                "resolved_through_ref_or_cte": star_written - min(star_written, unreadable),
+            },
+            "columns_readable": {
+                "readable": sql_count - unreadable,
+                "compiled": sql_count,
+                "unreadable": unreadable,
+            },
+        }
+
+    with_rule = total - sum(no_rule.values())
+    if getattr(args, "format", None) == "json":
+        details = {
+            "unreadable_with_docs": unreadable_with_docs if sql_count else None,
+            "unreadable_without_docs": (unreadable - unreadable_with_docs if sql_count else None),
+            "no_rule": dict(sorted(no_rule.items())),
+        }
+        summary = {
+            "total": total,
+            "materializations": dict(sorted(mat_counts.items())),
+            "on_schema_change": dict(sorted(incremental_osc.items())),
+            "select_star": compiled_stats["select_star"] if compiled_stats else None,
+            "columns_readable": (compiled_stats["columns_readable"] if compiled_stats else None),
+            "cascade_risk": fail_chains,
+            "ddl_rules": {"matched": with_rule, "total": total},
+        }
+        print(json.dumps({"summary": summary, "details": details}, indent=2))
+        return
+
     # Output
     print(f"dbt-plan stats -- {total} model(s) in manifest\n")
     print("Materializations:")
@@ -619,13 +657,10 @@ def _do_stats(args: argparse.Namespace) -> None:
             if remaining:
                 print(f"    no fallback for {remaining} (add column docs to resolve)")
 
-    # Cascade risk: reuse already-computed counter instead of re-scanning manifest
-    fail_chains = incremental_osc.get("fail", 0)
     if fail_chains:
         print(f"\nCascade risk: {fail_chains} incremental model(s) with on_schema_change=fail")
         print("  These will break if upstream schema changes")
 
-    with_rule = total - sum(no_rule.values())
     print(f"\nDDL rules: {with_rule}/{total} model(s)")
     if no_rule:
         print("  no rule, always review required:")
@@ -2436,6 +2471,12 @@ def _main() -> None:
         "--manifest",
         default=None,
         help="Path to manifest.json (default: {target-dir}/manifest.json)",
+    )
+    stats_cmd.add_argument(
+        "--format",
+        choices=["text", "json"],
+        default="text",
+        help="Output format: text (terminal), json (programmatic)",
     )
     stats_cmd.add_argument(
         "--dialect",
