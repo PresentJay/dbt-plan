@@ -668,24 +668,52 @@ def _do_stats(args: argparse.Namespace) -> None:
             print(f"    {label:38s} {count:>4}")
 
 
+def _ambiguous_acknowledgement_names(*manifests: dict) -> set[str]:
+    """Retain collisions lost by name-keyed indexes, including other resource kinds.
+
+    The same unique ID in both revisions is one resource. Distinct package,
+    version, test or exposure IDs sharing a spelling must never share a waiver.
+    """
+    from dbt_plan.manifest import model_key
+
+    identities: dict[str, set[str]] = {}
+    for manifest in manifests:
+        for section in ("nodes", "unit_tests", "exposures"):
+            for node_id, node in (manifest.get(section) or {}).items():
+                if (node.get("config") or {}).get("enabled") is False:
+                    continue
+                if node_id.startswith("model."):
+                    names = {model_key(node_id)}
+                    if node.get("path"):
+                        names.add(Path(node["path"]).stem)
+                else:
+                    names = {node.get("name")}
+                for name in names:
+                    if name:
+                        identities.setdefault(name, set()).add(node_id)
+    return {name for name, ids in identities.items() if len(ids) > 1}
+
+
 def _exit_code_for(result: CheckResult, warning_exit_code: int) -> int:
     """Map a check result to a process exit code.
 
-    Acknowledged models are reported but excluded from the verdict -- that is
-    the entire point of acknowledging one. Everything else still counts, so
-    acknowledging one model never excuses another model's risk, an unrelated
-    warning, or a parse failure.
+    Waive known findings only on the named affected resource. Raw aggregate
+    severities remain intact for reports and MCP consumers.
     """
-    from dbt_plan.predictor import Safety
+    from dbt_plan.predictor import RISK_SAFETY, Safety
 
+    active = []
     for pred in result.predictions:
-        if result.is_acknowledged(pred):
-            continue
-        if pred.safety == Safety.DESTRUCTIVE:
-            return 1
-    if any(
-        p.safety == Safety.WARNING and not result.is_acknowledged(p) for p in result.predictions
-    ):
+        if not result.own_waived(pred):
+            active.append(pred.own_verdict)
+        active.extend(
+            RISK_SAFETY.get(impact.risk, Safety.WARNING)
+            for impact in pred.downstream_impacts
+            if not result.impact_waived(impact)
+        )
+    if Safety.DESTRUCTIVE in active:
+        return 1
+    if Safety.WARNING in active:
         return warning_exit_code
     if result.parse_failures:
         return warning_exit_code
@@ -1739,6 +1767,7 @@ def _do_check(args: argparse.Namespace) -> int:
                         dependent.on_schema_change,
                         risk="contract_violation",
                         reason="; ".join(op.operation for op in contract.operations),
+                        waiver_allowed=contract.known_operations,
                     )
                 )
         if len(impacts) != len(prediction.downstream_impacts):
@@ -1775,6 +1804,7 @@ def _do_check(args: argparse.Namespace) -> int:
         acknowledge_models=config.acknowledge_models,
         baseline_problem=baseline_problem,
         analysis=analysis,
+        ambiguous_resources=_ambiguous_acknowledgement_names(manifest, base_manifest or {}),
     )
     if fmt == "json":
         print(format_json(check_result))

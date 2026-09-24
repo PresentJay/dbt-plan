@@ -39,6 +39,7 @@ class DownstreamImpact:
     on_schema_change: str | None
     risk: str  # a key of RISK_SAFETY
     reason: str  # human-readable explanation
+    waiver_allowed: bool = True
 
 
 # What each cascade risk is worth on its own. The formatter colours by this and
@@ -78,6 +79,40 @@ class DDLPrediction:
     downstream_impacts: list[DownstreamImpact] = field(default_factory=list)
     # Not a finding of its own -- see attach_downstream_exposures.
     downstream_exposures: list = field(default_factory=list)
+    # Captured before cascade escalation; None means no separate aggregate exists.
+    own_safety: Safety | None = None
+
+    @property
+    def own_verdict(self) -> Safety:
+        return self.own_safety if self.own_safety is not None else self.safety
+
+    @property
+    def known_operations(self) -> bool:
+        """Only understood findings can be waived; future operations fail closed."""
+        if not self.operations:
+            return self.own_verdict == Safety.SAFE
+        known = {
+            "MODEL REMOVED",
+            "CREATE OR REPLACE TABLE",
+            "CREATE OR REPLACE VIEW",
+            "NO DDL",
+            "ADD COLUMN",
+            "DROP COLUMN",
+            "BUILD FAILURE",
+            "STALE COLUMNS (not populated)",
+            "BUILD FAILURE RISK: removed columns remain in the target under on_schema_change=ignore",
+            "REVIEW REQUIRED: added columns are not written to the target under on_schema_change=ignore; downstream readers may fail",
+        }
+        known_prefixes = (
+            "CONTRACT VIOLATION:",
+            "MATERIALIZATION CHANGED:",
+            "on_schema_change CHANGED:",
+            "RELATION CHANGED (",
+        )
+        return all(
+            op.operation in known or op.operation.startswith(known_prefixes)
+            for op in self.operations
+        )
 
 
 def _column_diff(
@@ -535,6 +570,7 @@ def _inherited_impact(
             on_schema_change=ds_node.on_schema_change,
             risk="inherited_drop" if ds_pred.safety == Safety.DESTRUCTIVE else "inherited_change",
             reason=f"file unchanged, {detail} -- {operations or ds_pred.safety.value}",
+            waiver_allowed=ds_pred.known_operations,
         ),
         lost,
     )
@@ -712,7 +748,7 @@ def analyze_cascade_impacts(
     unit_test_index = unit_test_index or {}
     data_test_index = data_test_index or {}
     test_sql_index = test_sql_index or {}
-    updated = list(predictions)
+    updated = [replace(pred, own_safety=pred.own_verdict) for pred in predictions]
     downstream_map: dict[str, list[str]] = {}
 
     for i, pred in enumerate(updated):
