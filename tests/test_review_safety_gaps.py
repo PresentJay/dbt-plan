@@ -184,6 +184,30 @@ def test_new_incremental_ignore_is_still_safe():
 )
 def test_mcp_verdict_describes_findings_even_when_exit_zero(report, expected):
     server = pytest.importorskip("dbt_plan_mcp.server")
+    for key in (
+        "parse_failures",
+        "skipped_models",
+        "uncompiled_models",
+        "stale_sources",
+        "models",
+    ):
+        report.setdefault(key, [])
+    for model in report["models"]:
+        model.update(
+            materialization="table",
+            on_schema_change=None,
+            operations=[],
+            columns_added=[],
+            columns_removed=[],
+        )
+        model.setdefault("acknowledged", False)
+    report["summary"] = {
+        "total": len(report["models"]),
+        **{
+            safety: sum(m["safety"] == safety for m in report["models"])
+            for safety in ("safe", "warning", "destructive")
+        },
+    }
     with patch.object(
         server, "_run_cli", return_value=subprocess.CompletedProcess([], 0, json.dumps(report), "")
     ):

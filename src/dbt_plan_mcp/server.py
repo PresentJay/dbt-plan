@@ -28,6 +28,8 @@ from typing import Any
 
 from mcp.server.mcpserver import MCPServer
 
+from dbt_plan_mcp.report_validation import ReportValidationError, validate_report
+
 server = MCPServer(
     name="dbt-plan",
     instructions=(
@@ -97,11 +99,11 @@ def plan(
 
     # Exit 2 means two different things: "I could not decide" and "I could not run".
     # The CLI returns it for a review-required verdict and for a missing baseline
-    # alike, so the exit code alone cannot tell them apart. A parseable report can:
-    # dbt-plan only emits one when it actually analysed something.
+    # alike, so the exit code alone cannot tell them apart. Require a complete,
+    # consistent report before interpreting the exit policy.
     try:
         report = json.loads(result.stdout)
-    except json.JSONDecodeError:
+    except (ValueError, RecursionError):
         return {
             "verdict": "error",
             "error": result.stderr.strip() or "dbt-plan produced no report",
@@ -110,6 +112,11 @@ def plan(
                 "Call `snapshot` on the revision you are changing from, then compile."
             ),
         }
+
+    try:
+        report = validate_report(report)
+    except ReportValidationError as exc:
+        return {"verdict": "error", "error": f"Invalid dbt-plan report: {exc}"}
 
     if result.returncode not in _VERDICTS:
         return {
@@ -121,16 +128,16 @@ def plan(
     # folded into it. An empty list here is the only thing that makes "safe" mean safe.
     refusals: list[dict[str, Any]] = []
     for kind, names in (
-        ("columns_unreadable", report.get("parse_failures") or []),
-        ("missing_from_manifest", report.get("skipped_models") or []),
-        ("never_compiled", report.get("uncompiled_models") or []),
-        ("stale_sources", report.get("stale_sources") or []),
+        ("columns_unreadable", report["parse_failures"]),
+        ("missing_from_manifest", report["skipped_models"]),
+        ("never_compiled", report["uncompiled_models"]),
+        ("stale_sources", report["stale_sources"]),
     ):
         if names:
             refusals.append({"reason": kind, "models": names})
-    for model in report.get("models") or []:
-        for op in model.get("operations") or []:
-            if "REVIEW REQUIRED" in op.get("operation", ""):
+    for model in report["models"]:
+        for op in model["operations"]:
+            if "REVIEW REQUIRED" in op["operation"]:
                 refusals.append(
                     {
                         "reason": "not_decidable",
@@ -139,14 +146,14 @@ def plan(
                     }
                 )
 
-    for model in report.get("models") or []:
-        for impact in model.get("downstream_impacts") or []:
-            if impact.get("risk") in {"unit_test_unreadable", "data_test_unreadable"}:
+    for model in report["models"]:
+        for impact in model.get("downstream_impacts", []):
+            if impact["risk"] in {"unit_test_unreadable", "data_test_unreadable"}:
                 refusals.append(
                     {
                         "reason": impact["risk"],
                         "models": [impact["model_name"]],
-                        "detail": impact.get("reason", ""),
+                        "detail": impact["reason"],
                     }
                 )
 
@@ -157,7 +164,14 @@ def plan(
 
     verdict = _VERDICTS[result.returncode]
     # A waiver changes the exit policy, not what the analysis found.
-    findings = {model.get("safety") for model in report.get("models") or []}
+    findings = {model["safety"] for model in report["models"]}
+    # Read raw cascade findings too: an inconsistent parent severity must not
+    # hide a destructive child. New risk strings retain review-level uncertainty.
+    for model in report["models"]:
+        for impact in model.get("downstream_impacts", []):
+            findings.add(
+                "destructive" if impact["risk"] in {"broken_ref", "inherited_drop"} else "warning"
+            )
     if "destructive" in findings:
         verdict = "destructive"
     elif "warning" in findings and verdict == "safe":
@@ -170,8 +184,8 @@ def plan(
     return {
         "verdict": verdict,
         "exit_code": result.returncode,
-        "summary": report.get("summary", {}),
-        "models": report.get("models", []),
+        "summary": report["summary"],
+        "models": report["models"],
         "refusals": refusals,
     }
 

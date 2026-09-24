@@ -79,6 +79,8 @@ class TestVerdicts:
         out = mcp_server.plan(str(tmp_path), dialect="duckdb")
 
         assert out["verdict"] == "safe"
+        assert out["summary"] == {"total": 0, "safe": 0, "warning": 0, "destructive": 0}
+        assert out["models"] == []
         assert out["refusals"] == [], "safe must mean nothing was left unjudged"
 
 
@@ -112,8 +114,9 @@ class TestRefusalsSurvive:
             "parse_failures": ["fct_orders"],
             "skipped_models": [],
             "uncompiled_models": [],
+            "stale_sources": [],
             "models": [],
-            "summary": {},
+            "summary": {"total": 0, "safe": 0, "warning": 0, "destructive": 0},
         }
         result = type(
             "Result",
