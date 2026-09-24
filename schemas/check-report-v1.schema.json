@@ -1,0 +1,109 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "dbt-plan check report v1",
+  "description": "Structural contract, not a safety verdict. Unknown safety and risk strings require review. All objects accept additive fields.",
+  "type": "object",
+  "required": ["summary", "models", "parse_failures", "stale_sources", "skipped_models", "uncompiled_models"],
+  "additionalProperties": true,
+  "properties": {
+    "summary": {"$ref": "#/$defs/summary"},
+    "models": {"type": "array", "items": {"$ref": "#/$defs/model"}},
+    "parse_failures": {"$ref": "#/$defs/strings"},
+    "stale_sources": {"$ref": "#/$defs/strings"},
+    "skipped_models": {"$ref": "#/$defs/strings"},
+    "uncompiled_models": {"$ref": "#/$defs/strings"},
+    "baseline_problem": {"type": "string"},
+    "analysis": {"$ref": "#/$defs/analysis"}
+  },
+  "$defs": {
+    "strings": {"type": "array", "items": {"type": "string"}},
+    "nullableString": {"type": ["string", "null"]},
+    "count": {"type": "integer", "minimum": 0},
+    "summary": {
+      "type": "object",
+      "required": ["total", "safe", "warning", "destructive"],
+      "additionalProperties": true,
+      "properties": {
+        "total": {"$ref": "#/$defs/count"},
+        "safe": {"$ref": "#/$defs/count"},
+        "warning": {"$ref": "#/$defs/count"},
+        "destructive": {"$ref": "#/$defs/count"},
+        "acknowledged": {"$ref": "#/$defs/count"},
+        "cascade_risks": {"$ref": "#/$defs/count"}
+      }
+    },
+    "model": {
+      "type": "object",
+      "required": ["model_name", "materialization", "on_schema_change", "safety", "operations", "columns_added", "columns_removed", "acknowledged"],
+      "additionalProperties": true,
+      "properties": {
+        "model_name": {"type": "string"},
+        "materialization": {"type": "string"},
+        "on_schema_change": {"$ref": "#/$defs/nullableString"},
+        "safety": {
+          "type": "string",
+          "description": "Known values: safe, warning, destructive. Unknown strings require review; never interpret them as safe."
+        },
+        "operations": {"type": "array", "items": {"$ref": "#/$defs/operation"}},
+        "columns_added": {"$ref": "#/$defs/strings"},
+        "columns_removed": {"$ref": "#/$defs/strings"},
+        "acknowledged": {"type": "boolean"},
+        "downstream": {"$ref": "#/$defs/strings"},
+        "downstream_impacts": {"type": "array", "items": {"$ref": "#/$defs/impact"}},
+        "downstream_exposures": {"type": "array", "items": {"$ref": "#/$defs/exposure"}}
+      }
+    },
+    "operation": {
+      "type": "object",
+      "required": ["operation", "column"],
+      "additionalProperties": true,
+      "properties": {
+        "operation": {"type": "string"},
+        "column": {"$ref": "#/$defs/nullableString"}
+      }
+    },
+    "impact": {
+      "type": "object",
+      "required": ["model_name", "risk", "reason"],
+      "additionalProperties": true,
+      "properties": {
+        "model_name": {"type": "string"},
+        "risk": {"type": "string", "description": "Open vocabulary. Unknown risks require review."},
+        "reason": {"type": "string"}
+      }
+    },
+    "exposure": {
+      "type": "object",
+      "required": ["name", "type", "owner", "url"],
+      "additionalProperties": true,
+      "properties": {
+        "name": {"type": "string"},
+        "type": {"type": "string"},
+        "owner": {"type": "string"},
+        "url": {"type": "string"}
+      }
+    },
+    "analysis": {
+      "type": "object",
+      "description": "Optional provenance metadata; individual fields are optional for legacy and additive report compatibility.",
+      "additionalProperties": true,
+      "properties": {
+        "dialect": {"type": "string"},
+        "adapter_type": {"$ref": "#/$defs/nullableString"},
+        "dialect_source": {"type": "string"},
+        "baseline": {"$ref": "#/$defs/baseline"},
+        "selection": {"$ref": "#/$defs/nullableString"},
+        "unsupported_languages": {"$ref": "#/$defs/strings"}
+      }
+    },
+    "baseline": {
+      "type": "object",
+      "additionalProperties": true,
+      "properties": {
+        "revision": {"$ref": "#/$defs/nullableString"},
+        "created_at": {"$ref": "#/$defs/nullableString"},
+        "dbt_plan_version": {"type": "string"}
+      }
+    }
+  }
+}
