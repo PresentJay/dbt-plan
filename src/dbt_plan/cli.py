@@ -1773,6 +1773,7 @@ def _do_check(args: argparse.Namespace) -> int:
         if len(impacts) != len(prediction.downstream_impacts):
             predictions[pos] = _replace(
                 prediction,
+                own_safety=prediction.own_verdict,
                 downstream_impacts=impacts,
                 safety=prediction.safety
                 if prediction.safety == Safety.DESTRUCTIVE

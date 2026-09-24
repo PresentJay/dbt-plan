@@ -450,3 +450,35 @@ def test_action_gate_uses_resource_policy(risk, names, fail_on):
         fail_on == "warning" or (fail_on == "destructive" and risk == "inherited_drop")
     )
     assert proc.returncode == int(blocked), proc.stdout + proc.stderr
+
+
+def test_contract_only_cascade_preserves_own_safety(tmp_path):
+    from tests.test_cli import _make_project
+    from tests.test_error_contract import invoke
+
+    manifest = {
+        "metadata": {"project_name": "p"},
+        "nodes": {
+            "model.p.up": {"name": "up", "config": {"materialized": "view"}},
+            "model.p.down": {
+                "name": "down",
+                "config": {"materialized": "table", "contract": {"enforced": True}},
+                "columns": {"id": {}, "amount": {}},
+                "depends_on": {"nodes": ["model.p.up"]},
+            },
+        },
+        "child_map": {"model.p.up": ["model.p.down"]},
+    }
+    project = _make_project(
+        tmp_path,
+        manifest=manifest,
+        base_manifest=manifest,
+        base_sql={"up": "SELECT 1 AS id, 2 AS amount", "down": "SELECT * FROM up"},
+        models_sql={"up": "SELECT 1 AS id", "down": "SELECT * FROM up"},
+    )
+    result = invoke(project, "check", "--format", "json", "--acknowledge", "down")
+    assert result.returncode == 0, result.stdout + result.stderr
+    model = json.loads(result.stdout)["models"][0]
+    assert model["own_safety"] == "safe"
+    assert model["safety"] == "warning"
+    assert model["downstream_impacts"][0]["risk"] == "contract_violation"

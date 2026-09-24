@@ -748,7 +748,7 @@ def analyze_cascade_impacts(
     unit_test_index = unit_test_index or {}
     data_test_index = data_test_index or {}
     test_sql_index = test_sql_index or {}
-    updated = [replace(pred, own_safety=pred.own_verdict) for pred in predictions]
+    updated = list(predictions)
     downstream_map: dict[str, list[str]] = {}
 
     for i, pred in enumerate(updated):
@@ -915,7 +915,12 @@ def analyze_cascade_impacts(
             cascade_safety = worst_safety(
                 [pred.safety, *(RISK_SAFETY.get(imp.risk, Safety.WARNING) for imp in impacts)]
             )
-            updated[i] = replace(pred, safety=cascade_safety, downstream_impacts=impacts)
+            updated[i] = replace(
+                pred,
+                own_safety=pred.own_verdict,
+                safety=cascade_safety,
+                downstream_impacts=impacts,
+            )
 
     return updated, downstream_map
 
