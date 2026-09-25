@@ -7,6 +7,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.17.0] - 2026-09-25
+
+### Breaking
+
+- Scope acknowledgements to each affected resource. Acknowledging an upstream
+  model no longer waives an unacknowledged downstream risk. Existing CI can now
+  exit 1 or 2; review each affected model before acknowledging it. Raw JSON and
+  MCP risk classifications remain visible. See [migration instructions](docs/exit-codes.md#0170-acknowledge-each-affected-resource). (#296)
+
+### Added
+
+- Add `dbt-plan stats --format json` for machine-readable project statistics. (#292)
+- Publish an executable Draft 2020-12 JSON Schema for check reports, with real CLI
+  regression coverage and additive-field compatibility. Schema validity alone
+  does not establish safety. See [report schema](docs/report-schema.md). (#295)
+
+### Fixed
+
+- Stage snapshot publication and restore the previous baseline after recoverable
+  failures. If restoration fails, preserve the backup and report its recovery
+  path. This is not a concurrent-writer or power-loss guarantee. (#293)
+- Reject malformed, incomplete and inconsistent CLI reports before MCP can
+  report safety; retain review/destructive classifications for downstream risks. (#294)
+
 ## [0.16.1] - 2026-09-15
 
 ### Added
