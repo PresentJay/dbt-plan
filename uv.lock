@@ -624,6 +624,7 @@ dbt = [
     { name = "dbt-duckdb" },
 ]
 dev = [
+    { name = "jsonschema" },
     { name = "pytest" },
     { name = "pytest-cov" },
     { name = "ruff" },
@@ -632,6 +633,7 @@ mcp = [
     { name = "mcp" },
 ]
 test = [
+    { name = "jsonschema" },
     { name = "pytest" },
     { name = "pytest-cov" },
 ]
@@ -640,6 +642,8 @@ test = [
 requires-dist = [
     { name = "dbt-core", marker = "extra == 'dbt'", specifier = ">=1.7.0" },
     { name = "dbt-duckdb", marker = "extra == 'dbt'", specifier = ">=1.7.0" },
+    { name = "jsonschema", marker = "extra == 'dev'", specifier = ">=4.18.0" },
+    { name = "jsonschema", marker = "extra == 'test'", specifier = ">=4.18.0" },
     { name = "mcp", marker = "extra == 'mcp'", specifier = ">=2.0.0" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.0.0" },
     { name = "pytest", marker = "extra == 'test'", specifier = ">=8.0.0" },

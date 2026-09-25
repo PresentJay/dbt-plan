@@ -28,8 +28,8 @@ dbt-plan = "dbt_plan.cli:main"
 dbt-plan-mcp = "dbt_plan_mcp.server:main"
 
 [project.optional-dependencies]
-test = ["pytest>=8.0.0", "pytest-cov>=6.0.0"]
-dev = ["pytest>=8.0.0", "pytest-cov>=6.0.0", "ruff>=0.8.0"]
+test = ["pytest>=8.0.0", "pytest-cov>=6.0.0", "jsonschema>=4.18.0"]
+dev = ["pytest>=8.0.0", "pytest-cov>=6.0.0", "ruff>=0.8.0", "jsonschema>=4.18.0"]
 dbt = ["dbt-core>=1.7.0", "dbt-duckdb>=1.7.0"]
 # The MCP server lives outside src/dbt_plan/ on purpose: it is async and speaks a
 # protocol, and tests/test_invariants.py forbids asyncio and network imports in the
