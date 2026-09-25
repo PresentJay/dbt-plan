@@ -114,9 +114,41 @@ class CheckResult:
     baseline_problem: str | None = None
 
     analysis: dict = field(default_factory=dict)
+    # Names resolving to more than one manifest resource cannot authorize a waiver.
+    ambiguous_resources: set[str] = field(default_factory=set)
 
     def is_acknowledged(self, pred: DDLPrediction) -> bool:
         return pred.model_name in self.acknowledge_models
+
+    def own_waived(self, pred: DDLPrediction) -> bool:
+        return (
+            self.is_acknowledged(pred)
+            and pred.model_name not in self.ambiguous_resources
+            and pred.known_operations
+        )
+
+    def impact_waiver_reason(self, impact) -> str:
+        if impact.model_name in self.ambiguous_resources:
+            return "active: resource name is ambiguous; cannot acknowledge unambiguously"
+        if (
+            impact.risk not in RISK_SAFETY
+            or impact.risk in {"data_test_unreadable", "unit_test_unreadable"}
+            or not impact.waiver_allowed
+        ):
+            return "active: uncertainty cannot be acknowledged"
+        if impact.model_name not in self.acknowledge_models:
+            return "active: affected resource not acknowledged"
+        return "waived: affected resource explicitly acknowledged"
+
+    def impact_waived(self, impact) -> bool:
+        return self.impact_waiver_reason(impact).startswith("waived:")
+
+    def acknowledgement_label(self, pred: DDLPrediction) -> str:
+        if not self.is_acknowledged(pred):
+            return ""
+        if self.own_waived(pred):
+            return "[ACKNOWLEDGED: own findings only]"
+        return "[ACKNOWLEDGEMENT NOT APPLIED: uncertain finding or ambiguous resource]"
 
 
 _BASELINE_PROBLEMS: dict[str, str] = {
@@ -198,7 +230,7 @@ def format_text(result: CheckResult, *, color: bool | None = None) -> str:
         if pred.on_schema_change:
             mat_info += f", {pred.on_schema_change}"
         label = _colored(pred.safety.value.upper(), pred.safety)
-        ack = "  [ACKNOWLEDGED]" if result.is_acknowledged(pred) else ""
+        ack = "  " + result.acknowledgement_label(pred) if result.is_acknowledged(pred) else ""
         lines.append(f"{label}  {pred.model_name} ({mat_info}){ack}")
         for op in pred.operations:
             if op.column:
@@ -214,7 +246,12 @@ def format_text(result: CheckResult, *, color: bool | None = None) -> str:
             risk_label = _colored(
                 impact.risk.upper(), RISK_SAFETY.get(impact.risk, Safety.WARNING)
             )
-            lines.append(f"  >> {risk_label}  {display_name}: {impact.reason}")
+            waiver = (
+                f" [{result.impact_waiver_reason(impact).upper()}]"
+                if result.acknowledge_models
+                else ""
+            )
+            lines.append(f"  >> {risk_label}  {display_name}: {impact.reason}{waiver}")
         if held_back:
             lines.append(f"  >> ... and {held_back} more -- use --format json for all of them")
         for exposure in pred.downstream_exposures:
@@ -296,7 +333,11 @@ def format_github(result: CheckResult) -> str:
         mat_info = pred.materialization
         if pred.on_schema_change:
             mat_info += f", {pred.on_schema_change}"
-        ack = " **[ACKNOWLEDGED]**" if result.is_acknowledged(pred) else ""
+        ack = (
+            " **" + result.acknowledgement_label(pred) + "**"
+            if result.is_acknowledged(pred)
+            else ""
+        )
         lines.append(
             f"{icon} **{pred.safety.value.upper()}** `{pred.model_name}` ({mat_info}){ack}"
         )
@@ -311,8 +352,14 @@ def format_github(result: CheckResult) -> str:
         shown, held_back = _impacts_to_show(pred.downstream_impacts)
         for impact, display_name in zip(shown, _display_impact_names(shown), strict=True):
             risk_icon = _SAFETY_ICON[RISK_SAFETY.get(impact.risk, Safety.WARNING)]
+            waiver = (
+                f" [{result.impact_waiver_reason(impact).upper()}]"
+                if result.acknowledge_models
+                else ""
+            )
             lines.append(
                 f"- {risk_icon} **{impact.risk.upper()}** `{display_name}`: {impact.reason}"
+                f"{waiver}"
             )
         if held_back:
             lines.append(f"- ... and {held_back} more -- use `--format json` for all of them")
@@ -375,6 +422,8 @@ def format_json(result: CheckResult) -> str:
             "columns_added": pred.columns_added,
             "columns_removed": pred.columns_removed,
             "acknowledged": result.is_acknowledged(pred),
+            "own_safety": pred.own_verdict.value,
+            "own_waived": result.own_waived(pred),
         }
         downstream = result.downstream_map.get(pred.model_name, [])
         if downstream:
@@ -395,6 +444,14 @@ def format_json(result: CheckResult) -> str:
                     "model_name": imp.model_name,
                     "risk": imp.risk,
                     "reason": imp.reason,
+                    **(
+                        {
+                            "waived": result.impact_waived(imp),
+                            "waiver_reason": result.impact_waiver_reason(imp),
+                        }
+                        if result.acknowledge_models
+                        else {}
+                    ),
                 }
                 for imp in pred.downstream_impacts
             ]

@@ -28,7 +28,7 @@ completed report when the process failed, even if it wrote partial output first.
 ## Warning policy stays separate
 
 The default remains `warning_exit_code: 2`. File/environment configuration and
-acknowledgements keep their existing behavior. `warning_exit_code: 0` allows review
+warning codes keep their existing behavior. `warning_exit_code: 0` allows review
 findings without hiding them from the report; execution failures still exit 3.
 Other custom warning codes remain supported, **except 3**, which is now reserved.
 The resolved configuration is checked after environment overrides. An unreadable
@@ -78,3 +78,50 @@ consumers need the distinction too. The JSON report schema is unchanged; errors
 remain diagnostics on stderr. The 0.16.0 minor boundary follows the project's
 pre-1.0 status ([Semantic Versioning](https://semver.org/spec/v2.0.0.html#spec-item-4)),
 while this guide makes the compatibility change explicit.
+
+## 0.17.0: acknowledge each affected resource
+
+In 0.16.0, acknowledging an upstream model also waived the cascade findings
+printed under that model. Starting with 0.17.0, an acknowledgement covers only
+the named resource's known findings. Review existing `acknowledge_models` lists
+when upgrading; an upstream-only acknowledgement can now exit 1 or 2.
+
+For example, `stg_orders` is a view that removes `customer_id`, and unchanged
+`fct_orders` selects `*` with incremental `sync_all_columns`:
+
+| CLI option | Exit | Explanation |
+|---|---|---|
+| `--acknowledge stg_orders` | 1 | The inherited drop on `fct_orders` remains active. |
+| `--acknowledge fct_orders` | 0 | The drop is accepted; the view's own replacement is safe. |
+| `--acknowledge stg_orders,fct_orders` | 0 | Both resources' known findings are accepted. |
+
+If `stg_orders` itself is incremental with `sync_all_columns`, downstream-only
+acknowledgement still exits 1 for its own drop. Unrelated destructive findings
+also still exit 1. Active warning impacts use `warning_exit_code` (default 2,
+including the opt-out value 0). Action `fail-on` handling is unchanged; execution
+errors still exit 3, even with all resource names acknowledged.
+
+Use exact report names, including version suffixes or `defined_in` file names;
+there are no globs or blanket acknowledgements. Repeating a name has no extra
+effect, and one explicitly named target may be shared by several upstream
+findings. Tests require their own exact resource name, never their parent model's
+name. Names shared by distinct manifest resources, including tests or exposures,
+cannot waive findings; the report explains the ambiguity. Exposure owner lines
+are informational and are not waived by a model acknowledgement.
+
+Unknown risk kinds, unknown operations, unreadable test fixtures/SQL, unresolved
+inherited schemas or contracts, parse failures, incomplete baselines and other
+analysis refusals cannot be acknowledged away. They retain review-level
+uncertainty under the configured warning policy.
+
+When acknowledgements are supplied, text and GitHub labels say
+`ACKNOWLEDGED: own findings only`; each cascade line shows whether its affected
+resource is waived or active. JSON retains every
+existing field, raw `safety`, summary count and cascade detail. `acknowledged`
+and the corresponding summary count still indicate requested model names, not
+the absence of active descendants. Additive fields make policy explicit:
+`models[].own_safety`, `models[].own_waived`, and
+`models[].downstream_impacts[].waived` / `waiver_reason` (the latter two appear
+when acknowledgements are supplied). A false `own_waived`
+means the resource was not acknowledged or its findings/identity could not be
+waived. MCP verdicts continue to reflect raw severity even when CLI policy exits 0.
