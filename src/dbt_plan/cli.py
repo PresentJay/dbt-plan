@@ -8,7 +8,7 @@ import json
 import shutil
 import sys
 from collections.abc import Iterable, Sequence
-from pathlib import Path, PurePosixPath
+from pathlib import Path
 from typing import NamedTuple
 
 from dbt_plan.config import ConfigError
@@ -73,6 +73,8 @@ def _manifest_layout(target_dir: Path) -> tuple[str | None, tuple[str, ...]]:
     except (OSError, json.JSONDecodeError, UnicodeDecodeError):
         return None, ()
 
+    from dbt_plan.manifest import dbt_path_parts
+
     metadata = manifest.get("metadata") or {}
     name = metadata.get("project_name")
     project = name if isinstance(name, str) and name else None
@@ -85,7 +87,7 @@ def _manifest_layout(target_dir: Path) -> tuple[str | None, tuple[str, ...]]:
             continue  # a package's models are compiled elsewhere and are not ours
         declared = node.get("original_file_path")
         if isinstance(declared, str) and declared:
-            model_dirs[PurePosixPath(declared).parts[0]] = None
+            model_dirs[dbt_path_parts(declared)[0]] = None
     return project, tuple(model_dirs)
 
 

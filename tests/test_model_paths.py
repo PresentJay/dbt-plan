@@ -77,6 +77,36 @@ class TestManifestLayout:
         )
         assert _manifest_layout(target)[1] == ("models",)
 
+    def test_windows_separators_name_the_same_directory(self, tmp_path):
+        """dbt writes `original_file_path` with `\\` on Windows.
+
+        Regression: `PurePosixPath` treated the backslash as part of one long
+        name, `_manifest_layout` reported `"models\\m_0.sql"` as the model
+        directory, and snapshot/check failed with "No compiled SQL found"
+        even though the compile was sitting in target/.
+        """
+        target = tmp_path / "target"
+        target.mkdir(parents=True, exist_ok=True)
+        (target / "manifest.json").write_text(
+            json.dumps(
+                {
+                    "metadata": {"project_name": "p"},
+                    "nodes": {
+                        "model.p.m_0": {
+                            "name": "m_0",
+                            "path": "m_0.sql",
+                            "original_file_path": "models\\m_0.sql",
+                            "config": {},
+                        }
+                    },
+                }
+            ),
+            encoding="utf-8",
+        )
+        (target / "compiled" / "p" / "models").mkdir(parents=True)
+        assert _manifest_layout(target) == ("p", ("models",))
+        assert _find_compiled_dir(target) == (target / "compiled" / "p", ("models",))
+
     def test_an_unreadable_manifest_says_so_rather_than_guessing(self, tmp_path):
         (tmp_path / "manifest.json").write_text("{ not json", encoding="utf-8")
         assert _manifest_layout(tmp_path) == (None, ())
