@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-from pathlib import Path, PurePosixPath
+from pathlib import Path, PurePosixPath, PureWindowsPath
 from typing import NamedTuple
 
 LAYOUT_VERSION = 1
@@ -22,7 +22,14 @@ def _error(message: str) -> ValueError:
 def manifest_path_root(declared: str) -> str:
     """Read a manifest-relative root without accepting empty or escaping paths."""
     path = PurePosixPath(declared)
-    if not path.parts or path.is_absolute() or ".." in path.parts:
+    if (
+        not path.parts
+        or path.is_absolute()
+        or ".." in path.parts
+        or "\\" in declared
+        or PureWindowsPath(declared).drive
+        or any(ord(char) < 32 or 127 <= ord(char) <= 159 for char in declared)
+    ):
         raise _error(f"Invalid manifest original_file_path: {declared!r}")
     return path.parts[0]
 
@@ -68,11 +75,17 @@ def read_snapshot_layout(
     dirs = baseline_model_dirs or ("models",)
     non_model_dirs = {"tests", "snapshots", "analyses", "macros"}
     required_model_dirs: set[str] = set()
+    manifest_readable = True
     try:
         manifest = json.loads((base / "manifest.json").read_text(encoding="utf-8"))
     except (OSError, ValueError):
         # The check's existing manifest validation reports missing/corrupt input.
         manifest = {}
+        manifest_readable = False
+        # Without the baseline manifest we cannot know its model paths. Scan
+        # conservatively; the existing baseline_problem warning prevents a clean
+        # report. Do not mistake an unknown custom path for a layout mismatch.
+        dirs = None
     if not isinstance(manifest, dict):
         raise _error("Snapshot manifest.json must be an object")
     project = (manifest.get("metadata") or {}).get("project_name")
@@ -97,7 +110,9 @@ def read_snapshot_layout(
             raise _error(f"Snapshot layout_version 1 is missing model directory: {name}")
     for sql in root.rglob("*.sql"):
         parts = sql.relative_to(root).parts
-        if len(parts) < 2 or parts[0] not in {*dirs, *non_model_dirs}:
+        if len(parts) < 2 or (
+            manifest_readable and parts[0] not in {*(dirs or ()), *non_model_dirs}
+        ):
             raise _error(f"Snapshot layout_version 1 has misplaced SQL: {sql.relative_to(root)}")
     provenance["layout_status"] = "versioned"
     return SnapshotLayout(root, dirs, provenance)

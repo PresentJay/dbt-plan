@@ -222,7 +222,24 @@ def test_layout_status_is_derived_not_trusted(project, capsys):
     assert baseline["revision"] == "abc"
 
 
-@pytest.mark.parametrize("declared", [".", "/", "///", "../orders.sql"])
+@pytest.mark.parametrize(
+    "declared",
+    [
+        ".",
+        "/",
+        "///",
+        "../orders.sql",
+        r"..\outside\orders.sql",
+        r"C:\outside\orders.sql",
+        r"\outside\orders.sql",
+        "C:outside/orders.sql",
+        "C:/outside/orders.sql",
+        "models/\norders.sql",
+        "models/\torders.sql",
+        "models/\x00orders.sql",
+        "models/\x7forders.sql",
+    ],
+)
 def test_invalid_manifest_model_path_is_clear_error(project, capsys, declared):
     path = project / ".dbt-plan/base/manifest.json"
     manifest = json.loads(path.read_text())
@@ -233,6 +250,26 @@ def test_invalid_manifest_model_path_is_clear_error(project, capsys, declared):
     assert output.out == ""
     assert "original_file_path" in output.err
     assert "dbt-plan snapshot" in output.err
+
+
+@pytest.mark.parametrize("damage", ["missing", "corrupt"])
+def test_custom_model_path_manifest_problem_remains_warning(project, capsys, damage):
+    target = project / "target"
+    (target / "compiled/my_project/models").rename(target / "compiled/my_project/transforms")
+    manifest = json.loads((target / "manifest.json").read_text())
+    manifest["nodes"]["model.my_project.orders"]["original_file_path"] = "transforms/orders.sql"
+    (target / "manifest.json").write_text(json.dumps(manifest))
+    _do_snapshot(_snapshot_args(project))
+    baseline_manifest = project / ".dbt-plan/base/manifest.json"
+    if damage == "missing":
+        baseline_manifest.unlink()
+    else:
+        baseline_manifest.write_text("{")
+    capsys.readouterr()
+    before = baseline_bytes(project)
+    assert _do_check(_check_args(project)) == 2
+    assert json.loads(capsys.readouterr().out)["baseline_problem"] == damage
+    assert baseline_bytes(project) == before
 
 
 @pytest.mark.parametrize("raw", ["null", "[]", '{"nodes": []}', '{"nodes": {"model.p.x": null}}'])

@@ -42,6 +42,13 @@ For example, a version 1 baseline with flattened model SQL or a missing
 Compile the intended baseline revision, then run `dbt-plan snapshot` again.
 Do not remove or change `layout_version` to bypass a compatibility error.
 Missing or corrupt manifests retain the existing conservative check behavior.
+If a versioned baseline's manifest is missing or unreadable, its model paths are
+unknown: the reader scans nested SQL without guessing the default `models`
+prefix, and `check` reports `baseline_problem: "missing"` or `"corrupt"` with
+the existing warning policy (exit 2 by default). A readable manifest that
+contradicts the directory layout still causes exit 3. Absolute paths, Windows
+drive/backslash paths, traversal, and control characters in manifest paths are
+rejected consistently across platforms.
 
 Snapshot metadata is written inside the staged publication transaction, together
 with SQL and the manifest. A metadata write failure preserves the previous
@@ -52,7 +59,8 @@ baseline; layout versioning does not weaken snapshot rollback or recovery.
 `read_snapshot_layout(base, current_model_dirs, baseline_model_dirs)` returns a
 `SnapshotLayout(root, model_dirs, provenance)` named tuple. Paths are `Path`
 objects, model directories are tuples of top-level directory names (`None` for
-an unfiltered legacy tree), and provenance is the report's baseline dictionary.
+an unfiltered legacy tree or unavailable baseline manifest), and provenance is
+the report's baseline dictionary.
 Invalid metadata/layout raises `ValueError` with a re-snapshot instruction.
 The CLI calls this before diffing and translates failures to exit 3.
 
