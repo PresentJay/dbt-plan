@@ -683,13 +683,21 @@ def _ambiguous_acknowledgement_names(*manifests: dict) -> set[str]:
     return {name for name, ids in identities.items() if len(ids) > 1}
 
 
-def _exit_code_for(result: CheckResult, warning_exit_code: int) -> int:
+def _exit_code_for(result: CheckResult, warning_exit_code: int, fail_on: str | None = None) -> int:
     """Map a check result to a process exit code.
 
     Waive known findings only on the named affected resource. Raw aggregate
     severities remain intact for reports and MCP consumers.
     """
     from dbt_plan.predictor import RISK_SAFETY, Safety
+
+    # Only completed reports reach this function; errors are never policy verdicts.
+    if fail_on == "never":
+        return 0
+    if fail_on == "destructive":
+        warning_exit_code = 0
+    elif fail_on == "warning":
+        warning_exit_code = warning_exit_code or 2
 
     active = []
     for pred in result.predictions:
@@ -995,7 +1003,7 @@ def _do_check(args: argparse.Namespace) -> int:
     project_dir = Path(args.project_dir)
 
     # Load config: .dbt-plan.yml → env vars → CLI flags (highest precedence)
-    config = Config.load(project_dir)
+    config = Config.load(project_dir, fail_on=getattr(args, "fail_on", None))
     # CLI flags override config/env (getattr for backward compat with tests)
     fmt = getattr(args, "format", None)
     if fmt is None:
@@ -1384,7 +1392,7 @@ def _do_check(args: argparse.Namespace) -> int:
             print(format_github(empty))
         else:
             print(format_text(empty, color=not no_color))
-        return _exit_code_for(empty, config.warning_exit_code)
+        return _exit_code_for(empty, config.warning_exit_code, config.fail_on)
 
     # 3. For each changed model: extract columns, predict DDL
     predictions = []
@@ -1804,7 +1812,7 @@ def _do_check(args: argparse.Namespace) -> int:
         print(format_text(check_result, color=not no_color))
 
     # 5. Exit code
-    return _exit_code_for(check_result, config.warning_exit_code)
+    return _exit_code_for(check_result, config.warning_exit_code, config.fail_on)
 
 
 _CI_WORKFLOW = """\
@@ -2181,7 +2189,7 @@ def _do_run(args: argparse.Namespace) -> int:
     against = getattr(args, "against", None)
 
     # Resolve compile command: CLI flag > config (env + file)
-    config = Config.load(project_dir)
+    config = Config.load(project_dir, fail_on=getattr(args, "fail_on", None))
     compile_command = getattr(args, "compile_command", None) or config.compile_command
 
     def _log(msg: str) -> None:
@@ -2364,6 +2372,7 @@ def _do_run(args: argparse.Namespace) -> int:
         dialect=dialect,
         select=select,
         acknowledge=acknowledge,
+        fail_on=config.fail_on,
     )
     return _do_check(check_args)
 
@@ -2371,6 +2380,7 @@ def _do_run(args: argparse.Namespace) -> int:
 def _main() -> None:
     _configure_output_streams()
     from dbt_plan import __version__
+    from dbt_plan.config import FAIL_ON_CHOICES
 
     parser = _ArgumentParser(
         prog="dbt-plan",
@@ -2448,6 +2458,12 @@ def _main() -> None:
             "and/or downstream. Use explicit version names (fct_orders_v2). "
             "Unsupported syntax and unknown names exit 3."
         ),
+    )
+    check.add_argument(
+        "--fail-on",
+        choices=FAIL_ON_CHOICES,
+        default=None,
+        help="Exit policy (CLI > DBT_PLAN_FAIL_ON > fail_on config > legacy warning_exit_code)",
     )
     check.add_argument(
         "--acknowledge",
@@ -2565,6 +2581,12 @@ def _main() -> None:
             "and/or downstream. Use explicit version names (fct_orders_v2). "
             "Unsupported syntax and unknown names exit 3."
         ),
+    )
+    run_cmd.add_argument(
+        "--fail-on",
+        choices=FAIL_ON_CHOICES,
+        default=None,
+        help="Exit policy (CLI > DBT_PLAN_FAIL_ON > fail_on config > legacy warning_exit_code)",
     )
     run_cmd.add_argument(
         "--acknowledge",

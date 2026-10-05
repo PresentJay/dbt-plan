@@ -34,8 +34,39 @@ Other custom warning codes remain supported, **except 3**, which is now reserved
 The resolved configuration is checked after environment overrides. An unreadable
 configuration fails instead of silently applying defaults.
 
-The CLI does not yet provide `--fail-on` (#35). Its future default must describe
-today's warning policy, and no policy option may suppress an execution failure.
+For `check` and `run`, choose `--fail-on destructive|warning|never` to set an
+explicit exit policy. Resolution is **CLI flag > `DBT_PLAN_FAIL_ON` > `fail_on`
+in `.dbt-plan.yml` > legacy behavior**. With none supplied, `warning_exit_code`
+keeps its existing behavior, including its default of 2 and opt-out value 0.
+
+| Resolved `fail_on` | Destructive finding | Review finding | Execution error |
+|---|---|---|---|
+| Absent | 1 | `warning_exit_code` (default 2) | 3 |
+| `warning` | 1 | Configured nonzero `warning_exit_code`, or 2 when configured as 0 | 3 |
+| `destructive` | 1 | 0 | 3 |
+| `never` | 0 | 0 | 3 |
+
+These policies apply to completed findings after the existing resource-specific
+acknowledgements. They do not expand acknowledgement scope or change raw safety,
+uncertainty, report contents, or summary counts. In particular, a parse failure
+still requires review even when the exit policy permits it. `run` validates the
+policy before invoking subprocesses or changing the worktree and passes it to
+`check`. `snapshot` has no `--fail-on` option.
+
+Only the exact lowercase values above are valid. The resolved value is validated
+after all overrides: a valid higher layer may replace an invalid lower value,
+but an invalid winning value is a configuration error (exit 3), before analysis
+or side effects. An explicitly empty environment variable overrides the file
+and is invalid unless a valid CLI flag overrides it. Empty file values and CLI
+arguments are also invalid. Unreadable configuration and reserved
+`warning_exit_code: 3` remain errors even with `--fail-on never`.
+
+```bash
+dbt-plan check --fail-on warning
+dbt-plan run --fail-on destructive
+DBT_PLAN_FAIL_ON=never dbt-plan check --format json
+```
+
 The Action's `fail-on: destructive|warning|never` applies only after a completed
 check; code 3 fails the Check step before the Gate step, even for `never`. The Action
 also requires a JSON report with summary/model data before accepting a verdict, so
