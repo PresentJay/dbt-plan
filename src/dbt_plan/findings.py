@@ -141,7 +141,6 @@ class _Resources:
                     for alias in aliases:
                         if isinstance(alias, str) and alias:
                             self.aliases.setdefault(alias, set()).add(uid)
-        self.packages = {key.split(".")[1] for key in self.nodes}
 
     def resolve(self, name: str) -> Resource:
         if not isinstance(name, str) or not name:
@@ -151,9 +150,7 @@ class _Resources:
         path = _source_path(self.nodes[uid].get("original_file_path")) if uid else None
         if uid:
             project = self.projects[uid]
-            if (project and uid.split(".")[1] != project) or (
-                not project and len(self.packages) > 1
-            ):
+            if not isinstance(project, str) or not project or uid.split(".")[1] != project:
                 path = None
         return Resource(name, uid, candidates, path)
 
@@ -320,8 +317,8 @@ def findings_from_predictions(
             }
             default = Evidence(
                 "prediction",
-                "unknown" if uncertain else "exact",
-                "unresolved_prediction" if uncertain else "ddl_rule",
+                "unknown" if uncertain else "conservative",
+                "unresolved_prediction" if uncertain else "provenance_unavailable",
             )
             emit(
                 code,

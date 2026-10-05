@@ -84,9 +84,10 @@ retain their base paths. Disabled nodes are not newly indexed.
 
 Original paths are copied only from `original_file_path`, never `path` or
 `compiled_path`. Absolute, Windows-drive, traversal, target and dbt_packages
-paths are withheld. Dependency-package paths are withheld when project metadata
-identifies another root; without metadata, paths are withheld when multiple
-packages occur. A missing path does not invalidate a known resource ID. This
+paths are withheld. A path is exposed only when that resource's manifest declares
+`metadata.project_name` matching the ID's package. Missing or empty metadata never
+establishes root identity, even with a single package. A missing path does not
+invalidate a known resource ID. This
 is syntactic provenance checking, not an assertion that the file exists.
 There are **no source line numbers**. Compiled offsets do not locate lines in
 Jinja source. Compiled paths, when supplied, live only in `evidence.compiled_path`.
@@ -97,9 +98,38 @@ Evidence `state` has exactly three meanings:
 
 | State | Meaning | Typical origin / reason |
 | --- | --- | --- |
-| `exact` | The stated fact was determined by that producer. | `prediction` / `ddl_rule`, or explicit `resolved_read` / `read_checked` |
-| `conservative` | A fallback may over-report the relationship. | Explicit `text_search` / `read_fallback` |
+| `exact` | The stated fact was determined by that producer, with explicitly supplied provenance. | Explicit `resolved_columns` / `ddl_rule`, or `resolved_read` / `read_checked` |
+| `conservative` | A fallback may over-report the relationship, or the prediction lacks evidence of how columns were obtained. | `prediction` / `provenance_unavailable`, or explicit `text_search` / `read_fallback` |
 | `unknown` | The input or provenance is unresolved. | `legacy_cascade` / `provenance_unavailable`, `input` / refusal code |
+
+Existing `DDLPrediction` does not retain whether its columns came from SQL or a
+manifest fallback. Known DDL operations therefore default to conservative
+`provenance_unavailable`, cannot be waived, and promote a raw safe verdict to
+warning. Raw destructive risk stays destructive. A caller that has proven the
+input origin can supply explicit exact evidence for the DDL rule; an operation
+name alone does not establish it. Unknown/review operations remain unknown.
+
+### Handoff to #254's CLI evidence producer
+
+The CLI's raw predictions and exit policy are unchanged by this module. The
+transport adapter must retain the real producer flags (`used_manifest_columns`,
+`parse_failed`, `partial_unknown`) and input availability before converting to
+canonical facts. Confirmed parsed/resolved SQL can supply exact evidence; the
+absence of flags in a legacy object is not that confirmation. Manifest fallback
+should supply conservative evidence, and failed/partial resolution should supply
+unknown evidence. Never label an entire report exact because one model parsed.
+
+Evidence keys are `(source.unique_id, affected.unique_id, rule_code)`; own DDL
+has the same ID in both positions. The complete rule enumeration is below.
+For example, a proven column diff may supply
+`("model.shop.orders.v2", "model.shop.orders.v2", "ddl.drop_column")` with
+`Evidence("resolved_columns", "exact", "column_diff_checked", columns=("book_id",))`.
+Use each emitted operation's code, including `ddl.verdict` for no operations;
+a single prediction may emit multiple rule codes. A consumer can obtain the
+codes from a conservative first conversion, then attach producer evidence and
+convert again, without parsing message strings or importing private helpers.
+Do not attach exact evidence to unresolved or ambiguous identities. Exact
+evidence for an own DDL rule says nothing about its separate cascade facts.
 
 An exact DDL rule is not proof of an exact SQL read. Existing `DownstreamImpact`
 does not carry machine-readable read provenance. Its default is therefore

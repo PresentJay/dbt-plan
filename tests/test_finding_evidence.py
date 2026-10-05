@@ -74,6 +74,7 @@ def test_source_path_is_not_compiled_path_and_removed_nodes_use_base():
             ),
         )
     )
+    m["metadata"] = {"project_name": "p"}
     (fact,) = findings_from_predictions([prediction()], {}, base_manifest=m)
     assert fact.source.original_file_path == "models/orders.sql"
 
@@ -307,7 +308,15 @@ def test_cascade_escalation_does_not_relabel_own_safe_operation():
         downstream_impacts=[DownstreamImpact("reader", "view", None, "broken_ref", "reads")],
     )
     m = manifest(("model.p.orders", node()), ("model.p.reader", node("reader")))
-    facts = findings_from_predictions([pred], m)
+    facts = findings_from_predictions(
+        [pred],
+        m,
+        evidence={
+            ("model.p.orders", "model.p.orders", "ddl.replace_view"): Evidence(
+                "resolved_columns", "exact", "ddl_rule"
+            )
+        },
+    )
     assert next(f for f in facts if f.rule_code == "ddl.replace_view").severity == "safe"
     assert next(f for f in facts if f.rule_code == "cascade.broken_ref").severity == "destructive"
 
@@ -330,3 +339,67 @@ def test_input_and_nested_lists_are_not_mutated():
     original = copy.deepcopy((preds, m))
     findings_from_predictions(preds, m)
     assert (preds, m) == original
+
+
+@pytest.mark.parametrize("safety", [Safety.SAFE, Safety.DESTRUCTIVE])
+def test_ddl_without_producer_provenance_cannot_claim_exact_or_be_waived(safety):
+    pred = replace(prediction(), safety=safety)
+    (fact,) = findings_from_predictions([pred], manifest(("model.p.orders", node())))
+    assert fact.evidence.state == "conservative"
+    assert "provenance_unavailable" in fact.uncertainty
+    assert not fact.waiver_allowed
+    assert fact.raw_risk == safety.value
+    assert fact.severity == ("warning" if safety == Safety.SAFE else "destructive")
+
+
+def test_explicit_ddl_producer_evidence_can_establish_exact_fact():
+    (fact,) = findings_from_predictions(
+        [prediction()],
+        manifest(("model.p.orders", node())),
+        evidence={
+            ("model.p.orders", "model.p.orders", "ddl.drop_column"): Evidence(
+                "resolved_columns", "exact", "column_diff_checked", columns=("book_id",)
+            )
+        },
+    )
+    assert fact.evidence.state == "exact"
+    assert fact.waiver_allowed
+    assert fact.uncertainty == ()
+
+
+@pytest.mark.parametrize("project", [None, "", "other", 1])
+def test_single_package_cannot_prove_source_path_without_declared_matching_root(project):
+    m = manifest(("model.p.orders", node(original_file_path="models/orders.sql")))
+    if project is not None:
+        m["metadata"] = {"project_name": project}
+    (fact,) = findings_from_predictions([prediction()], m)
+    assert fact.source.unique_id == "model.p.orders"
+    assert fact.source.original_file_path is None
+
+
+def test_declared_matching_root_proves_source_path():
+    m = manifest(("model.p.orders", node(original_file_path="models/orders.sql")))
+    m["metadata"] = {"project_name": "p"}
+    (fact,) = findings_from_predictions([prediction()], m)
+    assert fact.source.original_file_path == "models/orders.sql"
+
+
+def test_manifest_fallback_review_and_column_operation_both_retain_uncertainty():
+    from dbt_plan.predictor import predict_ddl
+
+    pred = predict_ddl("orders", "incremental", "sync_all_columns", ["id", "book_id"], ["id"])
+    pred = replace(
+        pred,
+        operations=[
+            DDLOperation("REVIEW REQUIRED (columns came from the manifest, not the SQL)"),
+            *pred.operations,
+        ],
+    )
+    facts = findings_from_predictions([pred], manifest(("model.p.orders", node())))
+    drop = next(f for f in facts if f.rule_code == "ddl.drop_column")
+    review = next(f for f in facts if f.rule_code == "ddl.review_required")
+    assert drop.evidence.state == "conservative"
+    assert review.evidence.state == "unknown"
+    assert all(
+        f.severity == "destructive" and f.uncertainty and not f.waiver_allowed for f in facts
+    )
