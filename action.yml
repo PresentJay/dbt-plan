@@ -164,8 +164,24 @@ runs:
             if not isinstance(data["baseline_problem"], str):
                 raise ValueError("invalid baseline problem")
             uncertain = uncertain or bool(data["baseline_problem"])
-        print("destructive" if counts["destructive"] else
-              "warning" if counts["warning"] or uncertain else "safe")
+        nested = set()
+        for model in models:
+            impacts = model.get("downstream_impacts", [])
+            if not isinstance(impacts, list):
+                raise ValueError("invalid downstream impacts")
+            for impact in impacts:
+                if not isinstance(impact, dict) or any(
+                    not isinstance(impact.get(key), str) for key in ("model_name", "risk", "reason")
+                ):
+                    raise ValueError("invalid downstream impact")
+                nested.add("destructive" if impact["risk"] in ("broken_ref", "inherited_drop") else "warning")
+        # The validator ships in the base wheel and imports only the stdlib.
+        # Old pinned CLIs have no canonical field and need no new module.
+        if "findings" in data:
+            from dbt_plan_mcp.report_validation import validate_report, report_severity
+            nested.add(report_severity(validate_report(data)))
+        print("destructive" if counts["destructive"] or "destructive" in nested else
+              "warning" if counts["warning"] or uncertain or "warning" in nested else "safe")
         PY
         ); then
           echo "::error::dbt-plan did not produce a completed JSON report (exit $code)"

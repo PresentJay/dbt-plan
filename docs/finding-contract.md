@@ -2,8 +2,8 @@
 
 `dbt_plan.findings` is a pure producer adapter. It reads Python objects already
 loaded by the caller; it performs no filesystem, database or network operations.
-This change does not wire findings into CLI, JSON, text, GitHub or MCP output.
-Those transport changes belong to #254; causal paths belong to #255/#256.
+The CLI supplies these facts to JSON, text, GitHub and MCP output. Causal paths
+belong to #255/#256; a source-to-affected pair is not a claim of an immediate edge.
 
 ## Entry points
 
@@ -178,13 +178,67 @@ safety. Existing codes must not be reassigned to different meanings.
 
 ## Transport migration and consumer examples
 
-During 0.x migration, add a `findings` array to existing report objects; preserve
-legacy fields and valid legacy fixtures. Absence of `findings` means an older
-report, not zero findings. This module changes no report schema or renderer.
-Transport validators and round-trip tests are #254's responsibility. Consumers
+During 0.x migration, the CLI adds a `findings` array to existing report objects,
+including an empty array when it produced no facts. Legacy fields and valid
+legacy fixtures remain supported. Absence of `findings` means an older report,
+not zero findings. Direct formatter callers default to `CheckResult.findings=None`
+and remain legacy unless they supply canonical facts. Consumers
 must preserve unknown additive fields; a consumer that does not understand a
 rule, severity, risk or contract version must require review or return an error.
 No production JSON Schema dependency is needed by this producer.
+
+The CLI records column provenance before applying exit policy. Resolved SQL uses
+`compiled_sql / exact / column_diff_checked`; manifest fallback uses
+`manifest / conservative / manifest_fallback`. Partial projection resolution uses
+`partial_unknown`, and failed extraction uses `parse_failed` or `unresolved_input`
+with unknown evidence. These are reason codes, not new finding fields. Known
+column names can survive partial resolution, but the evidence remains unknown.
+Column-independent rules keep their rule evidence, so missing column metadata
+alone does not elevate a raw safe table/view replacement. Separate input refusals
+and downstream uncertainty still survive. When both SQL column sets are proven,
+the CLI preserves their added/removed delta in the canonical transport copy even
+for table/view rules that return before the predictor records columns. The rule
+remains raw safe; losing a view projection is still a recorded fact. Fallback or
+partial column sets do not establish that complete delta. Current legacy cascade
+producers lack read provenance, so those facts remain unknown; the CLI never
+extracts certainty from a human-readable cascade message.
+
+Text and GitHub output append a canonical section with raw severity, rule code,
+qualified identities, evidence, column changes, uncertainty and separate compiled
+paths. Existing model rows retain acknowledgement policy. JSON and MCP carry the
+same canonical array without rewriting it. MCP also forwards existing report
+fields, including analysis, ignore lists and unknown extensions; missing legacy
+fields are not synthesized. MCP's review verdict is spelled `review_required`.
+
+CLI compiled locations are relative to the resolved project root and use `/`
+separators. Resolving both paths keeps aliases such as macOS `/var` and
+`/private/var` consistent. Files outside that root (including an explicitly
+external baseline), or paths that cannot be resolved, have `compiled_path=null`.
+No location is fabricated for them. Original source paths still come only from
+the trusted manifest field; compiled locations never supply source lines.
+
+`dbt_plan_mcp.report_validation` is a standard-library-only transport validator
+shipped in the base wheel; importing it does not require the optional MCP package.
+It validates nested facts and impacts before interpretation. Unknown rule, risk,
+version, origin, state or reason codes are preserved and require review. The
+minimum severity of known destructive/warning rules also survives contradictory
+`safe` fields. Malformed qualified identities are rejected; unresolved identities
+remain reviewable. The schema checks structure and permits additive fields;
+schema validity alone does not mean safe. Action and generated workflow consumers validate canonical reports
+with this module, and continue to accept older pinned CLI reports without a
+canonical array. Their raw verdict includes nested risks, while the existing
+gate uses the policy exit code: acknowledgements, `warning_exit_code=0` and
+the gate's `fail-on` input remain authoritative.
+
+For example, a round trip keeps an acknowledged destructive fact intact:
+
+```python
+result.findings = findings_from_result(result, manifest, evidence=producer_evidence)
+report = json.loads(format_json(result))
+validate_report(report)  # returns this report, preserving additive fields
+assert report["findings"] == [fact.to_dict() for fact in result.findings]
+# MCP forwards this exact array even if the CLI policy exit code is zero.
+```
 
 An acknowledged drop still yields `rule_code="ddl.drop_column"`,
 `severity="destructive"`, `raw_risk="destructive"`, `column="book_id"`.

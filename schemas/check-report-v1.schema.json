@@ -8,6 +8,9 @@
   "properties": {
     "summary": {"$ref": "#/$defs/summary"},
     "models": {"type": "array", "items": {"$ref": "#/$defs/model"}},
+    "findings": {"type": "array", "items": {"$ref": "#/$defs/finding"}},
+    "ignored_models": {"$ref": "#/$defs/strings"},
+    "unmatched_ignore_models": {"$ref": "#/$defs/strings"},
     "parse_failures": {"$ref": "#/$defs/strings"},
     "stale_sources": {"$ref": "#/$defs/strings"},
     "skipped_models": {"$ref": "#/$defs/strings"},
@@ -16,6 +19,50 @@
     "analysis": {"$ref": "#/$defs/analysis"}
   },
   "$defs": {
+    "resource": {
+      "type": ["object", "null"],
+      "required": ["name", "unique_id", "candidates"],
+      "additionalProperties": true,
+      "properties": {
+        "name": {"type": "string"},
+        "unique_id": {"$ref": "#/$defs/nullableString"},
+        "candidates": {"$ref": "#/$defs/strings"},
+        "original_file_path": {"$ref": "#/$defs/nullableString"}
+      }
+    },
+    "evidence": {
+      "type": "object",
+      "required": ["origin", "state", "reason_code", "columns"],
+      "additionalProperties": true,
+      "properties": {
+        "origin": {"type": "string"},
+        "state": {"type": "string", "description": "Known states: exact, conservative, unknown. Unfamiliar states require review."},
+        "reason_code": {"type": "string"},
+        "columns": {"$ref": "#/$defs/strings"},
+        "compiled_path": {"$ref": "#/$defs/nullableString"}
+      }
+    },
+    "finding": {
+      "type": "object",
+      "required": ["contract_version", "rule_code", "source", "affected", "column", "columns", "columns_added", "columns_removed", "severity", "raw_risk", "message", "evidence", "uncertainty", "waiver_allowed"],
+      "additionalProperties": true,
+      "properties": {
+        "contract_version": {"type": "integer", "minimum": 1, "description": "Only version 1 is currently understood. Unknown versions require review."},
+        "rule_code": {"type": "string"},
+        "source": {"$ref": "#/$defs/resource"},
+        "affected": {"$ref": "#/$defs/resource"},
+        "column": {"$ref": "#/$defs/nullableString"},
+        "columns": {"$ref": "#/$defs/strings"},
+        "columns_added": {"$ref": "#/$defs/strings"},
+        "columns_removed": {"$ref": "#/$defs/strings"},
+        "severity": {"type": "string"},
+        "raw_risk": {"type": "string"},
+        "message": {"type": "string"},
+        "evidence": {"$ref": "#/$defs/evidence"},
+        "uncertainty": {"$ref": "#/$defs/strings"},
+        "waiver_allowed": {"type": "boolean"}
+      }
+    },
     "strings": {"type": "array", "items": {"type": "string"}},
     "nullableString": {"type": ["string", "null"]},
     "count": {"type": "integer", "minimum": 0},

@@ -39,6 +39,47 @@ SAFE  dim_publishers (table)
 SAFE  fct_daily_sales (incremental, append_new_columns)
   ADD COLUMN  total_sales
 
+Canonical findings (before policy)
+
+- SAFE ddl.replace_table: model.sample.dim_customers -> model.sample.dim_customers; CREATE OR REPLACE TABLE
+  Evidence: compiled_sql / exact / column_diff_checked; raw risk: safe; waiver eligible: true
+  Columns: country, created_at, customer_id, customer_tier; added: (none); removed: (none)
+  Compiled SQL: target/compiled/sample/models/dim_customers.sql
+
+- SAFE ddl.replace_table: model.sample.dim_publishers -> model.sample.dim_publishers; CREATE OR REPLACE TABLE
+  Evidence: compiled_sql / exact / column_diff_checked; raw risk: safe; waiver eligible: true
+  Columns: end_date, publisher_id, publisher_name, start_date; added: (none); removed: (none)
+  Compiled SQL: target/compiled/sample/models/dim_publishers.sql
+
+- SAFE ddl.add_column: model.sample.fct_daily_sales -> model.sample.fct_daily_sales; ADD COLUMN; column: total_sales
+  Evidence: compiled_sql / exact / column_diff_checked; raw risk: safe; waiver eligible: true
+  Columns: order_count, order_date, shipping_info, store_id, total_sales, unique_customers; added: total_sales; removed: (none)
+  Compiled SQL: target/compiled/sample/models/fct_daily_sales.sql
+
+- DESTRUCTIVE cascade.broken_ref: model.sample.int_order_enriched -> model.sample.fct_daily_sales; reads dropped column(s): shipping_info
+  Evidence: legacy_cascade / unknown / provenance_unavailable; raw risk: broken_ref; waiver eligible: false
+  Review: provenance_unavailable
+
+- DESTRUCTIVE ddl.drop_column: model.sample.int_order_enriched -> model.sample.int_order_enriched; DROP COLUMN; column: billing_info
+  Evidence: compiled_sql / exact / column_diff_checked; raw risk: destructive; waiver eligible: true
+  Columns: billing_info, billing_method, customer_id, order_date, order_id, revenue, shipping_city, shipping_info, store_id; added: billing_method, shipping_city; removed: billing_info, shipping_info
+  Compiled SQL: target/compiled/sample/models/int_order_enriched.sql
+
+- DESTRUCTIVE ddl.add_column: model.sample.int_order_enriched -> model.sample.int_order_enriched; ADD COLUMN; column: billing_method
+  Evidence: compiled_sql / exact / column_diff_checked; raw risk: destructive; waiver eligible: true
+  Columns: billing_info, billing_method, customer_id, order_date, order_id, revenue, shipping_city, shipping_info, store_id; added: billing_method, shipping_city; removed: billing_info, shipping_info
+  Compiled SQL: target/compiled/sample/models/int_order_enriched.sql
+
+- DESTRUCTIVE ddl.add_column: model.sample.int_order_enriched -> model.sample.int_order_enriched; ADD COLUMN; column: shipping_city
+  Evidence: compiled_sql / exact / column_diff_checked; raw risk: destructive; waiver eligible: true
+  Columns: billing_info, billing_method, customer_id, order_date, order_id, revenue, shipping_city, shipping_info, store_id; added: billing_method, shipping_city; removed: billing_info, shipping_info
+  Compiled SQL: target/compiled/sample/models/int_order_enriched.sql
+
+- DESTRUCTIVE ddl.drop_column: model.sample.int_order_enriched -> model.sample.int_order_enriched; DROP COLUMN; column: shipping_info
+  Evidence: compiled_sql / exact / column_diff_checked; raw risk: destructive; waiver eligible: true
+  Columns: billing_info, billing_method, customer_id, order_date, order_id, revenue, shipping_city, shipping_info, store_id; added: billing_method, shipping_city; removed: billing_info, shipping_info
+  Compiled SQL: target/compiled/sample/models/int_order_enriched.sql
+
 dbt-plan: 4 checked, 3 safe, 0 warning, 1 destructive, 1 cascade risk(s)
 ```
 

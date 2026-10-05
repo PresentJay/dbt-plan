@@ -86,6 +86,64 @@ def test_example_equals_generated_workflow():
     assert example.read_text(encoding="utf-8") == _CI_WORKFLOW
 
 
+@pytest.mark.parametrize("wrapper", ["action", "generated"])
+@pytest.mark.parametrize(
+    "kind,expected",
+    [
+        ("canonical", "destructive"),
+        ("unknown_reason", "warning"),
+        ("nested", "destructive"),
+        ("unknown_risk", "warning"),
+        ("malformed_nested", None),
+        ("malformed_canonical", None),
+    ],
+)
+def test_nested_and_canonical_risks_are_not_safe(tmp_path, environment, wrapper, kind, expected):
+    from dbt_plan.formatter import CheckResult, format_json
+    from tests.test_finding_adapters import payload
+
+    data = json.loads(format_json(CheckResult()))
+    if kind in {"canonical", "unknown_reason", "malformed_canonical"}:
+        fact = next(f for f in payload()["findings"] if f["rule_code"] == "ddl.drop_column")
+        data["findings"] = [fact]
+        if kind == "unknown_reason":
+            fact.update(rule_code="ddl.add_column", severity="safe", raw_risk="safe")
+            fact["evidence"]["reason_code"] = "future_reason"
+        elif kind == "malformed_canonical":
+            fact["evidence"] = {}
+    else:
+        data["summary"].update(total=1, safe=1)
+        data["models"] = [
+            {
+                "model_name": "orders",
+                "safety": "safe",
+                "downstream_impacts": [
+                    {
+                        "model_name": "reader",
+                        "risk": "future" if kind == "unknown_risk" else "broken_ref",
+                        "reason": "risk",
+                    }
+                ],
+            }
+        ]
+        if kind == "malformed_nested":
+            data["models"][0]["downstream_impacts"][0]["risk"] = []
+    environment.update(TARGET_DIR="target", DIALECT="", SUMMARY="false")
+    prefix = stub(0, json.dumps(data))
+    checked = (
+        shell(prefix + action_script("Check"), tmp_path, environment)
+        if wrapper == "action"
+        else execute("Check current", tmp_path, environment, prefix)
+    )
+    captured = outputs(environment)
+    if expected is None:
+        assert checked.returncode == 3 if wrapper == "action" else captured["exit-code"] == "3"
+    else:
+        assert checked.returncode == 0, checked.stdout + checked.stderr
+        assert captured["verdict"] == expected
+        assert captured["exit-code"] == "0"  # Raw facts never rewrite gate/ack policy.
+
+
 @pytest.mark.parametrize("policy", ["destructive", "warning", "never"])
 @pytest.mark.parametrize("code", [0, 1, 2, 3, 42])
 def test_report_cannot_decide_gate_policy(tmp_path, environment, code, policy):
