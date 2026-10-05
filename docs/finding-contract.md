@@ -1,0 +1,169 @@
+# Canonical finding contract, version 1
+
+`dbt_plan.findings` is a pure producer adapter. It reads Python objects already
+loaded by the caller; it performs no filesystem, database or network operations.
+This change does not wire findings into CLI, JSON, text, GitHub or MCP output.
+Those transport changes belong to #254; causal paths belong to #255/#256.
+
+## Entry points
+
+```python
+from dbt_plan.findings import Evidence, InputRefusal, findings_from_result
+
+facts = findings_from_result(
+    result,                 # formatter.CheckResult, before policy filtering
+    manifest,               # complete current manifest dictionary
+    base_manifest=baseline, # optional, includes removed resources
+    evidence={
+        ("model.shop.orders.v2", "model.shop.order_report", "cascade.broken_ref"):
+            Evidence("resolved_read", "exact", "read_checked",
+                     columns=("book_id",), compiled_path="target/compiled/shop/report.sql"),
+    },
+)
+payload = [fact.to_dict() for fact in facts]
+```
+
+`findings_from_result(result, manifest=None, *, node_index=None,
+base_manifest=None, evidence=None) -> tuple[Finding, ...]` adapts all predictions
+and these refusal fields: `parse_failures`, `skipped_models`, `uncompiled_models`,
+`stale_sources`, `baseline_problem`. It imports `CheckResult` only under
+`TYPE_CHECKING`; formatter may import this adapter without a runtime cycle.
+Acknowledgements and exit policy are deliberately never consulted.
+
+Supply either `manifest` or `node_index`. The latter accepts the existing
+`Mapping[str, ModelNode]`, retaining each actual `node_id`, `name` and ID-derived
+version alias. It cannot recover collisions discarded by `build_node_index`,
+test resources or original source paths. Use complete current/base manifests for
+path graphs, package collisions and source links. Omitted identity inputs leave
+names unresolved, with warning or destructive severity, never guessed IDs.
+
+`findings_from_predictions(predictions, manifest, *, base_manifest=None,
+refusals=(), evidence=None, ambiguous_resources=()) -> tuple[Finding, ...]` is the lower-level entry point.
+Pass lists/tuples of `DDLPrediction` and `InputRefusal(reason_code, message,
+resource=None)`. Explicit refusals allow producers outside `CheckResult` to
+retain unreadable inputs. A refusal with no resource is report-wide; stale source
+paths remain in the message, not in a fabricated model identity.
+The result adapter also retains `CheckResult.ambiguous_resources`: known
+ambiguity prevents an ID selection even if a lossy node index kept one candidate.
+
+These functions are typed producer APIs, not legacy report deserializers.
+Malformed input raises `TypeError` or `ValueError`; callers must surface that as
+an error/review, never catch it and substitute an empty successful report.
+An empty tuple means no supplied facts, not proof that compilation succeeded.
+
+## Facts and identities
+
+Each immutable `Finding` has:
+
+| Field | Meaning |
+| --- | --- |
+| `contract_version` | Integer `1`; independent of dbt-plan package version. |
+| `rule_code` | Stable machine code; independent of message wording. |
+| `source`, `affected` | `Resource` or null for report-wide refusals. Own DDL uses the same resource for both. Cascade source is the changed prediction owner, not a claimed immediate SQL parent. |
+| `column`, `columns` | Optional operation column and sorted union of that column with explicitly supplied evidence columns. No extraction from prose. |
+| `columns_added`, `columns_removed` | Sorted unique prediction-level changes, retained even for rules with no per-column operation. |
+| `severity` | Raw policy-independent `safe`, `warning`, or `destructive`, elevated to warning if evidence/identity is uncertain. Never downgraded. |
+| `raw_risk` | Original own safety string, or original cascade risk (including unrecognized values). |
+| `message` | Original operation/reason text. Presentation may change without changing rule meaning. |
+| `evidence` | Origin, state, reason code, sorted columns and optional separate compiled path. |
+| `uncertainty` | Sorted reasons requiring review. |
+| `waiver_allowed` | Conservative eligibility, not an applied waiver. Refusals and uncertain facts are never eligible. |
+
+`Resource` has `name` (original producer spelling), `unique_id`, sorted
+`candidates`, and optional `original_file_path`. IDs come from manifest keys,
+including package, resource kind and version, such as `model.shop.orders.v2`
+or `test.shop.not_null_orders_book_id.hash`. A conflicting node `unique_id` is
+invalid. Never construct an ID from a short name or select the first match.
+
+Lookup accepts an exact ID, a node name, a compiled `path` stem (`defined_in`),
+or the existing `model_key` version spelling. A warehouse relation `alias` is
+not a resource name. Multiple candidates leave `unique_id=null` and add
+`ambiguous_resource`; no candidates add `unresolved_resource`. Current and base
+aliases are combined. Current node paths take precedence; base-only resources
+retain their base paths. Disabled nodes are not newly indexed.
+
+Original paths are copied only from `original_file_path`, never `path` or
+`compiled_path`. Absolute, Windows-drive, traversal, target and dbt_packages
+paths are withheld. Dependency-package paths are withheld when project metadata
+identifies another root; without metadata, paths are withheld when multiple
+packages occur. A missing path does not invalidate a known resource ID. This
+is syntactic provenance checking, not an assertion that the file exists.
+There are **no source line numbers**. Compiled offsets do not locate lines in
+Jinja source. Compiled paths, when supplied, live only in `evidence.compiled_path`.
+
+## Evidence and stable codes
+
+Evidence `state` has exactly three meanings:
+
+| State | Meaning | Typical origin / reason |
+| --- | --- | --- |
+| `exact` | The stated fact was determined by that producer. | `prediction` / `ddl_rule`, or explicit `resolved_read` / `read_checked` |
+| `conservative` | A fallback may over-report the relationship. | Explicit `text_search` / `read_fallback` |
+| `unknown` | The input or provenance is unresolved. | `legacy_cascade` / `provenance_unavailable`, `input` / refusal code |
+
+An exact DDL rule is not proof of an exact SQL read. Existing `DownstreamImpact`
+does not carry machine-readable read provenance. Its default is therefore
+unknown, even when its prose says “reads”. Never infer columns or certainty
+from prose. Producers that actually have read evidence can supply it keyed by
+`(source unique_id, affected unique_id, rule_code)`. This evidence applies to
+all matching facts; supply the conservative union if multiple reads share that
+key. This adapter does not claim a full causal path. A later path producer must
+retain actual edge identities separately.
+
+Explicit evidence cannot erase an input refusal, unknown rule, unreadable test
+or unresolved prediction. Destructive findings remain destructive under
+uncertainty. An uncertain safe input becomes warning; `raw_risk` still records
+the supplied value. `columns` never implies more certainty than `evidence.state`.
+
+Version 1 rule codes:
+
+- `ddl.model_removed`, `ddl.replace_table`, `ddl.replace_view`, `ddl.no_ddl`,
+  `ddl.add_column`, `ddl.drop_column`, `ddl.build_failure`, `ddl.stale_columns`,
+  `ddl.ignored_removal`, `ddl.ignored_addition`.
+- `ddl.contract_violation`, `ddl.materialization_changed`,
+  `ddl.schema_policy_changed`, `ddl.relation_changed`.
+- `ddl.verdict` for predictions with no operations; `ddl.review_required`,
+  `ddl.unknown_configuration`, `ddl.unknown_operation` for unresolved rules.
+- `cascade.broken_ref`, `cascade.build_failure`, `cascade.unit_test_failure`,
+  `cascade.unit_test_unreadable`, `cascade.inherited_drop`,
+  `cascade.inherited_change`, `cascade.data_test_failure`,
+  `cascade.data_test_unreadable`, `cascade.contract_violation`,
+  `cascade.unknown_risk`.
+- `input.refusal`.
+
+Built-in reason codes are `ddl_rule`, `unresolved_prediction`,
+`provenance_unavailable`, `ambiguous_resource`, `unresolved_resource`,
+`unknown_rule`, `unresolved_input`, `parse_failed`, `missing_manifest_resource`,
+`missing_compiled_sql`, `stale_source`, `baseline_missing`, `baseline_corrupt`,
+and `baseline_unknown`. Explicit evidence/refusal producers may add reason codes;
+consumers must preserve unfamiliar codes and require review rather than infer
+safety. Existing codes must not be reassigned to different meanings.
+
+## Transport migration and consumer examples
+
+During 0.x migration, add a `findings` array to existing report objects; preserve
+legacy fields and valid legacy fixtures. Absence of `findings` means an older
+report, not zero findings. This module changes no report schema or renderer.
+Transport validators and round-trip tests are #254's responsibility. Consumers
+must preserve unknown additive fields; a consumer that does not understand a
+rule, severity, risk or contract version must require review or return an error.
+No production JSON Schema dependency is needed by this producer.
+
+An acknowledged drop still yields `rule_code="ddl.drop_column"`,
+`severity="destructive"`, `raw_risk="destructive"`, `column="book_id"`.
+Record policy decisions separately; never remove or recolor that raw fact safe.
+If parsing also failed, retain the additional `input.refusal` with
+`evidence.reason_code="parse_failed"` and `waiver_allowed=false`.
+
+Two changed sources affecting the same reader produce two cascade facts with
+different source IDs. Do not deduplicate only by affected ID/rule. Ambiguous
+`orders` across `model.a.orders` and `model.b.orders` keeps both candidate IDs
+and no selected ID. A qualified `model.a.orders` resolves only that resource.
+Versioned nodes behave the same way; do not silently pick the latest version.
+
+Returned facts and all set-like column/candidate fields have deterministic
+ordering. Exact duplicate input facts remain duplicates; consumers must not
+interpret array position as a durable finding ID. `to_dict()` returns a fresh
+JSON-compatible object (tuples become arrays), suitable for additive transport
+fields. No consumer may convert a malformed report or missing evidence into
+a proven safe edge.
