@@ -80,7 +80,7 @@ jobs:
         with:
           python-version: "3.12"
       - run: pip install -e ".[test,dbt,mcp]" uv dbt-core==1.11.7 dbt-duckdb==1.10.1
-      - run: python .github/scripts/required-tests.py tests/test_dbt_e2e.py tests/test_mcp_server.py tests/test_mcp_plan_timeout.py tests/test_mcp_report_validation.py tests/test_review_safety_gaps.py tests/test_generated_ci_execution.py tests/test_generated_ci_install.py tests/test_action_e2e.py tests/test_compiled_fixture.py tests/test_snapshot_layout.py -q
+      - run: python .github/scripts/required-tests.py tests/test_dbt_e2e.py tests/test_mcp_server.py tests/test_mcp_plan_timeout.py tests/test_mcp_report_validation.py tests/test_review_safety_gaps.py tests/test_generated_ci_execution.py tests/test_generated_ci_install.py tests/test_action_e2e.py tests/test_compiled_fixture.py tests/test_snapshot_layout.py tests/test_snapshot_integrity.py tests/test_snapshot_atomic.py -q
 
       - name: Prepare real composite Action projects and current wheel
         id: action-projects

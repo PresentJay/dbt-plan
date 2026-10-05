@@ -12,6 +12,8 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
 
+from dbt_plan.snapshot_integrity import write_snapshot_inventory
+
 
 def _present(path: Path) -> bool:
     return path.exists() or path.is_symlink()
@@ -54,6 +56,7 @@ def staged_snapshot(project: Path, base: Path) -> Iterator[Path]:
     publishing = False
     try:
         yield stage
+        write_snapshot_inventory(stage)
         if _present(base):
             backup = Path(tempfile.mkdtemp(prefix=".snapshot-backup-", dir=base.parent)).absolute()
             previous = backup / "base"

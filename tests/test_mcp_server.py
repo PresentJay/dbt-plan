@@ -95,6 +95,8 @@ class TestRefusalsSurvive:
         _write(tmp_path, {"orders": "SELECT a, b FROM raw"}, _manifest({"orders": {}}))
         assert mcp_server.snapshot(str(tmp_path))["ok"]
         baseline = tmp_path / ".dbt-plan" / "base" / "manifest.json"
+        # This refusal report describes a historical, unrecorded baseline.
+        (baseline.parent / "inventory.json").unlink()
         if problem == "missing":
             baseline.unlink()
         else:

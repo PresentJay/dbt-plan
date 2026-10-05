@@ -94,6 +94,9 @@ def cli_report(tmp_path_factory):
         elif scenario == "refusal":
             after = "select ("
         (compiled / "orders.sql").write_text(after, encoding="utf-8")
+        if scenario in ("baseline_missing", "baseline_corrupt"):
+            # Completed warning reports remain available for historical snapshots.
+            (tmp_path / ".dbt-plan/base/inventory.json").unlink()
         if scenario == "baseline_missing":
             (tmp_path / ".dbt-plan/base/manifest.json").unlink()
         elif scenario == "baseline_corrupt":

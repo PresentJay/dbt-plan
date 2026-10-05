@@ -1045,6 +1045,16 @@ def _do_check(args: argparse.Namespace) -> int:
         )
         return ERROR_EXIT_CODE
 
+    # Integrity is an all-or-nothing boundary before reading baseline metadata
+    # or SQL. Selection/ignores must not hide a damaged snapshot.
+    from dbt_plan.snapshot_integrity import validate_snapshot_inventory
+
+    try:
+        integrity = validate_snapshot_inventory(base_dir)
+    except ValueError as e:
+        print(f"Error: {e}", file=sys.stderr)
+        return ERROR_EXIT_CODE
+
     # Resolve compiled SQL directories
     try:
         found = _find_compiled_dir(target_dir)
@@ -1059,6 +1069,7 @@ def _do_check(args: argparse.Namespace) -> int:
         base_compiled, base_model_dirs, provenance = read_snapshot_layout(
             base_dir, model_dirs, baseline_model_dirs
         )
+        provenance["integrity"] = integrity
     except (ValueError, OSError) as e:
         print(f"Error: {e}", file=sys.stderr)
         return ERROR_EXIT_CODE

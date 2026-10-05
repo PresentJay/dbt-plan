@@ -55,6 +55,7 @@ def test_new_snapshot_has_layout_version(project, capsys):
 @pytest.mark.parametrize("provenance", [False, True])
 def test_legacy_layouts_are_read_only_and_detect_drops(project, capsys, layout, provenance):
     base = project / ".dbt-plan/base"
+    (base / "inventory.json").unlink()  # Historical snapshots predate integrity inventories.
     if provenance:
         metadata(project, {"dbt_plan_version": "0.13.0"})
     else:
@@ -104,6 +105,7 @@ def test_unreadable_metadata_cannot_be_treated_as_legacy(project, capsys, raw):
 def test_declared_layout_mismatch_is_error(project, capsys, mismatch):
     metadata(project, {"layout_version": 1})
     base = project / ".dbt-plan/base"
+    (base / "inventory.json").unlink()  # Keep testing the historical layout boundary itself.
     compiled = base / "compiled"
     if mismatch == "missing-root":
         compiled.rename(base / "elsewhere")
@@ -177,6 +179,7 @@ def test_metadata_failure_preserves_versioned_baseline(project, monkeypatch):
 
 
 def test_declared_sql_layout_requires_model_directory(project, capsys):
+    (project / ".dbt-plan/base/inventory.json").unlink()  # Versioned, pre-inventory snapshot.
     shutil.rmtree(project / ".dbt-plan/base/compiled/models")
     assert _do_check(_check_args(project)) == 3
     output = capsys.readouterr()
@@ -187,6 +190,7 @@ def test_declared_sql_layout_requires_model_directory(project, capsys):
 @pytest.mark.parametrize("damage", ["missing", "corrupt"])
 @pytest.mark.parametrize("legacy", [False, True])
 def test_baseline_manifest_problem_remains_warning(project, capsys, damage, legacy):
+    (project / ".dbt-plan/base/inventory.json").unlink()  # Pre-inventory warning contract.
     if legacy:
         (project / ".dbt-plan/base/provenance.json").unlink()
     path = project / ".dbt-plan/base/manifest.json"
@@ -201,6 +205,7 @@ def test_baseline_manifest_problem_remains_warning(project, capsys, damage, lega
 
 def test_custom_non_model_sql_is_not_a_layout_mismatch(project, capsys):
     base = project / ".dbt-plan/base"
+    (base / "inventory.json").unlink()  # Exercise layout validation independently of hashes.
     tests = base / "compiled/checks"
     tests.mkdir()
     (tests / "assert_orders.sql").write_text("select 1")
@@ -241,6 +246,7 @@ def test_layout_status_is_derived_not_trusted(project, capsys):
     ],
 )
 def test_invalid_manifest_model_path_is_clear_error(project, capsys, declared):
+    (project / ".dbt-plan/base/inventory.json").unlink()  # Historical layout validation.
     path = project / ".dbt-plan/base/manifest.json"
     manifest = json.loads(path.read_text())
     manifest["nodes"]["model.my_project.orders"]["original_file_path"] = declared
@@ -261,6 +267,7 @@ def test_custom_model_path_manifest_problem_remains_warning(project, capsys, dam
     (target / "manifest.json").write_text(json.dumps(manifest))
     _do_snapshot(_snapshot_args(project))
     baseline_manifest = project / ".dbt-plan/base/manifest.json"
+    (baseline_manifest.parent / "inventory.json").unlink()  # Pre-inventory warning contract.
     if damage == "missing":
         baseline_manifest.unlink()
     else:
@@ -274,6 +281,7 @@ def test_custom_model_path_manifest_problem_remains_warning(project, capsys, dam
 
 @pytest.mark.parametrize("raw", ["null", "[]", '{"nodes": []}', '{"nodes": {"model.p.x": null}}'])
 def test_malformed_manifest_shape_refuses_without_traceback(project, capsys, raw):
+    (project / ".dbt-plan/base/inventory.json").unlink()  # Exercise legacy manifest validation.
     (project / ".dbt-plan/base/manifest.json").write_text(raw)
     assert _do_check(_check_args(project)) in (2, 3)
     output = capsys.readouterr()
@@ -297,6 +305,7 @@ def test_real_dbt_unversioned_layouts(renamed_paths_project, flatten):  # noqa: 
     result = _dbt_plan(["snapshot", "--project-dir", str(renamed_paths_project)])
     assert result.returncode == 0, result.stderr
     base = renamed_paths_project / ".dbt-plan/base"
+    (base / "inventory.json").unlink()  # Reproduce a genuinely historical snapshot.
     stored = json.loads((base / "provenance.json").read_text())
     del stored["layout_version"]
     (base / "provenance.json").write_text(json.dumps(stored))
