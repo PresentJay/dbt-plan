@@ -161,6 +161,16 @@ def plan(
     # Everything dbt-plan declined to judge, kept apart from the verdict rather than
     # folded into it. An empty list here is the only thing that makes "safe" mean safe.
     refusals: list[dict[str, Any]] = []
+    for fact in report.get("findings", []):
+        if fact["rule_code"] == "input.refusal":
+            refusals.append(
+                {
+                    "reason": fact["evidence"]["reason_code"],
+                    "models": [fact["affected"]["name"]] if fact["affected"] else [],
+                    "detail": fact["message"],
+                    "finding": fact,
+                }
+            )
     for kind, names in (
         ("columns_unreadable", report["parse_failures"]),
         ("missing_from_manifest", report["skipped_models"]),

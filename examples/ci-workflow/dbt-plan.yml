@@ -172,7 +172,7 @@ jobs:
                   nested.add("destructive" if impact["risk"] in ("broken_ref", "inherited_drop") else "warning")
           # The validator ships in the base wheel and imports only the stdlib.
           # Old pinned CLIs have no canonical field and need no new module.
-          if "findings" in data:
+          if "findings" in data or "causal_graph" in data:
               from dbt_plan_mcp.report_validation import validate_report, report_severity
               nested.add(report_severity(validate_report(data)))
           print("destructive" if counts["destructive"] or "destructive" in nested else

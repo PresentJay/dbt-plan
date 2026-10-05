@@ -5,10 +5,12 @@
   "type": "object",
   "required": ["summary", "models", "parse_failures", "stale_sources", "skipped_models", "uncompiled_models"],
   "additionalProperties": true,
+  "dependentRequired": {"causal_graph": ["findings"]},
   "properties": {
     "summary": {"$ref": "#/$defs/summary"},
     "models": {"type": "array", "items": {"$ref": "#/$defs/model"}},
     "findings": {"type": "array", "items": {"$ref": "#/$defs/finding"}},
+    "causal_graph": {"$ref": "#/$defs/causalGraph"},
     "ignored_models": {"$ref": "#/$defs/strings"},
     "unmatched_ignore_models": {"$ref": "#/$defs/strings"},
     "parse_failures": {"$ref": "#/$defs/strings"},
@@ -19,6 +21,66 @@
     "analysis": {"$ref": "#/$defs/analysis"}
   },
   "$defs": {
+    "graphResource": {
+      "allOf": [{"$ref": "#/$defs/resource"}, {"type": "object"}]
+    },
+    "causalGraph": {
+      "type": "object",
+      "required": ["nodes", "edges", "associations", "losses", "read_summaries", "has_cycles", "external_coverage"],
+      "additionalProperties": true,
+      "properties": {
+        "nodes": {"type": "array", "items": {"$ref": "#/$defs/causalNode"}},
+        "edges": {"type": "array", "items": {"$ref": "#/$defs/causalEdge"}},
+        "associations": {"type": "array", "items": {"$ref": "#/$defs/causalAssociation"}},
+        "losses": {"type": "array", "items": {"$ref": "#/$defs/causalLoss"}},
+        "read_summaries": {"type": "array", "items": {
+          "type": "object", "required": ["root", "resolved_empty_non_edges"], "additionalProperties": true,
+          "properties": {"root": {"$ref": "#/$defs/graphResource"}, "resolved_empty_non_edges": {"$ref": "#/$defs/count"}}
+        }},
+        "has_cycles": {"type": "boolean"},
+        "external_coverage": {"type": "string", "description": "Currently unknown, including reports with no impacts. Unknown future values require review."}
+      }
+    },
+    "causalNode": {
+      "type": "object", "additionalProperties": true,
+      "required": ["resource", "materialization", "on_schema_change", "columns_removed", "loss_evidence"],
+      "properties": {
+        "resource": {"$ref": "#/$defs/graphResource"},
+        "materialization": {"$ref": "#/$defs/nullableString"},
+        "on_schema_change": {"$ref": "#/$defs/nullableString"},
+        "columns_removed": {"$ref": "#/$defs/strings"},
+        "loss_evidence": {"anyOf": [{"type": "null"}, {"$ref": "#/$defs/evidence"}]}
+      }
+    },
+    "causalEdge": {
+      "type": "object", "additionalProperties": true,
+      "required": ["source", "target", "kind", "evidence", "columns_removed", "root", "revisions"],
+      "properties": {
+        "source": {"$ref": "#/$defs/graphResource"}, "target": {"$ref": "#/$defs/graphResource"},
+        "kind": {"type": "string", "description": "Unknown kinds require review; dependency and read_check never prove column flow."},
+        "evidence": {"$ref": "#/$defs/evidence"}, "columns_removed": {"$ref": "#/$defs/strings"},
+        "root": {"$ref": "#/$defs/resource"}, "revisions": {"$ref": "#/$defs/strings"}
+      }
+    },
+    "causalAssociation": {
+      "type": "object", "additionalProperties": true,
+      "required": ["finding_index", "source", "affected", "columns_added", "columns_removed", "evidence", "cause_finding_indices"],
+      "properties": {
+        "finding_index": {"$ref": "#/$defs/count"},
+        "source": {"$ref": "#/$defs/resource"}, "affected": {"$ref": "#/$defs/resource"},
+        "columns_added": {"$ref": "#/$defs/strings"}, "columns_removed": {"$ref": "#/$defs/strings"},
+        "evidence": {"$ref": "#/$defs/evidence"},
+        "cause_finding_indices": {"type": "array", "items": {"$ref": "#/$defs/count"}}
+      }
+    },
+    "causalLoss": {
+      "type": "object", "additionalProperties": true,
+      "required": ["root", "resource", "columns_removed", "evidence"],
+      "properties": {
+        "root": {"$ref": "#/$defs/graphResource"}, "resource": {"$ref": "#/$defs/graphResource"},
+        "columns_removed": {"$ref": "#/$defs/strings"}, "evidence": {"$ref": "#/$defs/evidence"}
+      }
+    },
     "resource": {
       "type": ["object", "null"],
       "required": ["name", "unique_id", "candidates"],

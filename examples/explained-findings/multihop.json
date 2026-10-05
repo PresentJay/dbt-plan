@@ -1,0 +1,663 @@
+{
+  "summary": {
+    "total": 1,
+    "safe": 0,
+    "warning": 0,
+    "destructive": 1,
+    "cascade_risks": 2
+  },
+  "models": [
+    {
+      "model_name": "root",
+      "materialization": "view",
+      "on_schema_change": null,
+      "safety": "destructive",
+      "operations": [
+        {
+          "operation": "CREATE OR REPLACE VIEW",
+          "column": null
+        }
+      ],
+      "columns_added": [],
+      "columns_removed": [],
+      "acknowledged": false,
+      "own_safety": "safe",
+      "own_waived": false,
+      "downstream": [
+        "mid",
+        "reader",
+        "report"
+      ],
+      "downstream_impacts": [
+        {
+          "model_name": "reader",
+          "risk": "inherited_drop",
+          "reason": "file unchanged, loses amount from upstream -- DROP COLUMN amount"
+        },
+        {
+          "model_name": "report",
+          "risk": "broken_ref",
+          "reason": "reads dropped column(s): amount"
+        }
+      ]
+    }
+  ],
+  "parse_failures": [],
+  "stale_sources": [],
+  "skipped_models": [],
+  "uncompiled_models": [],
+  "ignored_models": [],
+  "unmatched_ignore_models": [],
+  "analysis": {
+    "dialect": "duckdb",
+    "adapter_type": "duckdb",
+    "dialect_source": "manifest",
+    "baseline": {
+      "revision": "file-only-example",
+      "created_at": "2000-01-01T00:00:00+00:00",
+      "dbt_plan_version": "0.17.0",
+      "layout_version": 1,
+      "layout_status": "versioned",
+      "integrity": "verified"
+    },
+    "selection": null,
+    "unsupported_languages": []
+  },
+  "findings": [
+    {
+      "rule_code": "cascade.inherited_drop",
+      "source": {
+        "name": "root",
+        "unique_id": "model.shop.root",
+        "candidates": [
+          "model.shop.root"
+        ],
+        "original_file_path": "models/root.sql"
+      },
+      "affected": {
+        "name": "reader",
+        "unique_id": "model.shop.reader",
+        "candidates": [
+          "model.shop.reader"
+        ],
+        "original_file_path": "models/reader.sql"
+      },
+      "column": null,
+      "severity": "destructive",
+      "raw_risk": "inherited_drop",
+      "message": "file unchanged, loses amount from upstream -- DROP COLUMN amount",
+      "evidence": {
+        "origin": "legacy_cascade",
+        "state": "unknown",
+        "reason_code": "provenance_unavailable",
+        "columns": [],
+        "compiled_path": null
+      },
+      "uncertainty": [
+        "provenance_unavailable"
+      ],
+      "waiver_allowed": false,
+      "columns_added": [],
+      "columns_removed": [],
+      "contract_version": 1,
+      "columns": []
+    },
+    {
+      "rule_code": "cascade.broken_ref",
+      "source": {
+        "name": "root",
+        "unique_id": "model.shop.root",
+        "candidates": [
+          "model.shop.root"
+        ],
+        "original_file_path": "models/root.sql"
+      },
+      "affected": {
+        "name": "report",
+        "unique_id": "model.shop.report",
+        "candidates": [
+          "model.shop.report"
+        ],
+        "original_file_path": "models/report.sql"
+      },
+      "column": null,
+      "severity": "destructive",
+      "raw_risk": "broken_ref",
+      "message": "reads dropped column(s): amount",
+      "evidence": {
+        "origin": "legacy_cascade",
+        "state": "unknown",
+        "reason_code": "provenance_unavailable",
+        "columns": [],
+        "compiled_path": null
+      },
+      "uncertainty": [
+        "provenance_unavailable"
+      ],
+      "waiver_allowed": false,
+      "columns_added": [],
+      "columns_removed": [],
+      "contract_version": 1,
+      "columns": []
+    },
+    {
+      "rule_code": "ddl.replace_view",
+      "source": {
+        "name": "root",
+        "unique_id": "model.shop.root",
+        "candidates": [
+          "model.shop.root"
+        ],
+        "original_file_path": "models/root.sql"
+      },
+      "affected": {
+        "name": "root",
+        "unique_id": "model.shop.root",
+        "candidates": [
+          "model.shop.root"
+        ],
+        "original_file_path": "models/root.sql"
+      },
+      "column": null,
+      "severity": "safe",
+      "raw_risk": "safe",
+      "message": "CREATE OR REPLACE VIEW",
+      "evidence": {
+        "origin": "compiled_sql",
+        "state": "exact",
+        "reason_code": "column_diff_checked",
+        "columns": [
+          "amount",
+          "id"
+        ],
+        "compiled_path": "target/compiled/shop/models/root.sql"
+      },
+      "uncertainty": [],
+      "waiver_allowed": true,
+      "columns_added": [],
+      "columns_removed": [
+        "amount"
+      ],
+      "contract_version": 1,
+      "columns": [
+        "amount",
+        "id"
+      ]
+    }
+  ],
+  "causal_graph": {
+    "nodes": [
+      {
+        "resource": {
+          "name": "mid",
+          "unique_id": "model.shop.mid",
+          "candidates": [
+            "model.shop.mid"
+          ],
+          "original_file_path": "models/mid.sql"
+        },
+        "materialization": "ephemeral",
+        "on_schema_change": null,
+        "columns_removed": [
+          "amount"
+        ],
+        "loss_evidence": {
+          "origin": "resolved_columns",
+          "state": "unknown",
+          "reason_code": "output_loss_attribution_unproved",
+          "columns": [
+            "amount"
+          ],
+          "compiled_path": null
+        }
+      },
+      {
+        "resource": {
+          "name": "reader",
+          "unique_id": "model.shop.reader",
+          "candidates": [
+            "model.shop.reader"
+          ],
+          "original_file_path": "models/reader.sql"
+        },
+        "materialization": "incremental",
+        "on_schema_change": "sync_all_columns",
+        "columns_removed": [
+          "amount"
+        ],
+        "loss_evidence": {
+          "origin": "resolved_columns",
+          "state": "unknown",
+          "reason_code": "output_loss_attribution_unproved",
+          "columns": [
+            "amount"
+          ],
+          "compiled_path": null
+        }
+      },
+      {
+        "resource": {
+          "name": "report",
+          "unique_id": "model.shop.report",
+          "candidates": [
+            "model.shop.report"
+          ],
+          "original_file_path": "models/report.sql"
+        },
+        "materialization": "view",
+        "on_schema_change": null,
+        "columns_removed": [],
+        "loss_evidence": null
+      },
+      {
+        "resource": {
+          "name": "root",
+          "unique_id": "model.shop.root",
+          "candidates": [
+            "model.shop.root"
+          ],
+          "original_file_path": "models/root.sql"
+        },
+        "materialization": "view",
+        "on_schema_change": null,
+        "columns_removed": [
+          "amount"
+        ],
+        "loss_evidence": {
+          "origin": "resolved_columns",
+          "state": "unknown",
+          "reason_code": "output_loss_attribution_unproved",
+          "columns": [
+            "amount"
+          ],
+          "compiled_path": null
+        }
+      }
+    ],
+    "edges": [
+      {
+        "source": {
+          "name": "reader",
+          "unique_id": "model.shop.reader",
+          "candidates": [
+            "model.shop.reader"
+          ],
+          "original_file_path": "models/reader.sql"
+        },
+        "target": {
+          "name": "report",
+          "unique_id": "model.shop.report",
+          "candidates": [
+            "model.shop.report"
+          ],
+          "original_file_path": "models/report.sql"
+        },
+        "kind": "read",
+        "evidence": {
+          "origin": "resolved_read",
+          "state": "exact",
+          "reason_code": "read_checked",
+          "columns": [
+            "amount"
+          ],
+          "compiled_path": null
+        },
+        "columns_removed": [
+          "amount"
+        ],
+        "root": {
+          "name": "root",
+          "unique_id": "model.shop.root",
+          "candidates": [
+            "model.shop.root"
+          ],
+          "original_file_path": "models/root.sql"
+        },
+        "revisions": []
+      },
+      {
+        "source": {
+          "name": "mid",
+          "unique_id": "model.shop.mid",
+          "candidates": [
+            "model.shop.mid"
+          ],
+          "original_file_path": "models/mid.sql"
+        },
+        "target": {
+          "name": "reader",
+          "unique_id": "model.shop.reader",
+          "candidates": [
+            "model.shop.reader"
+          ],
+          "original_file_path": "models/reader.sql"
+        },
+        "kind": "dependency",
+        "evidence": {
+          "origin": "manifest",
+          "state": "unknown",
+          "reason_code": "dependency_not_column_flow",
+          "columns": [],
+          "compiled_path": null
+        },
+        "columns_removed": [],
+        "root": null,
+        "revisions": [
+          "base",
+          "current"
+        ]
+      },
+      {
+        "source": {
+          "name": "reader",
+          "unique_id": "model.shop.reader",
+          "candidates": [
+            "model.shop.reader"
+          ],
+          "original_file_path": "models/reader.sql"
+        },
+        "target": {
+          "name": "report",
+          "unique_id": "model.shop.report",
+          "candidates": [
+            "model.shop.report"
+          ],
+          "original_file_path": "models/report.sql"
+        },
+        "kind": "dependency",
+        "evidence": {
+          "origin": "manifest",
+          "state": "unknown",
+          "reason_code": "dependency_not_column_flow",
+          "columns": [],
+          "compiled_path": null
+        },
+        "columns_removed": [],
+        "root": null,
+        "revisions": [
+          "base",
+          "current"
+        ]
+      },
+      {
+        "source": {
+          "name": "root",
+          "unique_id": "model.shop.root",
+          "candidates": [
+            "model.shop.root"
+          ],
+          "original_file_path": "models/root.sql"
+        },
+        "target": {
+          "name": "mid",
+          "unique_id": "model.shop.mid",
+          "candidates": [
+            "model.shop.mid"
+          ],
+          "original_file_path": "models/mid.sql"
+        },
+        "kind": "dependency",
+        "evidence": {
+          "origin": "manifest",
+          "state": "unknown",
+          "reason_code": "dependency_not_column_flow",
+          "columns": [],
+          "compiled_path": null
+        },
+        "columns_removed": [],
+        "root": null,
+        "revisions": [
+          "base",
+          "current"
+        ]
+      },
+      {
+        "source": {
+          "name": "mid",
+          "unique_id": "model.shop.mid",
+          "candidates": [
+            "model.shop.mid"
+          ],
+          "original_file_path": "models/mid.sql"
+        },
+        "target": {
+          "name": "reader",
+          "unique_id": "model.shop.reader",
+          "candidates": [
+            "model.shop.reader"
+          ],
+          "original_file_path": "models/reader.sql"
+        },
+        "kind": "read_check",
+        "evidence": {
+          "origin": "resolved_read",
+          "state": "exact",
+          "reason_code": "read_checked",
+          "columns": [],
+          "compiled_path": null
+        },
+        "columns_removed": [],
+        "root": {
+          "name": "root",
+          "unique_id": "model.shop.root",
+          "candidates": [
+            "model.shop.root"
+          ],
+          "original_file_path": "models/root.sql"
+        },
+        "revisions": []
+      }
+    ],
+    "associations": [
+      {
+        "finding_index": 0,
+        "source": {
+          "name": "root",
+          "unique_id": "model.shop.root",
+          "candidates": [
+            "model.shop.root"
+          ],
+          "original_file_path": "models/root.sql"
+        },
+        "affected": {
+          "name": "reader",
+          "unique_id": "model.shop.reader",
+          "candidates": [
+            "model.shop.reader"
+          ],
+          "original_file_path": "models/reader.sql"
+        },
+        "columns_added": [],
+        "columns_removed": [
+          "amount"
+        ],
+        "evidence": {
+          "origin": "legacy_cascade",
+          "state": "unknown",
+          "reason_code": "provenance_unavailable",
+          "columns": [],
+          "compiled_path": null
+        },
+        "cause_finding_indices": [
+          2
+        ]
+      },
+      {
+        "finding_index": 1,
+        "source": {
+          "name": "root",
+          "unique_id": "model.shop.root",
+          "candidates": [
+            "model.shop.root"
+          ],
+          "original_file_path": "models/root.sql"
+        },
+        "affected": {
+          "name": "report",
+          "unique_id": "model.shop.report",
+          "candidates": [
+            "model.shop.report"
+          ],
+          "original_file_path": "models/report.sql"
+        },
+        "columns_added": [],
+        "columns_removed": [
+          "amount"
+        ],
+        "evidence": {
+          "origin": "legacy_cascade",
+          "state": "unknown",
+          "reason_code": "provenance_unavailable",
+          "columns": [],
+          "compiled_path": null
+        },
+        "cause_finding_indices": [
+          2
+        ]
+      },
+      {
+        "finding_index": 2,
+        "source": {
+          "name": "root",
+          "unique_id": "model.shop.root",
+          "candidates": [
+            "model.shop.root"
+          ],
+          "original_file_path": "models/root.sql"
+        },
+        "affected": {
+          "name": "root",
+          "unique_id": "model.shop.root",
+          "candidates": [
+            "model.shop.root"
+          ],
+          "original_file_path": "models/root.sql"
+        },
+        "columns_added": [],
+        "columns_removed": [
+          "amount"
+        ],
+        "evidence": {
+          "origin": "compiled_sql",
+          "state": "exact",
+          "reason_code": "column_diff_checked",
+          "columns": [
+            "amount",
+            "id"
+          ],
+          "compiled_path": "target/compiled/shop/models/root.sql"
+        },
+        "cause_finding_indices": [
+          2
+        ]
+      }
+    ],
+    "has_cycles": false,
+    "losses": [
+      {
+        "root": {
+          "name": "root",
+          "unique_id": "model.shop.root",
+          "candidates": [
+            "model.shop.root"
+          ],
+          "original_file_path": "models/root.sql"
+        },
+        "resource": {
+          "name": "mid",
+          "unique_id": "model.shop.mid",
+          "candidates": [
+            "model.shop.mid"
+          ],
+          "original_file_path": "models/mid.sql"
+        },
+        "columns_removed": [
+          "amount"
+        ],
+        "evidence": {
+          "origin": "resolved_columns",
+          "state": "unknown",
+          "reason_code": "output_loss_attribution_unproved",
+          "columns": [
+            "amount"
+          ],
+          "compiled_path": null
+        }
+      },
+      {
+        "root": {
+          "name": "root",
+          "unique_id": "model.shop.root",
+          "candidates": [
+            "model.shop.root"
+          ],
+          "original_file_path": "models/root.sql"
+        },
+        "resource": {
+          "name": "reader",
+          "unique_id": "model.shop.reader",
+          "candidates": [
+            "model.shop.reader"
+          ],
+          "original_file_path": "models/reader.sql"
+        },
+        "columns_removed": [
+          "amount"
+        ],
+        "evidence": {
+          "origin": "resolved_columns",
+          "state": "unknown",
+          "reason_code": "output_loss_attribution_unproved",
+          "columns": [
+            "amount"
+          ],
+          "compiled_path": null
+        }
+      },
+      {
+        "root": {
+          "name": "root",
+          "unique_id": "model.shop.root",
+          "candidates": [
+            "model.shop.root"
+          ],
+          "original_file_path": "models/root.sql"
+        },
+        "resource": {
+          "name": "root",
+          "unique_id": "model.shop.root",
+          "candidates": [
+            "model.shop.root"
+          ],
+          "original_file_path": "models/root.sql"
+        },
+        "columns_removed": [
+          "amount"
+        ],
+        "evidence": {
+          "origin": "resolved_columns",
+          "state": "unknown",
+          "reason_code": "output_loss_attribution_unproved",
+          "columns": [
+            "amount"
+          ],
+          "compiled_path": null
+        }
+      }
+    ],
+    "read_summaries": [
+      {
+        "root": {
+          "name": "root",
+          "unique_id": "model.shop.root",
+          "candidates": [
+            "model.shop.root"
+          ],
+          "original_file_path": "models/root.sql"
+        },
+        "resolved_empty_non_edges": 3
+      }
+    ],
+    "external_coverage": "unknown"
+  }
+}

@@ -708,6 +708,82 @@ def _ambiguous_acknowledgement_names(*manifests: dict) -> set[str]:
     return {name for name, ids in identities.items() if len(ids) > 1}
 
 
+def _attach_causal_explanations(result: CheckResult, manifest: dict, base_manifest: dict | None):
+    """Compose existing facts; unresolved actual reads need their own refusal.
+
+    Do not reinterpret candidate dependencies, empty reads or loss attribution.
+    Canonical own DDL and the existing known-risk acknowledgement policy survive.
+    """
+    from dataclasses import replace
+
+    from dbt_plan.explained_paths import explain_findings
+    from dbt_plan.findings import InputRefusal, findings_from_predictions
+
+    facts = list(result.findings or ())
+    observations = {}
+    for pred in result.predictions:
+        if pred.provenance is None:
+            continue
+        for read in pred.provenance.reads:
+            if read.columns_read is not None:
+                continue
+            observations.setdefault((pred.model_name, read.reader), read)
+    # Resolve all candidates in one adapter call: its manifest index is shared.
+    refusals = (
+        findings_from_predictions(
+            [],
+            manifest,
+            base_manifest=base_manifest,
+            ambiguous_resources=result.ambiguous_resources,
+            refusals=[
+                InputRefusal("read_unresolved", "Unresolved compiled SQL read", reader)
+                for reader in sorted({reader for _, reader in observations})
+            ],
+        )
+        if observations
+        else ()
+    )
+    by_reader = {fact.affected.name: fact for fact in refusals}
+    for (root, reader), read in sorted(observations.items()):
+        refusal = replace(
+            by_reader[reader],
+            message=f"Unresolved compiled SQL read from {read.source} while checking "
+            f"{root}; affected columns: {', '.join(read.columns_removed)}",
+        )
+        if any(
+            (
+                fact.affected == refusal.affected
+                or (
+                    fact.affected is not None
+                    and fact.affected.unique_id is not None
+                    and fact.affected.unique_id == refusal.affected.unique_id
+                )
+            )
+            and (
+                fact.rule_code == "input.refusal"
+                or (
+                    fact.severity != "safe"
+                    and (
+                        not fact.rule_code.startswith("cascade.")
+                        or (fact.source and fact.source.name == root)
+                    )
+                )
+            )
+            for fact in facts
+        ):
+            continue
+        facts.append(refusal)
+    result.findings = tuple(facts)
+    explained = explain_findings(
+        result.findings,
+        result.predictions,
+        manifest,
+        base_manifest=base_manifest,
+        ambiguous_resources=result.ambiguous_resources,
+    )
+    result.causal_graph = explained.to_dict()["graph"]
+
+
 def _exit_code_for(result: CheckResult, warning_exit_code: int, fail_on: str | None = None) -> int:
     """Map a check result to a process exit code.
 
@@ -737,7 +813,9 @@ def _exit_code_for(result: CheckResult, warning_exit_code: int, fail_on: str | N
         return 1
     if Safety.WARNING in active:
         return warning_exit_code
-    if result.parse_failures:
+    if result.parse_failures or any(
+        f.rule_code == "input.refusal" for f in (result.findings or ())
+    ):
         return warning_exit_code
     # Models dbt-plan could not examine are "unknown", not "safe", and both of
     # these were previously computed and then dropped on the floor: a model in
@@ -1419,6 +1497,7 @@ def _do_check(args: argparse.Namespace) -> int:
             unmatched_ignore_models=unmatched_ignore_models,
         )
         empty.findings = findings_from_result(empty, manifest, base_manifest=base_manifest)
+        _attach_causal_explanations(empty, manifest, base_manifest)
         if fmt == "json":
             print(format_json(empty))
         elif fmt == "github":
@@ -1915,6 +1994,7 @@ def _do_check(args: argparse.Namespace) -> int:
     check_result.findings = findings_from_result(
         fact_result, manifest, base_manifest=base_manifest, evidence=evidence
     )
+    _attach_causal_explanations(check_result, manifest, base_manifest)
     if fmt == "json":
         print(format_json(check_result))
     elif fmt == "github":
@@ -2101,7 +2181,7 @@ jobs:
                   nested.add("destructive" if impact["risk"] in ("broken_ref", "inherited_drop") else "warning")
           # The validator ships in the base wheel and imports only the stdlib.
           # Old pinned CLIs have no canonical field and need no new module.
-          if "findings" in data:
+          if "findings" in data or "causal_graph" in data:
               from dbt_plan_mcp.report_validation import validate_report, report_severity
               nested.add(report_severity(validate_report(data)))
           print("destructive" if counts["destructive"] or "destructive" in nested else
