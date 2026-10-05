@@ -315,10 +315,24 @@ def findings_from_predictions(
                 "ddl.unknown_configuration",
                 "ddl.unknown_operation",
             }
+            # These rules follow resource/configuration facts regardless of the
+            # column lists. Column-dependent verdicts need separate provenance.
+            column_independent = code in {
+                "ddl.replace_table",
+                "ddl.replace_view",
+                "ddl.model_removed",
+                "ddl.materialization_changed",
+                "ddl.schema_policy_changed",
+                "ddl.relation_changed",
+            } or (code == "ddl.verdict" and pred.materialization == "ephemeral")
             default = Evidence(
                 "prediction",
-                "unknown" if uncertain else "conservative",
-                "unresolved_prediction" if uncertain else "provenance_unavailable",
+                "unknown" if uncertain else "exact" if column_independent else "conservative",
+                "unresolved_prediction"
+                if uncertain
+                else "ddl_rule"
+                if column_independent
+                else "provenance_unavailable",
             )
             emit(
                 code,

@@ -98,16 +98,23 @@ Evidence `state` has exactly three meanings:
 
 | State | Meaning | Typical origin / reason |
 | --- | --- | --- |
-| `exact` | The stated fact was determined by that producer, with explicitly supplied provenance. | Explicit `resolved_columns` / `ddl_rule`, or `resolved_read` / `read_checked` |
+| `exact` | The stated fact follows a column-independent resource/configuration rule, or has explicitly supplied producer provenance. | `prediction` / `ddl_rule`, explicit `resolved_columns` / `ddl_rule`, or `resolved_read` / `read_checked` |
 | `conservative` | A fallback may over-report the relationship, or the prediction lacks evidence of how columns were obtained. | `prediction` / `provenance_unavailable`, or explicit `text_search` / `read_fallback` |
 | `unknown` | The input or provenance is unresolved. | `legacy_cascade` / `provenance_unavailable`, `input` / refusal code |
 
 Existing `DDLPrediction` does not retain whether its columns came from SQL or a
-manifest fallback. Known DDL operations therefore default to conservative
+manifest fallback. Column-dependent DDL operations therefore default to conservative
 `provenance_unavailable`, cannot be waived, and promote a raw safe verdict to
 warning. Raw destructive risk stays destructive. A caller that has proven the
 input origin can supply explicit exact evidence for the DDL rule; an operation
 name alone does not establish it. Unknown/review operations remain unknown.
+Column-independent rules retain exact evidence without column provenance:
+`ddl.replace_table`, `ddl.replace_view`, `ddl.model_removed`,
+`ddl.materialization_changed`, `ddl.schema_policy_changed`, `ddl.relation_changed`,
+and `ddl.verdict` for ephemeral materialization. In particular, table/view
+replacement remains safe when the rule is safe, even with unknown columns.
+An explicit unknown/conservative evidence entry still requires review for these
+rules; input refusals remain separate facts and are never erased.
 
 ### Handoff to #254's CLI evidence producer
 

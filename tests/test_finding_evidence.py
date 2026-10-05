@@ -403,3 +403,50 @@ def test_manifest_fallback_review_and_column_operation_both_retain_uncertainty()
     assert all(
         f.severity == "destructive" and f.uncertainty and not f.waiver_allowed for f in facts
     )
+
+
+@pytest.mark.parametrize("materialization", ["table", "view", "ephemeral"])
+def test_column_independent_ddl_does_not_require_column_provenance(materialization):
+    from dbt_plan.predictor import predict_ddl
+
+    pred = predict_ddl("orders", materialization, None, None, None)
+    (fact,) = findings_from_predictions([pred], manifest(("model.shop.orders", node())))
+    assert fact.severity == "safe"
+    assert fact.evidence.state == "exact"
+    assert fact.uncertainty == ()
+
+
+def test_reviewer_incremental_drop_requires_column_provenance():
+    from dbt_plan.predictor import predict_ddl
+
+    pred = predict_ddl("orders", "incremental", "sync_all_columns", ["id", "tax"], ["id"])
+    (fact,) = findings_from_predictions([pred], manifest(("model.shop.orders", node())))
+    assert fact.severity == "destructive"
+    assert fact.evidence.state == "conservative"
+    assert fact.uncertainty == ("provenance_unavailable",)
+    assert not fact.waiver_allowed
+
+
+def test_reviewer_vendor_path_without_project_metadata_is_withheld():
+    (fact,) = findings_from_predictions(
+        [prediction()],
+        manifest(("model.vendor.orders", node(original_file_path="models/orders.sql"))),
+    )
+    assert fact.source.unique_id == "model.vendor.orders"
+    assert fact.source.original_file_path is None
+
+
+@pytest.mark.parametrize(
+    "operation",
+    [
+        "MODEL REMOVED",
+        "MATERIALIZATION CHANGED: view -> table",
+        "on_schema_change CHANGED: ignore -> sync_all_columns",
+        "RELATION CHANGED (schema): old -> new",
+    ],
+)
+def test_resource_and_configuration_facts_do_not_require_column_provenance(operation):
+    pred = replace(prediction(), operations=[DDLOperation(operation)])
+    (fact,) = findings_from_predictions([pred], manifest(("model.shop.orders", node())))
+    assert fact.evidence.state == "exact"
+    assert fact.uncertainty == ()
