@@ -19,6 +19,7 @@ class ConfigError(ValueError):
 
 
 DEFAULT_DIALECT = "snowflake"
+FAIL_ON_CHOICES = ("destructive", "warning", "never")
 
 # dbt adapter names are mostly sqlglot dialect names already, so only the ones
 # that genuinely differ are listed. Anything sqlglot does not know falls back to
@@ -54,6 +55,7 @@ class Config:
     # the exit code. Named models only -- there is deliberately no "all".
     acknowledge_models: list[str] = field(default_factory=list)
     warning_exit_code: int = 2
+    fail_on: str | None = None
     format: str = "text"
     no_color: bool = False
     verbose: bool = False
@@ -78,11 +80,17 @@ class Config:
         return sqlglot_dialect_for_adapter(adapter_type) or self.dialect
 
     @classmethod
-    def load(cls, project_dir: str | Path = ".") -> Config:
-        """Load config from .dbt-plan.yml in project_dir, then overlay env vars."""
+    def load(cls, project_dir: str | Path = ".", *, fail_on: str | None = None) -> Config:
+        """Load file/env policy, apply the CLI override, then validate the result."""
         config = cls()
         config._load_file(Path(project_dir))
         config._load_env()
+        if fail_on is not None:
+            config.fail_on = fail_on
+        if config.fail_on is not None and config.fail_on not in FAIL_ON_CHOICES:
+            raise ConfigError(
+                f"Invalid fail_on={config.fail_on!r}; choose destructive, warning, or never"
+            )
         if config.warning_exit_code == 3:
             raise ConfigError(
                 "warning_exit_code=3 is reserved for execution errors; choose 0 or 2"
@@ -106,6 +114,7 @@ class Config:
         lines = text.splitlines()
         list_keys = {"ignore_models", "acknowledge_models"}
         known_keys = list_keys | {
+            "fail_on",
             "warning_exit_code",
             "format",
             "no_color",
@@ -180,6 +189,9 @@ class Config:
                     self._warn_config(project_dir, line_number, f"cannot understand {key}")
                 else:
                     self.acknowledge_models = parsed
+            elif key == "fail_on":
+                # Validate after overrides, just like reserved warning_exit_code.
+                self.fail_on = value
             elif key == "warning_exit_code":
                 try:
                     val = int(value)
@@ -270,6 +282,8 @@ class Config:
 
     def _load_env(self) -> None:
         """Override config with environment variables."""
+        if "DBT_PLAN_FAIL_ON" in os.environ:
+            self.fail_on = os.environ["DBT_PLAN_FAIL_ON"]
         if fmt := os.environ.get("DBT_PLAN_FORMAT"):
             if fmt in ("text", "github", "json"):
                 self.format = fmt

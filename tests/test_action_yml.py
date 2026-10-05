@@ -8,6 +8,7 @@ project does not tolerate. These tests pin the translation to the real thing.
 
 from __future__ import annotations
 
+import json
 import re
 import shlex
 import subprocess
@@ -25,8 +26,6 @@ ACTION_TEXT = ACTION.read_text(encoding="utf-8")
 
 # `dbt-plan <args>` inside the action's run: blocks, stopping at any redirect or pipe.
 _INVOCATION = re.compile(r"^\s*dbt-plan\s+(?P<args>.+?)\s*(?:[|>]|$)", re.M)
-# `  0) verdict=safe ;;` from the exit-code case statement.
-_VERDICT_CASE = re.compile(r"^\s*(?P<code>\d+)\)\s*verdict=(?P<verdict>\w+)", re.M)
 
 ARGPARSE_REJECTIONS = ("invalid choice", "unrecognized arguments", "expected one argument")
 
@@ -42,15 +41,25 @@ def _pred(name, safety, mat="incremental", osc="sync_all_columns"):
     )
 
 
-def _verdict_map() -> dict[int, str]:
-    return {int(m["code"]): m["verdict"] for m in _VERDICT_CASE.finditer(ACTION_TEXT)}
+def _report(code):
+    safety = {0: "safe", 1: "destructive", 2: "warning"}.get(code, "safe")
+    return json.dumps(
+        {
+            "summary": {
+                "total": 1,
+                **{k: int(k == safety) for k in ("safe", "warning", "destructive")},
+            },
+            "models": [{"model_name": "orders", "safety": safety}],
+        }
+    )
 
 
 class TestVerdictMapping:
-    """The case statement must agree with _exit_code_for, not with a comment."""
+    """Legacy policy codes stay stable; raw verdicts are tested in the shell suite."""
 
     def test_action_declares_all_three_verdicts(self):
-        assert _verdict_map() == {0: "safe", 1: "destructive", 2: "warning"}
+        assert 'counts["destructive"]' in ACTION_TEXT
+        assert "0) verdict=safe" not in ACTION_TEXT
 
     @pytest.mark.parametrize(
         "safety,expected",
@@ -62,14 +71,14 @@ class TestVerdictMapping:
     )
     def test_real_exit_code_maps_to_the_intended_verdict(self, safety, expected):
         code = _exit_code_for(CheckResult([_pred("int_orders", safety)]), warning_exit_code=2)
-        assert _verdict_map()[code] == expected
+        assert code == {"safe": 0, "destructive": 1, "warning": 2}[expected]
 
     def test_destructive_is_never_reported_as_safe(self):
         """The false-safe guard, stated directly rather than implied."""
         code = _exit_code_for(
             CheckResult([_pred("int_orders", Safety.DESTRUCTIVE)]), warning_exit_code=2
         )
-        assert _verdict_map()[code] != "safe"
+        assert code == 1
 
 
 class TestGate:
@@ -134,7 +143,7 @@ class TestSecrets:
 
 @pytest.mark.parametrize(
     "code,report,expected",
-    [(code, '{"summary": {}, "models": []}', 0 if code < 3 else 3) for code in range(4)]
+    [(code, _report(code), 0 if code < 3 else 3) for code in range(4)]
     + [(code, report, 3) for code in (0, 1, 2) for report in ("", "not JSON", "{}")],
 )
 def test_check_step_handles_verdicts_under_github_errexit(tmp_path, code, report, expected):
@@ -194,7 +203,7 @@ def test_dialect_is_optional_and_identical_in_every_report(tmp_path, dialect):
     recorder.write_text(
         "import json, os, sys\n"
         "with open(os.environ['ARGV_LOG'], 'a') as f: f.write(json.dumps(sys.argv[1:]) + '\\n')\n"
-        "print(json.dumps({'summary': {}, 'models': []}))\n"
+        "print(json.dumps({'summary': {'total': 0, 'safe': 0, 'warning': 0, 'destructive': 0}, 'models': []}))\n"
     )
     env = {
         **os.environ,

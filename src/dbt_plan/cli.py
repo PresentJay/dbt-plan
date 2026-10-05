@@ -696,13 +696,21 @@ def _ambiguous_acknowledgement_names(*manifests: dict) -> set[str]:
     return {name for name, ids in identities.items() if len(ids) > 1}
 
 
-def _exit_code_for(result: CheckResult, warning_exit_code: int) -> int:
+def _exit_code_for(result: CheckResult, warning_exit_code: int, fail_on: str | None = None) -> int:
     """Map a check result to a process exit code.
 
     Waive known findings only on the named affected resource. Raw aggregate
     severities remain intact for reports and MCP consumers.
     """
     from dbt_plan.predictor import RISK_SAFETY, Safety
+
+    # Only completed reports reach this function; errors are never policy verdicts.
+    if fail_on == "never":
+        return 0
+    if fail_on == "destructive":
+        warning_exit_code = 0
+    elif fail_on == "warning":
+        warning_exit_code = warning_exit_code or 2
 
     active = []
     for pred in result.predictions:
@@ -1008,7 +1016,7 @@ def _do_check(args: argparse.Namespace) -> int:
     project_dir = Path(args.project_dir)
 
     # Load config: .dbt-plan.yml → env vars → CLI flags (highest precedence)
-    config = Config.load(project_dir)
+    config = Config.load(project_dir, fail_on=getattr(args, "fail_on", None))
     # CLI flags override config/env (getattr for backward compat with tests)
     fmt = getattr(args, "format", None)
     if fmt is None:
@@ -1392,7 +1400,7 @@ def _do_check(args: argparse.Namespace) -> int:
             print(format_github(empty))
         else:
             print(format_text(empty, color=not no_color))
-        return _exit_code_for(empty, config.warning_exit_code)
+        return _exit_code_for(empty, config.warning_exit_code, config.fail_on)
 
     # 3. For each changed model: extract columns, predict DDL
     predictions = []
@@ -1814,7 +1822,7 @@ def _do_check(args: argparse.Namespace) -> int:
         print(format_text(check_result, color=not no_color))
 
     # 5. Exit code
-    return _exit_code_for(check_result, config.warning_exit_code)
+    return _exit_code_for(check_result, config.warning_exit_code, config.fail_on)
 
 
 _CI_WORKFLOW = """\
@@ -1938,14 +1946,58 @@ jobs:
           dbt compile
           code=0
           report="$RUNNER_TEMP/dbt-plan-report.json"
+          # Override only the new policy; retain legacy warning codes and acknowledgements.
+          # Older pinned packages ignore this environment variable (no new CLI flag).
+          export DBT_PLAN_FAIL_ON=warning
+          if ! policy=$(python -c 'from dbt_plan.config import Config; print("destructive" if Config.load().warning_exit_code == 0 else "warning")'); then
+            echo "::error::Could not resolve dbt-plan warning policy"
+            exit 3
+          fi
+          export DBT_PLAN_FAIL_ON="$policy"
           dbt-plan check --format json > "$report" || code=$?
           # Older releases also used codes 1/2 for execution failures. No report
           # means no verdict, regardless of a user-selected warning policy.
-          if ! python -c 'import json, sys; data = json.load(open(sys.argv[1], encoding="utf-8")); sys.exit(not (isinstance(data, dict) and isinstance(data.get("summary"), dict) and isinstance(data.get("models"), list)))' "$report" 2>/dev/null; then
+          if ! verdict=$(python - "$report" <<'PY'
+          import json, sys
+          with open(sys.argv[1], encoding="utf-8") as stream:
+              data = json.load(stream)
+          if not isinstance(data, dict):
+              raise ValueError("report must be an object")
+          summary, models = data.get("summary"), data.get("models")
+          if not isinstance(summary, dict) or not isinstance(models, list):
+              raise ValueError("report needs summary and models")
+          levels = ("safe", "warning", "destructive")
+          for key in ("total", *levels):
+              if type(summary.get(key)) is not int or summary[key] < 0:
+                  raise ValueError("invalid summary count")
+          counts = dict.fromkeys(levels, 0)
+          for model in models:
+              if not isinstance(model, dict) or model.get("safety") not in levels:
+                  raise ValueError("invalid model safety")
+              counts[model["safety"]] += 1
+          if summary["total"] != len(models) or any(summary[k] != counts[k] for k in levels):
+              raise ValueError("summary does not match models")
+          uncertain = False
+          for key in ("parse_failures", "skipped_models", "uncompiled_models", "stale_sources"):
+              values = data.get(key, [])
+              if not isinstance(values, list) or any(not isinstance(v, str) for v in values):
+                  raise ValueError("invalid uncertainty list")
+              uncertain = uncertain or bool(values)
+          if "baseline_problem" in data:
+              if not isinstance(data["baseline_problem"], str):
+                  raise ValueError("invalid baseline problem")
+              uncertain = uncertain or bool(data["baseline_problem"])
+          print("destructive" if counts["destructive"] else
+                "warning" if counts["warning"] or uncertain else "safe")
+          PY
+          ); then
             echo "::error::dbt-plan did not produce a completed JSON report (exit $code)"
             code=3
           fi
           echo "exit-code=$code" >> "$GITHUB_OUTPUT"
+          case "$code" in
+            0|1|2) echo "verdict=$verdict" >> "$GITHUB_OUTPUT" ;;
+          esac
 
       - name: Report
         continue-on-error: true
@@ -1958,6 +2010,14 @@ jobs:
           esac
           rendered=0
           markdown="$RUNNER_TEMP/dbt-plan-report.md"
+          # Override only the new policy; retain legacy warning codes and acknowledgements.
+          # Older pinned packages ignore this environment variable (no new CLI flag).
+          export DBT_PLAN_FAIL_ON=warning
+          if ! policy=$(python -c 'from dbt_plan.config import Config; print("destructive" if Config.load().warning_exit_code == 0 else "warning")'); then
+            echo "::error::Could not resolve dbt-plan warning policy"
+            exit 3
+          fi
+          export DBT_PLAN_FAIL_ON="$policy"
           dbt-plan check --format github > "$markdown" || rendered=$?
           case "$rendered" in
             0|1|2)
@@ -2191,7 +2251,7 @@ def _do_run(args: argparse.Namespace) -> int:
     against = getattr(args, "against", None)
 
     # Resolve compile command: CLI flag > config (env + file)
-    config = Config.load(project_dir)
+    config = Config.load(project_dir, fail_on=getattr(args, "fail_on", None))
     compile_command = getattr(args, "compile_command", None) or config.compile_command
 
     def _log(msg: str) -> None:
@@ -2374,6 +2434,7 @@ def _do_run(args: argparse.Namespace) -> int:
         dialect=dialect,
         select=select,
         acknowledge=acknowledge,
+        fail_on=config.fail_on,
     )
     return _do_check(check_args)
 
@@ -2381,6 +2442,7 @@ def _do_run(args: argparse.Namespace) -> int:
 def _main() -> None:
     _configure_output_streams()
     from dbt_plan import __version__
+    from dbt_plan.config import FAIL_ON_CHOICES
 
     parser = _ArgumentParser(
         prog="dbt-plan",
@@ -2458,6 +2520,12 @@ def _main() -> None:
             "and/or downstream. Use explicit version names (fct_orders_v2). "
             "Unsupported syntax and unknown names exit 3."
         ),
+    )
+    check.add_argument(
+        "--fail-on",
+        choices=FAIL_ON_CHOICES,
+        default=None,
+        help="Exit policy (CLI > DBT_PLAN_FAIL_ON > fail_on config > legacy warning_exit_code)",
     )
     check.add_argument(
         "--acknowledge",
@@ -2575,6 +2643,12 @@ def _main() -> None:
             "and/or downstream. Use explicit version names (fct_orders_v2). "
             "Unsupported syntax and unknown names exit 3."
         ),
+    )
+    run_cmd.add_argument(
+        "--fail-on",
+        choices=FAIL_ON_CHOICES,
+        default=None,
+        help="Exit policy (CLI > DBT_PLAN_FAIL_ON > fail_on config > legacy warning_exit_code)",
     )
     run_cmd.add_argument(
         "--acknowledge",
