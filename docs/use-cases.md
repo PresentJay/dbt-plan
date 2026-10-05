@@ -46,46 +46,85 @@ SAFE  dim_publishers (table)
 SAFE  fct_daily_sales (incremental, append_new_columns)
   ADD COLUMN  total_sales
 
-Canonical findings (before policy)
+Causal explanations (before policy)
 
-- SAFE ddl.replace_table: model.sample.dim_customers -> model.sample.dim_customers; CREATE OR REPLACE TABLE
-  Evidence: compiled_sql / exact / column_diff_checked; raw risk: safe; waiver eligible: true
-  Columns: country, created_at, customer_id, customer_tier; added: (none); removed: (none)
-  Compiled SQL: target/compiled/sample/models/dim_customers.sql
-
-- SAFE ddl.replace_table: model.sample.dim_publishers -> model.sample.dim_publishers; CREATE OR REPLACE TABLE
-  Evidence: compiled_sql / exact / column_diff_checked; raw risk: safe; waiver eligible: true
-  Columns: end_date, publisher_id, publisher_name, start_date; added: (none); removed: (none)
-  Compiled SQL: target/compiled/sample/models/dim_publishers.sql
-
-- SAFE ddl.add_column: model.sample.fct_daily_sales -> model.sample.fct_daily_sales; ADD COLUMN; column: total_sales
-  Evidence: compiled_sql / exact / column_diff_checked; raw risk: safe; waiver eligible: true
-  Columns: order_count, order_date, shipping_info, store_id, total_sales, unique_customers; added: total_sales; removed: (none)
-  Compiled SQL: target/compiled/sample/models/fct_daily_sales.sql
-
-- DESTRUCTIVE cascade.broken_ref: model.sample.int_order_enriched -> model.sample.fct_daily_sales; reads dropped column(s): shipping_info
-  Evidence: legacy_cascade / unknown / provenance_unavailable; raw risk: broken_ref; waiver eligible: false
+- DESTRUCTIVE cascade.broken_ref: source model.sample.int_order_enriched; affected model.sample.fct_daily_sales
+  reads dropped column(s): shipping_info
+  Source change: added billing_method, shipping_city; removed billing_info, shipping_info
+  Affected/evidence columns: (not recorded); evidence: legacy_cascade / unknown / provenance_unavailable; raw risk: broken_ref; waiver eligible: false
   Review: provenance_unavailable
+  Source config: materialized=incremental; on_schema_change=None
+  Affected config: materialized=incremental; on_schema_change=None
+  Step: model.sample.int_order_enriched -> model.sample.fct_daily_sales; exact direct compiled read; root attribution not established; removed shipping_info
+    Config: materialized=incremental; on_schema_change=None
 
-- DESTRUCTIVE ddl.drop_column: model.sample.int_order_enriched -> model.sample.int_order_enriched; DROP COLUMN; column: billing_info
-  Evidence: compiled_sql / exact / column_diff_checked; raw risk: destructive; waiver eligible: true
-  Columns: billing_info, billing_method, customer_id, order_date, order_id, revenue, shipping_city, shipping_info, store_id; added: billing_method, shipping_city; removed: billing_info, shipping_info
-  Compiled SQL: target/compiled/sample/models/int_order_enriched.sql
+- DESTRUCTIVE ddl.drop_column: source model.sample.int_order_enriched; affected model.sample.int_order_enriched
+  DROP COLUMN; column: billing_info
+  Source change: added billing_method, shipping_city; removed billing_info, shipping_info
+  Affected/evidence columns: billing_info, billing_method, customer_id, order_date, order_id, revenue, shipping_city, shipping_info; 1 columns omitted; evidence: compiled_sql / exact / column_diff_checked; raw risk: destructive; waiver eligible: true
+  Compiled SQL (not a source/Jinja line): target/compiled/sample/models/int_order_enriched.sql
+  Source config: materialized=incremental; on_schema_change=None
+  Affected config: materialized=incremental; on_schema_change=None
 
-- DESTRUCTIVE ddl.add_column: model.sample.int_order_enriched -> model.sample.int_order_enriched; ADD COLUMN; column: billing_method
-  Evidence: compiled_sql / exact / column_diff_checked; raw risk: destructive; waiver eligible: true
-  Columns: billing_info, billing_method, customer_id, order_date, order_id, revenue, shipping_city, shipping_info, store_id; added: billing_method, shipping_city; removed: billing_info, shipping_info
-  Compiled SQL: target/compiled/sample/models/int_order_enriched.sql
+- DESTRUCTIVE ddl.add_column: source model.sample.int_order_enriched; affected model.sample.int_order_enriched
+  ADD COLUMN; column: billing_method
+  Source change: added billing_method, shipping_city; removed billing_info, shipping_info
+  Affected/evidence columns: billing_info, billing_method, customer_id, order_date, order_id, revenue, shipping_city, shipping_info; 1 columns omitted; evidence: compiled_sql / exact / column_diff_checked; raw risk: destructive; waiver eligible: true
+  Compiled SQL (not a source/Jinja line): target/compiled/sample/models/int_order_enriched.sql
+  Source config: materialized=incremental; on_schema_change=None
+  Affected config: materialized=incremental; on_schema_change=None
 
-- DESTRUCTIVE ddl.add_column: model.sample.int_order_enriched -> model.sample.int_order_enriched; ADD COLUMN; column: shipping_city
-  Evidence: compiled_sql / exact / column_diff_checked; raw risk: destructive; waiver eligible: true
-  Columns: billing_info, billing_method, customer_id, order_date, order_id, revenue, shipping_city, shipping_info, store_id; added: billing_method, shipping_city; removed: billing_info, shipping_info
-  Compiled SQL: target/compiled/sample/models/int_order_enriched.sql
+- DESTRUCTIVE ddl.add_column: source model.sample.int_order_enriched; affected model.sample.int_order_enriched
+  ADD COLUMN; column: shipping_city
+  Source change: added billing_method, shipping_city; removed billing_info, shipping_info
+  Affected/evidence columns: billing_info, billing_method, customer_id, order_date, order_id, revenue, shipping_city, shipping_info; 1 columns omitted; evidence: compiled_sql / exact / column_diff_checked; raw risk: destructive; waiver eligible: true
+  Compiled SQL (not a source/Jinja line): target/compiled/sample/models/int_order_enriched.sql
+  Source config: materialized=incremental; on_schema_change=None
+  Affected config: materialized=incremental; on_schema_change=None
 
-- DESTRUCTIVE ddl.drop_column: model.sample.int_order_enriched -> model.sample.int_order_enriched; DROP COLUMN; column: shipping_info
-  Evidence: compiled_sql / exact / column_diff_checked; raw risk: destructive; waiver eligible: true
-  Columns: billing_info, billing_method, customer_id, order_date, order_id, revenue, shipping_city, shipping_info, store_id; added: billing_method, shipping_city; removed: billing_info, shipping_info
-  Compiled SQL: target/compiled/sample/models/int_order_enriched.sql
+- DESTRUCTIVE ddl.drop_column: source model.sample.int_order_enriched; affected model.sample.int_order_enriched
+  DROP COLUMN; column: shipping_info
+  Source change: added billing_method, shipping_city; removed billing_info, shipping_info
+  Affected/evidence columns: billing_info, billing_method, customer_id, order_date, order_id, revenue, shipping_city, shipping_info; 1 columns omitted; evidence: compiled_sql / exact / column_diff_checked; raw risk: destructive; waiver eligible: true
+  Compiled SQL (not a source/Jinja line): target/compiled/sample/models/int_order_enriched.sql
+  Source config: materialized=incremental; on_schema_change=None
+  Affected config: materialized=incremental; on_schema_change=None
+
+- WARNING input.refusal: source model.sample.dim_customers; affected model.sample.dim_customers
+  Unresolved compiled SQL read from int_order_enriched while checking int_order_enriched; affected columns: billing_info, shipping_info
+  Source change: not recorded
+  Affected/evidence columns: (not recorded); evidence: input / unknown / read_unresolved; raw risk: warning; waiver eligible: false
+  Review: read_unresolved
+  Source config: materialized=table; on_schema_change=None
+  Affected config: materialized=table; on_schema_change=None
+
+- SAFE ddl.replace_table: source model.sample.dim_customers; affected model.sample.dim_customers
+  CREATE OR REPLACE TABLE
+  Source change: not recorded
+  Affected/evidence columns: country, created_at, customer_id, customer_tier; evidence: compiled_sql / exact / column_diff_checked; raw risk: safe; waiver eligible: true
+  Compiled SQL (not a source/Jinja line): target/compiled/sample/models/dim_customers.sql
+  Source config: materialized=table; on_schema_change=None
+  Affected config: materialized=table; on_schema_change=None
+
+- SAFE ddl.replace_table: source model.sample.dim_publishers; affected model.sample.dim_publishers
+  CREATE OR REPLACE TABLE
+  Source change: not recorded
+  Affected/evidence columns: end_date, publisher_id, publisher_name, start_date; evidence: compiled_sql / exact / column_diff_checked; raw risk: safe; waiver eligible: true
+  Compiled SQL (not a source/Jinja line): target/compiled/sample/models/dim_publishers.sql
+  Source config: materialized=table; on_schema_change=None
+  Affected config: materialized=table; on_schema_change=None
+
+- SAFE ddl.add_column: source model.sample.fct_daily_sales; affected model.sample.fct_daily_sales
+  ADD COLUMN; column: total_sales
+  Source change: added total_sales; removed (not recorded)
+  Affected/evidence columns: order_count, order_date, shipping_info, store_id, total_sales, unique_customers; evidence: compiled_sql / exact / column_diff_checked; raw risk: safe; waiver eligible: true
+  Compiled SQL (not a source/Jinja line): target/compiled/sample/models/fct_daily_sales.sql
+  Source config: materialized=incremental; on_schema_change=None
+  Affected config: materialized=incremental; on_schema_change=None
+
+  Observation: model.sample.int_order_enriched -> model.sample.dim_customers; unknown read check; not a column-flow edge; columns (not recorded); read_unresolved
+Explanation detail omitted: 0 associations; 0 graph edges not displayed. Full relevant graph and findings: JSON.
+External consumer coverage: unknown. Exposures are declared consumers only.
 
 dbt-plan: 4 checked, 3 safe, 0 warning, 1 destructive, 1 cascade risk(s)
 ```

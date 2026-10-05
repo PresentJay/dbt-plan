@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import sys
+from collections import deque
 from dataclasses import dataclass, field
 
 from dbt_plan.findings import Finding
@@ -122,6 +123,7 @@ class CheckResult:
     unmatched_ignore_models: list[str] = field(default_factory=list)
     # None identifies legacy callers without producer provenance, not zero facts.
     findings: tuple[Finding, ...] | None = None
+    causal_graph: dict | None = None
 
     def is_acknowledged(self, pred: DDLPrediction) -> bool:
         return pred.model_name in self.acknowledge_models
@@ -211,6 +213,8 @@ def _ignore_sections(result: CheckResult, *, github: bool = False) -> list[str]:
 
 def _finding_sections(result: CheckResult, *, github: bool = False) -> list[str]:
     """Render every raw fact; existing model rows continue to describe exit policy."""
+    if result.causal_graph is not None:
+        return _causal_sections(result, github=github)
     if not result.findings:
         return []
     lines = [("#### " if github else "") + "Canonical findings (before policy)", ""]
@@ -250,6 +254,205 @@ def _finding_sections(result: CheckResult, *, github: bool = False) -> list[str]
     return lines
 
 
+# Local explanation limits; the existing #102 model/impact limits stay unchanged.
+_MAX_EXPLANATIONS = 10
+_MAX_ROUTE_STEPS = 8
+_MAX_EXPLANATION_COLUMNS = 8
+_MAX_EXPLANATION_LABEL = 240
+
+
+def _file_link(path: str) -> str:
+    """Encode a canonical relative path as UTF-8; no URL/network dependency."""
+    safe = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~/"
+    return "./" + "".join(chr(b) if b in safe else f"%{b:02X}" for b in path.encode("utf-8"))
+
+
+def _causal_sections(result: CheckResult, *, github: bool = False) -> list[str]:
+    """One representative BFS route per shown association, never all simple paths."""
+    graph = result.causal_graph
+    if graph is None:
+        return []
+
+    def label(value):
+        value = str(value)
+        value = "".join(c if c.isprintable() else " " for c in value)
+        if len(value) > _MAX_EXPLANATION_LABEL:
+            omitted = len(value) - _MAX_EXPLANATION_LABEL
+            value = value[:_MAX_EXPLANATION_LABEL] + f"… ({omitted} characters omitted)"
+        if github:
+            import html
+
+            value = html.escape(value)
+            for c in "\\`*_[]|":
+                value = value.replace(c, "\\" + c)
+        return value
+
+    def resource(ref):
+        if ref is None:
+            return "report"
+        name = label(ref["unique_id"] or ref["name"])
+        path = ref.get("original_file_path")
+        if path:
+            # Only canonical original paths are accepted; never compiled offsets.
+            if github and len(path) <= _MAX_EXPLANATION_LABEL:
+                name += f" ([{label(path)}]({_file_link(path)}))"
+            else:
+                name += f" ({label(path)})"
+        return name
+
+    def key(ref):
+        return json.dumps(ref, sort_keys=True)
+
+    def columns(values):
+        shown = ", ".join(label(c) for c in values[:_MAX_EXPLANATION_COLUMNS]) or "(not recorded)"
+        if len(values) > _MAX_EXPLANATION_COLUMNS:
+            shown += f"; {len(values) - _MAX_EXPLANATION_COLUMNS} columns omitted"
+        return shown
+
+    nodes = {key(n["resource"]): n for n in graph["nodes"]}
+    adjacency = {}
+    for index, edge in enumerate(graph["edges"]):
+        # Empty/nonmatching checks are observations, never traversable read flow.
+        if edge["kind"] == "read_check":
+            continue
+        adjacency.setdefault(key(edge["source"]), []).append((key(edge["target"]), index))
+    for edges in adjacency.values():
+        edges.sort(key=lambda pair: (pair[0], graph["edges"][pair[1]]["kind"] != "read", pair[1]))
+
+    lines = [("#### " if github else "") + "Causal explanations (before policy)", ""]
+    shown_edges = set()
+    associations = graph["associations"]
+    # Preserve canonical indices; sorting only chooses the human display order.
+    ordered = sorted(
+        associations,
+        key=lambda a: (
+            {"destructive": 0, "warning": 1, "safe": 2}.get(
+                result.findings[a["finding_index"]].severity, 1
+            ),
+            a["finding_index"],
+        ),
+    )
+    for association in ordered[:_MAX_EXPLANATIONS]:
+        fact = result.findings[association["finding_index"]]
+        lines.append(
+            f"- {fact.severity.upper()} {label(fact.rule_code)}: "
+            f"source {resource(association['source'])}; affected {resource(association['affected'])}"
+        )
+        lines.append(
+            f"  {label(fact.message)}" + (f"; column: {label(fact.column)}" if fact.column else "")
+        )
+        if association["columns_added"] or association["columns_removed"]:
+            lines.append(
+                f"  Source change: added {columns(association['columns_added'])}; "
+                f"removed {columns(association['columns_removed'])}"
+            )
+        else:
+            lines.append("  Source change: not recorded")
+        lines.append(
+            f"  Affected/evidence columns: {columns(fact.columns)}; "
+            f"evidence: {label(fact.evidence.origin)} / {label(fact.evidence.state)} / "
+            f"{label(fact.evidence.reason_code)}; raw risk: {label(fact.raw_risk)}; "
+            f"waiver eligible: {str(fact.waiver_allowed).lower()}"
+        )
+        if fact.evidence.compiled_path:
+            lines.append(
+                f"  Compiled SQL (not a source/Jinja line): {label(fact.evidence.compiled_path)}"
+            )
+        if fact.uncertainty:
+            lines.append(f"  Review: {columns(fact.uncertainty)}")
+        for role in ("source", "affected"):
+            node = nodes.get(key(association[role]))
+            if node:
+                lines.append(
+                    f"  {role.capitalize()} config: materialized={label(node['materialization'])}; "
+                    f"on_schema_change={label(node['on_schema_change'])}"
+                )
+        source, target = key(association["source"]), key(association["affected"])
+        if source != target:
+            parents = {source: None}
+            queue = deque([source])
+            while queue and target not in parents:
+                current = queue.popleft()
+                for other, index in adjacency.get(current, ()):
+                    if other not in parents:
+                        parents[other] = (current, index)
+                        queue.append(other)
+            route = []
+            current = target
+            while current in parents and parents[current] is not None:
+                current, index = parents[current]
+                route.append(index)
+            route.reverse()
+            if not route:
+                lines.append("  Route unknown/interrupted: association is not a direct read edge.")
+            for index in route[:_MAX_ROUTE_STEPS]:
+                edge = graph["edges"][index]
+                shown_edges.add(index)
+                ev = edge["evidence"]
+                status = (
+                    "candidate dependency; column flow unknown"
+                    if edge["kind"] == "dependency"
+                    else "declared consumer; column flow unknown"
+                    if edge["kind"] == "declared_consumer"
+                    else "exact direct compiled read; root attribution not established"
+                    if ev["state"] == "exact"
+                    else "fallback candidate read"
+                    if ev["state"] == "conservative"
+                    else "unknown read"
+                )
+                lines.append(
+                    f"  Step: {resource(edge['source'])} -> {resource(edge['target'])}; "
+                    f"{status}; removed {columns(edge['columns_removed'])}"
+                )
+                node = nodes.get(key(edge["target"]))
+                if node:
+                    lines.append(
+                        f"    Config: materialized={label(node['materialization'])}; "
+                        f"on_schema_change={label(node['on_schema_change'])}"
+                    )
+            if len(route) > _MAX_ROUTE_STEPS:
+                lines.append(f"  {len(route) - _MAX_ROUTE_STEPS} route steps omitted.")
+        lines.append("")
+    # Surface actual observations even when no source-to-affected route exists.
+    observations = [
+        i
+        for i, e in enumerate(graph["edges"])
+        if i not in shown_edges and e["kind"] in {"read", "read_check"}
+    ]
+    for index in observations[:_MAX_ROUTE_STEPS]:
+        edge = graph["edges"][index]
+        shown_edges.add(index)
+        ev = edge["evidence"]
+        status = (
+            "resolved read check; not a column-flow edge"
+            if edge["kind"] == "read_check" and ev["state"] == "exact"
+            else "unknown read check; not a column-flow edge"
+            if edge["kind"] == "read_check"
+            else "exact direct compiled read; root attribution not established"
+            if ev["state"] == "exact"
+            else "fallback candidate read"
+            if ev["state"] == "conservative"
+            else "unknown read"
+        )
+        lines.append(
+            f"  Observation: {resource(edge['source'])} -> {resource(edge['target'])}; "
+            f"{status}; columns {columns(ev['columns'])}; {label(ev['reason_code'])}"
+        )
+    omitted = max(0, len(associations) - _MAX_EXPLANATIONS)
+    lines.append(
+        f"Explanation detail omitted: {omitted} associations; "
+        f"{len(graph['edges']) - len(shown_edges)} graph edges not displayed. "
+        "Full relevant graph and findings: JSON."
+    )
+    if graph["has_cycles"]:
+        lines.append(
+            "Candidate dependency graph has cycles; representative routes use visited resources."
+        )
+    lines.append("External consumer coverage: unknown. Exposures are declared consumers only.")
+    lines.append("")
+    return lines
+
+
 def _analysis_header(result: CheckResult) -> str:
     if not result.analysis:
         return ""
@@ -279,8 +482,14 @@ def format_text(result: CheckResult, *, color: bool | None = None) -> str:
         return f"{c}{_BOLD}{text}{_RESET}"
 
     if _has_nothing_to_report(result):
-        return "dbt-plan -- no model changes detected" + (
-            "\n" + _analysis_header(result).rstrip() if result.analysis else ""
+        return (
+            "dbt-plan -- no model changes detected"
+            + ("\n" + _analysis_header(result).rstrip() if result.analysis else "")
+            + (
+                "\n" + "\n".join(_causal_sections(result))
+                if result.causal_graph is not None
+                else ""
+            )
         )
 
     sorted_preds = sorted(result.predictions, key=lambda p: _SAFETY_ORDER.get(p.safety, 9))
@@ -384,8 +593,14 @@ def _summary_line(result: CheckResult) -> str:
 def format_github(result: CheckResult) -> str:
     """Format result as GitHub-flavored markdown."""
     if _has_nothing_to_report(result):
-        return "### dbt-plan -- no model changes detected" + (
-            "\n\n" + _analysis_header(result).rstrip() if result.analysis else ""
+        return (
+            "### dbt-plan -- no model changes detected"
+            + ("\n\n" + _analysis_header(result).rstrip() if result.analysis else "")
+            + (
+                "\n\n" + "\n".join(_causal_sections(result, github=True))
+                if result.causal_graph is not None
+                else ""
+            )
         )
 
     sorted_preds = sorted(result.predictions, key=lambda p: _SAFETY_ORDER.get(p.safety, 9))
@@ -554,4 +769,6 @@ def format_json(result: CheckResult) -> str:
         output["analysis"] = result.analysis
     if result.findings is not None:
         output["findings"] = [fact.to_dict() for fact in result.findings]
+    if result.causal_graph is not None:
+        output["causal_graph"] = result.causal_graph
     return json.dumps(output, indent=2)

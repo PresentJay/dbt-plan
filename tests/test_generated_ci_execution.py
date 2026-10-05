@@ -87,6 +87,32 @@ def test_example_equals_generated_workflow():
 
 
 @pytest.mark.parametrize("wrapper", ["action", "generated"])
+@pytest.mark.parametrize("malformed_graph", [False, True])
+def test_graph_without_findings_cannot_bypass_validator(
+    tmp_path, environment, wrapper, malformed_graph
+):
+    from dbt_plan.formatter import CheckResult, format_json
+
+    data = json.loads(format_json(CheckResult()))
+    if malformed_graph:
+        data["causal_graph"] = {"edges": "malformed"}
+    environment.update(TARGET_DIR="target", DIALECT="", SUMMARY="false")
+    prefix = stub(0, json.dumps(data))
+    checked = (
+        shell(prefix + action_script("Check"), tmp_path, environment)
+        if wrapper == "action"
+        else execute("Check current", tmp_path, environment, prefix)
+    )
+    captured = outputs(environment)
+    if malformed_graph:
+        assert checked.returncode == 3 if wrapper == "action" else captured["exit-code"] == "3"
+        assert captured.get("verdict") != "safe"
+    else:
+        assert checked.returncode == 0, checked.stdout + checked.stderr
+        assert captured["verdict"] == "safe"
+
+
+@pytest.mark.parametrize("wrapper", ["action", "generated"])
 @pytest.mark.parametrize(
     "kind,expected",
     [

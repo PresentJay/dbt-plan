@@ -2,8 +2,11 @@
 
 `dbt_plan.findings` is a pure producer adapter. It reads Python objects already
 loaded by the caller; it performs no filesystem, database or network operations.
-The CLI supplies these facts to JSON, text, GitHub and MCP output. Causal paths
-belong to #255/#256; a source-to-affected pair is not a claim of an immediate edge.
+The CLI supplies these facts to JSON, text, GitHub and MCP output. The additive
+`causal_graph` field carries the relevant graph described in
+[causal-path-contract.md](causal-path-contract.md); a source-to-affected pair is
+not a claim of an immediate edge. See [explained-findings.md](explained-findings.md)
+for rendering limits, reproducible reports and transport validation.
 
 ## Entry points
 
@@ -209,6 +212,22 @@ paths. Existing model rows retain acknowledgement policy. JSON and MCP carry the
 same canonical array without rewriting it. MCP also forwards existing report
 fields, including analysis, ignore lists and unknown extensions; missing legacy
 fields are not synthesized. MCP's review verdict is spelled `review_required`.
+
+When `causal_graph` is present, the human section uses bounded causal explanations;
+JSON and MCP preserve the entire accompanying `findings` array and relevant
+graph. Graph association indices are local to that exact array. Legacy absence
+of the graph is valid and does not mean zero edges. Malformed graph structures
+or invalid references fail validation; unfamiliar graph semantics require review.
+Candidate dependencies, resolved-empty checks, unknown external coverage and
+unproved loss attribution alone do not elevate known safe resource rules.
+
+The CLI integrates actual unresolved reader observations not already represented
+by a risk/refusal as separate `input.refusal` facts (`read_unresolved`, warning,
+unwaivable). This preserves own DDL facts and proven column deltas. MCP forwards
+these in `refusals`; acknowledgements cannot waive them. Default warnings exit 2,
+while explicit fail-on policy and legacy warning exit settings still apply to
+the policy code without erasing the raw warning. No parser/inference behavior or
+canonical rule codes change.
 
 CLI compiled locations are relative to the resolved project root and use `/`
 separators. Resolving both paths keeps aliases such as macOS `/var` and
