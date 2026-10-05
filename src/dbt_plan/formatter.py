@@ -116,6 +116,9 @@ class CheckResult:
     analysis: dict = field(default_factory=dict)
     # Names resolving to more than one manifest resource cannot authorize a waiver.
     ambiguous_resources: set[str] = field(default_factory=set)
+    # Actual exact-policy exclusions, never prediction rows or evidence of safety.
+    ignored_models: list[str] = field(default_factory=list)
+    unmatched_ignore_models: list[str] = field(default_factory=list)
 
     def is_acknowledged(self, pred: DDLPrediction) -> bool:
         return pred.model_name in self.acknowledge_models
@@ -183,7 +186,23 @@ def _has_nothing_to_report(result: CheckResult) -> bool:
         or result.uncompiled_models
         or result.stale_sources
         or result.baseline_problem
+        or result.ignored_models
+        or result.unmatched_ignore_models
     )
+
+
+def _ignore_sections(result: CheckResult, *, github: bool = False) -> list[str]:
+    lines = []
+    for heading, names in (
+        ("Excluded by exact ignore policy (not checked)", result.ignored_models),
+        ("Unmatched ignore names (informational)", result.unmatched_ignore_models),
+    ):
+        if names:
+            lines.append(("#### " if github else "") + heading + ":")
+            lines.append("")
+            lines.extend(f"- {name}" for name in sorted(set(names)))
+            lines.append("")
+    return lines
 
 
 def _analysis_header(result: CheckResult) -> str:
@@ -294,6 +313,7 @@ def format_text(result: CheckResult, *, color: bool | None = None) -> str:
         lines.append("         This report covers only what compiled. Fix the compile and rerun.")
 
     # Summary line (grepable for CI: grep "^dbt-plan:" output)
+    lines.extend(_ignore_sections(result))
     lines.append(_summary_line(result))
 
     return "\n".join(lines)
@@ -400,6 +420,7 @@ def format_github(result: CheckResult) -> str:
             f" {names}. This report covers only what compiled."
         )
 
+    lines.extend(_ignore_sections(result, github=True))
     lines.append(f"\n`{_summary_line(result)}`")
 
     return "\n".join(lines)
@@ -477,6 +498,8 @@ def format_json(result: CheckResult) -> str:
         "stale_sources": result.stale_sources,
         "skipped_models": result.skipped_models,
         "uncompiled_models": result.uncompiled_models,
+        "ignored_models": sorted(set(result.ignored_models)),
+        "unmatched_ignore_models": sorted(set(result.unmatched_ignore_models)),
     }
     if result.baseline_problem:
         output["baseline_problem"] = result.baseline_problem

@@ -1071,13 +1071,7 @@ def _do_check(args: argparse.Namespace) -> int:
         print(f"Error: {e}", file=sys.stderr)
         return ERROR_EXIT_CODE
     _log(f"Found {len(model_diffs)} changed model(s)")
-    # Filter ignored models from config
-    if config.ignore_models:
-        before = len(model_diffs)
-        model_diffs = [d for d in model_diffs if d.model_name not in config.ignore_models]
-        ignored = before - len(model_diffs)
-        if ignored:
-            _log(f"Ignored {ignored} model(s) per config: {config.ignore_models}")
+    requested_ignores = set(config.ignore_models)
 
     # 2. Load manifests (current + base for removed model fallback)
     try:
@@ -1162,7 +1156,7 @@ def _do_check(args: argparse.Namespace) -> int:
         "language",
     )
     for name, node in node_index.items():
-        if name in already_changed or name in config.ignore_models:
+        if name in already_changed:
             continue
         raw = manifest.get("nodes", {}).get(node.node_id, {})
         old_node = base_node_index.get(name)
@@ -1189,9 +1183,7 @@ def _do_check(args: argparse.Namespace) -> int:
     # had and the current one does not is gone, whatever target/ still contains.
     already = {d.model_name for d in model_diffs}
     deleted = sorted(
-        name
-        for name in base_model_names
-        if name not in model_names and name not in already and name not in config.ignore_models
+        name for name in base_model_names if name not in model_names and name not in already
     )
     if deleted:
         base_sql_by_stem = {f.stem: f for f in iter_model_sql(base_compiled, base_model_dirs)}
@@ -1248,6 +1240,14 @@ def _do_check(args: argparse.Namespace) -> int:
                 f"Warning: --select matched no changed models. Filter: {select_models}",
                 file=sys.stderr,
             )
+    # Apply exact ignores after selection so the report names only actual
+    # exclusions, including manifest-only changes and deleted resources.
+    ignored_models = {d.model_name for d in model_diffs if d.model_name in requested_ignores}
+    model_diffs = [d for d in model_diffs if d.model_name not in requested_ignores]
+    unmatched_ignore_models = sorted(
+        requested_ignores - (model_names | base_model_names | set(current_paths) | set(base_paths))
+    )
+
     # `select * from {{ ref(x) }}` names a relation, not a model. These let the
     # column resolver follow that reference into the other model's compiled SQL.
     current_table_columns = _make_table_resolver(
@@ -1274,11 +1274,10 @@ def _do_check(args: argparse.Namespace) -> int:
     uncompiled_models = sorted(
         name
         for name in model_names
-        if name not in compiled_stems
-        and name not in config.ignore_models
-        and name not in non_sql_names
-        and name in relevant_names
+        if name not in compiled_stems and name not in non_sql_names and name in relevant_names
     )
+    ignored_models.update(requested_ignores.intersection(uncompiled_models))
+    uncompiled_models = [name for name in uncompiled_models if name not in requested_ignores]
     if uncompiled_models:
         _log(f"Uncompiled: {len(uncompiled_models)} manifest model(s) have no compiled SQL")
 
@@ -1288,11 +1287,12 @@ def _do_check(args: argparse.Namespace) -> int:
     missing_base = sorted(
         name
         for name in base_model_names
-        if name not in base_stems
-        and name not in config.ignore_models
-        and name not in non_sql_names
-        and name in relevant_names
+        if name not in base_stems and name not in non_sql_names and name in relevant_names
     )
+    ignored_models.update(requested_ignores.intersection(missing_base))
+    missing_base = [name for name in missing_base if name not in requested_ignores]
+    if ignored_models:
+        _log(f"Ignored {len(ignored_models)} model(s) per config: {sorted(ignored_models)}")
     if missing_base:
         baseline_problem = "Baseline compiled SQL is missing for: " + ", ".join(missing_base)
 
@@ -1377,6 +1377,8 @@ def _do_check(args: argparse.Namespace) -> int:
             stale_sources=stale_sources,
             baseline_problem=baseline_problem,
             analysis=analysis,
+            ignored_models=sorted(ignored_models),
+            unmatched_ignore_models=unmatched_ignore_models,
         )
         if fmt == "json":
             print(format_json(empty))
@@ -1795,6 +1797,8 @@ def _do_check(args: argparse.Namespace) -> int:
         baseline_problem=baseline_problem,
         analysis=analysis,
         ambiguous_resources=_ambiguous_acknowledgement_names(manifest, base_manifest or {}),
+        ignored_models=sorted(ignored_models),
+        unmatched_ignore_models=unmatched_ignore_models,
     )
     if fmt == "json":
         print(format_json(check_result))
