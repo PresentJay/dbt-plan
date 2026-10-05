@@ -8,11 +8,12 @@ import json
 import shutil
 import sys
 from collections.abc import Iterable, Sequence
-from pathlib import Path, PurePosixPath
+from pathlib import Path
 from typing import NamedTuple
 
 from dbt_plan.config import ConfigError
 from dbt_plan.formatter import CheckResult, format_github, format_json, format_text
+from dbt_plan.snapshot_layout import manifest_path_root
 
 ERROR_EXIT_CODE = 3
 
@@ -73,6 +74,16 @@ def _manifest_layout(target_dir: Path) -> tuple[str | None, tuple[str, ...]]:
     except (OSError, json.JSONDecodeError, UnicodeDecodeError):
         return None, ()
 
+    if (
+        not isinstance(manifest, dict)
+        or not isinstance(manifest.get("nodes", {}), dict)
+        or not isinstance(manifest.get("metadata", {}), dict)
+        or any(not isinstance(node, dict) for node in manifest.get("nodes", {}).values())
+    ):
+        raise ValueError(
+            f"Invalid manifest layout metadata in {target_dir / 'manifest.json'}. "
+            "Run 'dbt compile' and 'dbt-plan snapshot' again."
+        )
     metadata = manifest.get("metadata") or {}
     name = metadata.get("project_name")
     project = name if isinstance(name, str) and name else None
@@ -85,7 +96,7 @@ def _manifest_layout(target_dir: Path) -> tuple[str | None, tuple[str, ...]]:
             continue  # a package's models are compiled elsewhere and are not ours
         declared = node.get("original_file_path")
         if isinstance(declared, str) and declared:
-            model_dirs[PurePosixPath(declared).parts[0]] = None
+            model_dirs[manifest_path_root(declared)] = None
     return project, tuple(model_dirs)
 
 
@@ -330,6 +341,7 @@ def _find_compiled_dir(target_dir: Path) -> CompiledLayout | None:
 
 def _do_snapshot(args: argparse.Namespace) -> None:
     """Save current compiled state as baseline (compiled SQL + manifest)."""
+    from dbt_plan.snapshot_layout import LAYOUT_VERSION
     from dbt_plan.snapshot_store import staged_snapshot
 
     project_dir = Path(args.project_dir)
@@ -394,6 +406,7 @@ def _do_snapshot(args: argparse.Namespace) -> None:
                         "revision": revision,
                         "created_at": datetime.now(timezone.utc).isoformat(),
                         "dbt_plan_version": __version__,
+                        "layout_version": LAYOUT_VERSION,
                     }
                 ),
                 encoding="utf-8",
@@ -1025,24 +1038,24 @@ def _do_check(args: argparse.Namespace) -> int:
         return ERROR_EXIT_CODE
 
     # Resolve compiled SQL directories
-    base_compiled = base_dir / "compiled"
-    if not base_compiled.exists():
-        # Backward compat: old snapshot format stored SQL directly in base_dir
-        base_compiled = base_dir
-        _log(f"Using legacy snapshot format: {base_dir}")
-
     try:
         found = _find_compiled_dir(target_dir)
     except ValueError as e:
         print(f"Error: {e}", file=sys.stderr)
         return ERROR_EXIT_CODE
     current_compiled, model_dirs = found if found else (None, ())
-    # A snapshot taken before 0.14 was copied from inside the model directory, so
-    # the prefix is already gone and filtering by it would find nothing at all --
-    # which would report every model as added rather than saying the base is old.
-    base_model_dirs = (
-        model_dirs if any((base_compiled / name).is_dir() for name in model_dirs) else None
-    )
+    from dbt_plan.snapshot_layout import read_snapshot_layout
+
+    try:
+        _, baseline_model_dirs = _manifest_layout(base_dir)
+        base_compiled, base_model_dirs, provenance = read_snapshot_layout(
+            base_dir, model_dirs, baseline_model_dirs
+        )
+    except (ValueError, OSError) as e:
+        print(f"Error: {e}", file=sys.stderr)
+        return ERROR_EXIT_CODE
+    if provenance["layout_status"] == "legacy":
+        print("Baseline snapshot layout: legacy/unversioned (not verified).", file=sys.stderr)
     _log(f"Base compiled: {base_compiled} (model dirs: {base_model_dirs or 'legacy layout'})")
     _log(f"Current compiled: {current_compiled} (model dirs: {', '.join(model_dirs)})")
     if current_compiled is None:
@@ -1340,13 +1353,6 @@ def _do_check(args: argparse.Namespace) -> int:
         if path not in unrelated_paths
     ]
     stale_sources = sorted(set(stale_sources))
-    provenance = {"revision": None, "created_at": None}
-    try:
-        stored = json.loads((base_dir / "provenance.json").read_text(encoding="utf-8"))
-        if isinstance(stored, dict):
-            provenance.update(stored)
-    except (OSError, ValueError):
-        pass
     adapter = (manifest.get("metadata") or {}).get("adapter_type")
     analysis = {
         "dialect": dialect,

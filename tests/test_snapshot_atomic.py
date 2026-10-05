@@ -175,7 +175,9 @@ def test_success_replaces_complete_tree_and_metadata(tmp_path):
         "revision",
         "created_at",
         "dbt_plan_version",
+        "layout_version",
     }
+    assert json.loads((base / "provenance.json").read_text())["layout_version"] == 1
     assert list(base.parent.iterdir()) == [base]
 
 
