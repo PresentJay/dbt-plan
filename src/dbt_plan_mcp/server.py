@@ -22,6 +22,7 @@ declined to judge, it is worse than not existing.
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import sys
 from typing import Any
@@ -47,15 +48,36 @@ server = MCPServer(
 
 # 0 safe, 1 destructive, 2 could not decide. Anything else is dbt-plan failing to run.
 _VERDICTS = {0: "safe", 1: "destructive", 2: "review_required"}
+_PLAN_TIMEOUT_ENV = "DBT_PLAN_MCP_PLAN_TIMEOUT_SECONDS"
+
+
+class _PlanTimeoutConfigurationError(ValueError):
+    """The server's plan limit is invalid; no child has been started."""
+
+
+def _plan_timeout_seconds() -> int:
+    value = os.environ.get(_PLAN_TIMEOUT_ENV, "120").lstrip("0")
+    # Accept decimal digits only, and bound significant digits before int() so
+    # even an oversized setting produces a structured configuration error.
+    if value.isascii() and value.isdecimal() and len(value) <= 4:
+        seconds = int(value)
+        if 1 <= seconds <= 3600:
+            return seconds
+    raise _PlanTimeoutConfigurationError(
+        f"{_PLAN_TIMEOUT_ENV} must be an integer from 1 through 3600 (seconds)"
+    )
 
 
 def _run_cli(args: list[str]) -> subprocess.CompletedProcess[str]:
+    # Snapshot mutates the baseline and has no interruption/recovery contract.
+    timeout = _plan_timeout_seconds() if args[0] == "check" else None
     return subprocess.run(
         [sys.executable, "-m", "dbt_plan.cli", *args],
         capture_output=True,
         text=True,
         encoding="utf-8",
         errors="replace",
+        timeout=timeout,
     )
 
 
@@ -95,7 +117,19 @@ def plan(
     if select:
         args += ["--select", select]
 
-    result = _run_cli(args)
+    try:
+        result = _run_cli(args)
+    except _PlanTimeoutConfigurationError as exc:
+        return {"verdict": "error", "reason": "configuration_error", "error": str(exc)}
+    except subprocess.TimeoutExpired as exc:
+        # subprocess.run kills and waits for its child before raising. Neither
+        # partial stdout nor stderr establishes a completed analysis.
+        return {
+            "verdict": "error",
+            "reason": "timeout",
+            "timeout_seconds": exc.timeout,
+            "error": f"dbt-plan analysis timed out after {exc.timeout} seconds",
+        }
 
     # Exit 2 means two different things: "I could not decide" and "I could not run".
     # The CLI returns it for a review-required verdict and for a missing baseline
