@@ -2,6 +2,7 @@
 
 import argparse
 import json
+import os
 import subprocess
 from unittest.mock import Mock
 
@@ -151,7 +152,9 @@ def test_invalid_policy_cli_is_configuration_error(tmp_path, monkeypatch, source
         monkeypatch.setenv("DBT_PLAN_FAIL_ON", value)
     else:
         args += ["--fail-on", value]
-    proc = invoke(tmp_path, *args)
+    # Windows putenv removes an empty native variable even though os.environ
+    # retains it. Pass the mapping explicitly to exercise a present empty value.
+    proc = invoke(tmp_path, *args, env=os.environ.copy())
     assert proc.returncode == 3
     assert "fail_on" in proc.stderr or "--fail-on" in proc.stderr
     assert not proc.stdout
