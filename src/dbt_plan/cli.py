@@ -1936,14 +1936,58 @@ jobs:
           dbt compile
           code=0
           report="$RUNNER_TEMP/dbt-plan-report.json"
+          # Override only the new policy; retain legacy warning codes and acknowledgements.
+          # Older pinned packages ignore this environment variable (no new CLI flag).
+          export DBT_PLAN_FAIL_ON=warning
+          if ! policy=$(python -c 'from dbt_plan.config import Config; print("destructive" if Config.load().warning_exit_code == 0 else "warning")'); then
+            echo "::error::Could not resolve dbt-plan warning policy"
+            exit 3
+          fi
+          export DBT_PLAN_FAIL_ON="$policy"
           dbt-plan check --format json > "$report" || code=$?
           # Older releases also used codes 1/2 for execution failures. No report
           # means no verdict, regardless of a user-selected warning policy.
-          if ! python -c 'import json, sys; data = json.load(open(sys.argv[1], encoding="utf-8")); sys.exit(not (isinstance(data, dict) and isinstance(data.get("summary"), dict) and isinstance(data.get("models"), list)))' "$report" 2>/dev/null; then
+          if ! verdict=$(python - "$report" <<'PY'
+          import json, sys
+          with open(sys.argv[1], encoding="utf-8") as stream:
+              data = json.load(stream)
+          if not isinstance(data, dict):
+              raise ValueError("report must be an object")
+          summary, models = data.get("summary"), data.get("models")
+          if not isinstance(summary, dict) or not isinstance(models, list):
+              raise ValueError("report needs summary and models")
+          levels = ("safe", "warning", "destructive")
+          for key in ("total", *levels):
+              if type(summary.get(key)) is not int or summary[key] < 0:
+                  raise ValueError("invalid summary count")
+          counts = dict.fromkeys(levels, 0)
+          for model in models:
+              if not isinstance(model, dict) or model.get("safety") not in levels:
+                  raise ValueError("invalid model safety")
+              counts[model["safety"]] += 1
+          if summary["total"] != len(models) or any(summary[k] != counts[k] for k in levels):
+              raise ValueError("summary does not match models")
+          uncertain = False
+          for key in ("parse_failures", "skipped_models", "uncompiled_models", "stale_sources"):
+              values = data.get(key, [])
+              if not isinstance(values, list) or any(not isinstance(v, str) for v in values):
+                  raise ValueError("invalid uncertainty list")
+              uncertain = uncertain or bool(values)
+          if "baseline_problem" in data:
+              if not isinstance(data["baseline_problem"], str):
+                  raise ValueError("invalid baseline problem")
+              uncertain = uncertain or bool(data["baseline_problem"])
+          print("destructive" if counts["destructive"] else
+                "warning" if counts["warning"] or uncertain else "safe")
+          PY
+          ); then
             echo "::error::dbt-plan did not produce a completed JSON report (exit $code)"
             code=3
           fi
           echo "exit-code=$code" >> "$GITHUB_OUTPUT"
+          case "$code" in
+            0|1|2) echo "verdict=$verdict" >> "$GITHUB_OUTPUT" ;;
+          esac
 
       - name: Report
         continue-on-error: true
@@ -1956,6 +2000,14 @@ jobs:
           esac
           rendered=0
           markdown="$RUNNER_TEMP/dbt-plan-report.md"
+          # Override only the new policy; retain legacy warning codes and acknowledgements.
+          # Older pinned packages ignore this environment variable (no new CLI flag).
+          export DBT_PLAN_FAIL_ON=warning
+          if ! policy=$(python -c 'from dbt_plan.config import Config; print("destructive" if Config.load().warning_exit_code == 0 else "warning")'); then
+            echo "::error::Could not resolve dbt-plan warning policy"
+            exit 3
+          fi
+          export DBT_PLAN_FAIL_ON="$policy"
           dbt-plan check --format github > "$markdown" || rendered=$?
           case "$rendered" in
             0|1|2)

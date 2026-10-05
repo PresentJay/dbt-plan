@@ -67,9 +67,27 @@ dbt-plan run --fail-on destructive
 DBT_PLAN_FAIL_ON=never dbt-plan check --format json
 ```
 
-The Action's `fail-on: destructive|warning|never` applies only after a completed
-check; code 3 fails the Check step before the Gate step, even for `never`. The Action
-also requires a JSON report with summary/model data before accepting a verdict, so
+The Action's `fail-on: destructive|warning|never` and generated workflow's
+`FAIL_ON` own the CI gate. Their analysis and rendering calls override the new
+file/environment `fail_on` setting while retaining legacy `warning_exit_code`
+and resource acknowledgements. In particular, `warning_exit_code: 0` still opts
+out of warnings even when the Action input is `warning`. This differs deliberately
+from the explicit CLI `--fail-on warning`, which forces warnings to fail.
+The wrappers set the override before reading configuration; an invalid lower
+`fail_on` cannot prevent that override. Other configuration errors still fail.
+Only an environment variable is used, so pinned older CLIs need no new option
+and keep their existing behavior.
+
+The Action's `verdict` output now describes raw JSON findings independently of
+its `exit-code` output. Acknowledged destructive findings can therefore produce
+`verdict=destructive` with `exit-code=0`; warning opt-out produces
+`verdict=warning` with `exit-code=0`. The gate uses the policy code, not the raw
+verdict. A zero code does not establish safety. The generated Check step exposes
+the same separate outputs.
+
+Policy applies only after a completed check; code 3 fails the Action Check step
+before the Gate step, even for `never`. The wrappers require consistent JSON
+summary counts and model safety values, and validate uncertainty fields, so
 legacy package errors that exit 1 or 2 without a report still fail the step. The Action
 continues to recognize standard verdict codes 0/1/2; custom warning codes outside
 those values fail its Check step. Custom policies can change the exit status, so
