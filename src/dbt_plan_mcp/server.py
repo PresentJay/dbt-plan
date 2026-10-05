@@ -29,7 +29,7 @@ from typing import Any
 
 from mcp.server.mcpserver import MCPServer
 
-from dbt_plan_mcp.report_validation import ReportValidationError, validate_report
+from dbt_plan_mcp.report_validation import ReportValidationError, report_severity, validate_report
 
 server = MCPServer(
     name="dbt-plan",
@@ -198,17 +198,10 @@ def plan(
 
     verdict = _VERDICTS[result.returncode]
     # A waiver changes the exit policy, not what the analysis found.
-    findings = {model["safety"] for model in report["models"]}
-    # Read raw cascade findings too: an inconsistent parent severity must not
-    # hide a destructive child. New risk strings retain review-level uncertainty.
-    for model in report["models"]:
-        for impact in model.get("downstream_impacts", []):
-            findings.add(
-                "destructive" if impact["risk"] in {"broken_ref", "inherited_drop"} else "warning"
-            )
-    if "destructive" in findings:
+    raw_severity = report_severity(report)
+    if raw_severity == "destructive":
         verdict = "destructive"
-    elif "warning" in findings and verdict == "safe":
+    elif raw_severity == "warning" and verdict == "safe":
         verdict = "review_required"
     # warning_exit_code is configurable, so exit 0 alone does not guarantee that
     # every model was judged. Refusals always require human review.
@@ -216,6 +209,7 @@ def plan(
         verdict = "review_required"
 
     return {
+        **report,
         "verdict": verdict,
         "exit_code": result.returncode,
         "summary": report["summary"],

@@ -6,6 +6,7 @@ import json
 import sys
 from dataclasses import dataclass, field
 
+from dbt_plan.findings import Finding
 from dbt_plan.predictor import RISK_SAFETY, DDLPrediction, Safety
 
 _SAFETY_ORDER = {Safety.DESTRUCTIVE: 0, Safety.WARNING: 1, Safety.SAFE: 2}
@@ -119,6 +120,8 @@ class CheckResult:
     # Actual exact-policy exclusions, never prediction rows or evidence of safety.
     ignored_models: list[str] = field(default_factory=list)
     unmatched_ignore_models: list[str] = field(default_factory=list)
+    # None identifies legacy callers without producer provenance, not zero facts.
+    findings: tuple[Finding, ...] | None = None
 
     def is_acknowledged(self, pred: DDLPrediction) -> bool:
         return pred.model_name in self.acknowledge_models
@@ -188,6 +191,7 @@ def _has_nothing_to_report(result: CheckResult) -> bool:
         or result.baseline_problem
         or result.ignored_models
         or result.unmatched_ignore_models
+        or result.findings
     )
 
 
@@ -202,6 +206,47 @@ def _ignore_sections(result: CheckResult, *, github: bool = False) -> list[str]:
             lines.append("")
             lines.extend(f"- {name}" for name in sorted(set(names)))
             lines.append("")
+    return lines
+
+
+def _finding_sections(result: CheckResult, *, github: bool = False) -> list[str]:
+    """Render every raw fact; existing model rows continue to describe exit policy."""
+    if not result.findings:
+        return []
+    lines = [("#### " if github else "") + "Canonical findings (before policy)", ""]
+    for fact in result.findings:
+
+        def resource(ref):
+            if ref is None:
+                return "report"
+            label = ref.unique_id or ref.name
+            if ref.candidates and ref.unique_id is None:
+                label += " [candidates: " + ", ".join(ref.candidates) + "]"
+            if ref.original_file_path:
+                label += f" ({ref.original_file_path})"
+            return label
+
+        lines.append(
+            f"- {fact.severity.upper()} {fact.rule_code}: "
+            f"{resource(fact.source)} -> {resource(fact.affected)}; {fact.message}"
+            + (f"; column: {fact.column}" if fact.column else "")
+        )
+        ev = fact.evidence
+        lines.append(
+            f"  Evidence: {ev.origin} / {ev.state} / {ev.reason_code}; "
+            f"raw risk: {fact.raw_risk}; waiver eligible: {str(fact.waiver_allowed).lower()}"
+        )
+        if fact.columns or fact.columns_added or fact.columns_removed:
+            lines.append(
+                f"  Columns: {', '.join(fact.columns) or '(none)'}; "
+                f"added: {', '.join(fact.columns_added) or '(none)'}; "
+                f"removed: {', '.join(fact.columns_removed) or '(none)'}"
+            )
+        if ev.compiled_path:
+            lines.append(f"  Compiled SQL: {ev.compiled_path}")
+        if fact.uncertainty:
+            lines.append("  Review: " + ", ".join(fact.uncertainty))
+        lines.append("")
     return lines
 
 
@@ -313,6 +358,7 @@ def format_text(result: CheckResult, *, color: bool | None = None) -> str:
         lines.append("         This report covers only what compiled. Fix the compile and rerun.")
 
     # Summary line (grepable for CI: grep "^dbt-plan:" output)
+    lines.extend(_finding_sections(result))
     lines.extend(_ignore_sections(result))
     lines.append(_summary_line(result))
 
@@ -420,6 +466,7 @@ def format_github(result: CheckResult) -> str:
             f" {names}. This report covers only what compiled."
         )
 
+    lines.extend(_finding_sections(result, github=True))
     lines.extend(_ignore_sections(result, github=True))
     lines.append(f"\n`{_summary_line(result)}`")
 
@@ -505,4 +552,6 @@ def format_json(result: CheckResult) -> str:
         output["baseline_problem"] = result.baseline_problem
     if result.analysis:
         output["analysis"] = result.analysis
+    if result.findings is not None:
+        output["findings"] = [fact.to_dict() for fact in result.findings]
     return json.dumps(output, indent=2)

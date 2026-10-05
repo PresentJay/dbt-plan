@@ -34,6 +34,18 @@ def _read_diff_sql(cached: str | None, path: Path | None) -> str | None:
         return None
 
 
+def _compiled_evidence_path(path: Path | None, project_dir: Path) -> str | None:
+    """Expose only a portable compiled location within the actual project root."""
+    if path is None:
+        return None
+    try:
+        return path.resolve().relative_to(project_dir.resolve()).as_posix()
+    except (ValueError, OSError, RuntimeError):
+        # External baselines and unresolvable paths have no project-relative
+        # location. Withhold it rather than fabricate a source or leak a host path.
+        return None
+
+
 def _configure_output_streams() -> None:
     """Write CLI output as UTF-8 even when Windows defaults to a legacy code page.
 
@@ -991,6 +1003,7 @@ def _do_check(args: argparse.Namespace) -> int:
     from dbt_plan.columns import extract_cast_types, extract_column_details, extract_columns
     from dbt_plan.config import Config, sqlglot_dialect_for_adapter
     from dbt_plan.diff import ModelDiff, diff_compiled_dirs, iter_model_sql, iter_non_model_sql
+    from dbt_plan.findings import Evidence, findings_from_result
     from dbt_plan.manifest import (
         ModelNode,
         build_data_test_index,
@@ -1405,6 +1418,7 @@ def _do_check(args: argparse.Namespace) -> int:
             ignored_models=sorted(ignored_models),
             unmatched_ignore_models=unmatched_ignore_models,
         )
+        empty.findings = findings_from_result(empty, manifest, base_manifest=base_manifest)
         if fmt == "json":
             print(format_json(empty))
         elif fmt == "github":
@@ -1419,6 +1433,7 @@ def _do_check(args: argparse.Namespace) -> int:
     skipped_models: list[str] = []
     model_node_ids: dict[str, str] = {}  # model_name → node_id for batch downstream
     model_cols: dict[str, tuple[list[str] | None, list[str] | None]] = {}  # for cascade
+    column_evidence: dict[str, Evidence] = {}
 
     for diff in model_diffs:
         # O(1) lookup via index instead of O(N) scan
@@ -1508,6 +1523,41 @@ def _do_check(args: argparse.Namespace) -> int:
                     "  SELECT * detected — cannot diff columns. "
                     "Add explicit column list or use ignore_models in .dbt-plan.yml"
                 )
+
+        # Capture the producer's actual resolution outcome before policy or
+        # cascade changes. A rule name never establishes SQL provenance.
+        unresolved = (
+            parse_failed
+            or partial_unknown
+            or non_sql
+            or any(
+                cols is None or "*" in cols
+                for cols in (
+                    ([base_cols] if diff.status != "added" else [])
+                    + ([current_cols] if diff.status != "removed" else [])
+                )
+            )
+        )
+        path = diff.current_path or diff.base_path
+        column_evidence[diff.model_name] = Evidence(
+            "manifest" if used_manifest_columns else "compiled_sql",
+            "unknown" if unresolved else "conservative" if used_manifest_columns else "exact",
+            "partial_unknown"
+            if partial_unknown
+            and any(
+                d is not None and d.has_unknown and d.columns
+                for d in (base_detail, current_detail)
+            )
+            else "parse_failed"
+            if parse_failed
+            else "unresolved_input"
+            if unresolved
+            else "manifest_fallback"
+            if used_manifest_columns
+            else "column_diff_checked",
+            tuple(sorted((set(base_cols or []) | set(current_cols or [])) - {"*"})),
+            _compiled_evidence_path(path, project_dir),
+        )
 
         prediction = predict_ddl(
             model_name=diff.model_name,
@@ -1825,6 +1875,46 @@ def _do_check(args: argparse.Namespace) -> int:
         ignored_models=sorted(ignored_models),
         unmatched_ignore_models=unmatched_ignore_models,
     )
+    # Some resource rules return before predict_ddl computes column deltas.
+    # Enrich only the transport copy with a proven SQL diff, leaving analysis
+    # and model policy unchanged. Manifest fallback/partial sets are not proof.
+    fact_predictions = []
+    for pred in predictions:
+        before, after = model_cols.get(pred.model_name, (None, None))
+        column_origin = column_evidence.get(pred.model_name)
+        if (
+            column_origin is not None
+            and column_origin.state == "exact"
+            and before is not None
+            and after is not None
+        ):
+            pred = _replace(
+                pred,
+                columns_added=sorted(set(after) - set(before)),
+                columns_removed=sorted(set(before) - set(after)),
+            )
+        fact_predictions.append(pred)
+    fact_result = _replace(check_result, predictions=fact_predictions)
+    initial = findings_from_result(fact_result, manifest, base_manifest=base_manifest)
+    evidence = {}
+    for fact in initial:
+        # Add proven SQL provenance to independent rules too, but keep their
+        # exact rule evidence when complete column data is unavailable.
+        if (
+            fact.rule_code.startswith("ddl.")
+            and fact.source is not None
+            and fact.source.unique_id is not None
+            and fact.source.name in column_evidence
+            and (
+                fact.evidence.state != "exact"
+                or column_evidence[fact.source.name].state == "exact"
+            )
+        ):
+            uid = fact.source.unique_id
+            evidence[(uid, uid, fact.rule_code)] = column_evidence[fact.source.name]
+    check_result.findings = findings_from_result(
+        fact_result, manifest, base_manifest=base_manifest, evidence=evidence
+    )
     if fmt == "json":
         print(format_json(check_result))
     elif fmt == "github":
@@ -1998,8 +2088,24 @@ jobs:
               if not isinstance(data["baseline_problem"], str):
                   raise ValueError("invalid baseline problem")
               uncertain = uncertain or bool(data["baseline_problem"])
-          print("destructive" if counts["destructive"] else
-                "warning" if counts["warning"] or uncertain else "safe")
+          nested = set()
+          for model in models:
+              impacts = model.get("downstream_impacts", [])
+              if not isinstance(impacts, list):
+                  raise ValueError("invalid downstream impacts")
+              for impact in impacts:
+                  if not isinstance(impact, dict) or any(
+                      not isinstance(impact.get(key), str) for key in ("model_name", "risk", "reason")
+                  ):
+                      raise ValueError("invalid downstream impact")
+                  nested.add("destructive" if impact["risk"] in ("broken_ref", "inherited_drop") else "warning")
+          # The validator ships in the base wheel and imports only the stdlib.
+          # Old pinned CLIs have no canonical field and need no new module.
+          if "findings" in data:
+              from dbt_plan_mcp.report_validation import validate_report, report_severity
+              nested.add(report_severity(validate_report(data)))
+          print("destructive" if counts["destructive"] or "destructive" in nested else
+                "warning" if counts["warning"] or uncertain or "warning" in nested else "safe")
           PY
           ); then
             echo "::error::dbt-plan did not produce a completed JSON report (exit $code)"
