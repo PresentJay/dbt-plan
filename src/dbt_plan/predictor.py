@@ -66,6 +66,29 @@ def worst_safety(safeties: list[Safety]) -> Safety:
 
 
 @dataclass(frozen=True)
+class ReadProvenance:
+    """One actual reader query, retaining lookup spellings rather than guessed IDs.
+
+    Empty resolved reads are meaningful (stars name no columns). ``None`` is
+    unresolved. Text matches are separate and never constitute resolved reads.
+    """
+
+    source: str
+    reader: str
+    columns_read: tuple[str, ...] | None
+    columns_removed: tuple[str, ...]
+    text_matches: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class CascadeProvenance:
+    """Facts observed under one root; losses alone do not prove attribution."""
+
+    reads: tuple[ReadProvenance, ...] = ()
+    losses: tuple[tuple[str, tuple[str, ...]], ...] = ()
+
+
+@dataclass(frozen=True)
 class DDLPrediction:
     """Complete DDL prediction for a model."""
 
@@ -81,6 +104,8 @@ class DDLPrediction:
     downstream_exposures: list = field(default_factory=list)
     # Captured before cascade escalation; None means no separate aggregate exists.
     own_safety: Safety | None = None
+    # Additive producer metadata, not part of legacy verdict/value comparison.
+    provenance: CascadeProvenance | None = field(default=None, compare=False, repr=False)
 
     @property
     def own_verdict(self) -> Safety:
@@ -799,6 +824,7 @@ def analyze_cascade_impacts(
         lost_by_model: dict[str, list[str]] = (
             {pred.model_name: cascade_removed} if cascade_removed else {}
         )
+        read_facts: list[ReadProvenance] = []
 
         downstream_to_check = [] if ignore_incremental else downstream_nids
         impacts: list[DownstreamImpact] = []
@@ -882,6 +908,20 @@ def analyze_cascade_impacts(
                     # the same name on a different table. It stays as the fallback,
                     # because a refusal must widen what gets reported, never narrow it.
                     read = columns_read_of(ds_node.name, lost_model) if columns_read_of else None
+                    matches = (
+                        tuple(col for col in removed if ds_sql and patterns[col].search(ds_sql))
+                        if read is None
+                        else ()
+                    )
+                    read_facts.append(
+                        ReadProvenance(
+                            lost_model,
+                            ds_node.name,
+                            tuple(sorted(set(read))) if read is not None else None,
+                            tuple(sorted(set(removed))),
+                            tuple(sorted(set(matches))),
+                        )
+                    )
                     if read is not None:
                         for col in removed:
                             if col.lower() in read:
@@ -921,6 +961,16 @@ def analyze_cascade_impacts(
                 safety=cascade_safety,
                 downstream_impacts=impacts,
             )
+        updated[i] = replace(
+            updated[i],
+            provenance=CascadeProvenance(
+                tuple(read_facts),
+                tuple(
+                    (name, tuple(sorted(set(cols))))
+                    for name, cols in sorted(lost_by_model.items())
+                ),
+            ),
+        )
 
     return updated, downstream_map
 
