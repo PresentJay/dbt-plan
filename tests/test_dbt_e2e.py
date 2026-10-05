@@ -766,6 +766,7 @@ class TestARenamedModelPath:
         legacy.rename(base)
         # A pre-versioning snapshot has neither the new tree nor its version marker.
         provenance_path = base.parent / "provenance.json"
+        (base.parent / "inventory.json").unlink()  # Historical flattened snapshot.
         provenance = json.loads(provenance_path.read_text(encoding="utf-8"))
         provenance.pop("layout_version")
         provenance_path.write_text(json.dumps(provenance), encoding="utf-8")

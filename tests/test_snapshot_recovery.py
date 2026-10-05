@@ -701,6 +701,8 @@ def test_missing_baseline_sql_is_not_a_new_safe_model(tmp_path, capsys, missing)
         manifest,
     )
     _do_snapshot(_snapshot_args(tmp_path))
+    # Exercise recovery warnings for a historical snapshot without recorded hashes.
+    (tmp_path / ".dbt-plan/base/inventory.json").unlink()
     for name in missing:
         next((tmp_path / ".dbt-plan/base/compiled").rglob(name + ".sql")).unlink()
     _setup_target(

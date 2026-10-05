@@ -169,7 +169,12 @@ def test_success_replaces_complete_tree_and_metadata(tmp_path):
     manifest.write_text('{"metadata": {"project_name": "shop"}, "nodes": {}, "new": true}')
     _do_snapshot(args)
     base = tmp_path / ".dbt-plan/base"
-    assert set(contents(base)) == {"compiled/models/books.sql", "manifest.json", "provenance.json"}
+    assert set(contents(base)) == {
+        "compiled/models/books.sql",
+        "manifest.json",
+        "provenance.json",
+        "inventory.json",
+    }
     assert (base / "manifest.json").read_bytes() == manifest.read_bytes()
     assert set(json.loads((base / "provenance.json").read_text())) == {
         "revision",
