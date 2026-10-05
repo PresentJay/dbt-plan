@@ -475,8 +475,8 @@ class TestScenario3SuppressKnownWarning:
         # real_model added a column (safe), so exit code should be 0
         assert exit_code == 0
 
-    def test_text_output_truly_hides_ignored_model(self, tmp_path):
-        """Verify ignored model name doesn't appear anywhere in text output."""
+    def test_text_output_labels_ignored_model_without_hiding_remaining_risk(self, tmp_path):
+        """An ignored model is only an exclusion; remaining raw risk is unchanged."""
         base_sql = "SELECT a, b FROM src"
         current_sql = "SELECT a FROM src"
 
@@ -486,21 +486,41 @@ class TestScenario3SuppressKnownWarning:
                     "materialization": "incremental",
                     "on_schema_change": "sync_all_columns",
                 },
+                "remaining": {
+                    "materialization": "incremental",
+                    "on_schema_change": "sync_all_columns",
+                },
             }
         )
 
         project_dir = _setup_project(
             tmp_path,
-            base_sqls={"secret_scratch_v2": base_sql},
-            current_sqls={"secret_scratch_v2": current_sql},
+            base_sqls={"secret_scratch_v2": base_sql, "remaining": base_sql},
+            current_sqls={"secret_scratch_v2": current_sql, "remaining": current_sql},
             manifest=manifest,
-            config_yml="ignore_models: [secret_scratch_v2]\n",
         )
 
+        code, raw, _ = _run_check(project_dir, fmt="json")
+        assert code == 1
+        before = json.loads(raw)
+        assert before["summary"] == {"total": 2, "safe": 0, "warning": 0, "destructive": 2}
+        (project_dir / ".dbt-plan.yml").write_text("ignore_models: [secret_scratch_v2]\n")
         exit_code, stdout, _ = _run_check(project_dir, fmt="text")
-        assert "secret_scratch_v2" not in stdout, (
-            "Ignored model name should not appear in any part of the output"
-        )
+        assert exit_code == 1
+        predictions, exclusions = stdout.split("Excluded by exact ignore policy (not checked):")
+        assert "secret_scratch_v2" not in predictions
+        assert "DESTRUCTIVE  remaining" in predictions
+        assert exclusions.split("dbt-plan:")[0].strip() == "- secret_scratch_v2"
+        assert stdout.count("secret_scratch_v2") == 1
+        assert "1 checked, 0 safe, 0 warning, 1 destructive" in stdout
+        code, raw, _ = _run_check(project_dir, fmt="json")
+        assert code == 1
+        after = json.loads(raw)
+        assert after["ignored_models"] == ["secret_scratch_v2"]
+        assert after["models"] == [m for m in before["models"] if m["model_name"] == "remaining"]
+        assert after["summary"] == {"total": 1, "safe": 0, "warning": 0, "destructive": 1}
+        for key in ("parse_failures", "stale_sources", "skipped_models", "uncompiled_models"):
+            assert after[key] == before[key]
 
 
 # ===========================================================================

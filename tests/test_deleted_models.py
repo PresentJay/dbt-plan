@@ -100,9 +100,26 @@ class TestADeletedModelIsReported:
 
     def test_ignore_models_still_applies(self, tmp_path, capsys, monkeypatch):
         project = _project(tmp_path, base_models=["keep", "doomed"], current_models=["keep"])
+        assert _check(project, format="json") == 1
+        before = json.loads(capsys.readouterr().out)
+        assert before["models"][0]["model_name"] == "doomed"
+        assert before["models"][0]["safety"] == "destructive"
         (project / ".dbt-plan.yml").write_text("ignore_models: [doomed]\n", encoding="utf-8")
         assert _check(project) == 0
-        assert "doomed" not in capsys.readouterr().out
+        out = capsys.readouterr().out
+        predictions, exclusions = out.split("Excluded by exact ignore policy (not checked):")
+        assert "doomed" not in predictions
+        assert exclusions.split("dbt-plan:")[0].strip() == "- doomed"
+        assert out.count("doomed") == 1
+        assert "0 checked, 0 safe, 0 warning, 0 destructive" in out
+        assert _check(project, format="json") == 0
+        after = json.loads(capsys.readouterr().out)
+        assert after["ignored_models"] == ["doomed"]
+        assert after["unmatched_ignore_models"] == []
+        assert after["models"] == []
+        assert after["summary"] == {"total": 0, "safe": 0, "warning": 0, "destructive": 0}
+        for key in ("parse_failures", "stale_sources", "skipped_models", "uncompiled_models"):
+            assert after[key] == before[key]
 
     def test_a_removal_the_diff_already_saw_is_not_reported_twice(self, tmp_path, capsys):
         """After `dbt clean` the compiled file really is gone; the diff reports it."""

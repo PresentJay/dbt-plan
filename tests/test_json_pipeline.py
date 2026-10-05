@@ -71,7 +71,36 @@ class TestJsonSchemaStability:
             "stale_sources",
             "skipped_models",
             "uncompiled_models",
+            "ignored_models",
+            "unmatched_ignore_models",
         }
+        assert data["ignored_models"] == data["unmatched_ignore_models"] == []
+        assert data["models"] == []
+        assert data["summary"] == {"total": 0, "safe": 0, "warning": 0, "destructive": 0}
+
+        # Exclusion metadata is additive, without manufacturing prediction rows
+        # or changing remaining findings and their counts.
+        result = CheckResult(
+            predictions=[
+                _make_prediction(
+                    name="remaining",
+                    safety=Safety.DESTRUCTIVE,
+                    operations=[DDLOperation("DROP COLUMN", "title")],
+                    columns_removed=["title"],
+                )
+            ],
+            parse_failures=["unreadable"],
+        )
+        before = _parse(result)
+        result.ignored_models = ["excluded", "excluded"]
+        result.unmatched_ignore_models = ["unknown"]
+        after = _parse(result)
+        assert after["ignored_models"] == ["excluded"]
+        assert after["unmatched_ignore_models"] == ["unknown"]
+        assert [m["model_name"] for m in after["models"]] == ["remaining"]
+        assert after["summary"]["safe"] == 0
+        for key in before.keys() - {"ignored_models", "unmatched_ignore_models"}:
+            assert after[key] == before[key]
 
     def test_summary_always_has_required_keys(self):
         """summary always contains total, safe, warning, destructive."""
