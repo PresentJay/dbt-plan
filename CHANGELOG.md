@@ -7,6 +7,59 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.18.0] - 2026-10-06
+
+### Upgrade notes
+
+- An unresolved downstream SQL read can now produce a separate, unwaivable
+  review finding instead of an all-clear. Previously passing checks can exit 2
+  under the default warning policy. Explicit exit policies still apply, but raw
+  findings remain visible and MCP requires review. (#307)
+- New snapshots carry layout and SHA256 inventory metadata. Unsupported or
+  malformed metadata, or changed/missing/unexpected inventoried SQL, stops
+  analysis with exit 3. Existing snapshots without an inventory remain readable
+  but are reported as unrecorded, not verified. Recompile the intended baseline
+  and capture it again to recover; do not remove metadata to bypass validation.
+  (#301, #304)
+- Text/GitHub output now includes bounded causal explanations. Machine consumers
+  should use JSON; new `findings` and `causal_graph` fields are additive, and their
+  absence in older reports does not mean an empty or safe analysis. (#305, #307)
+
+### Added
+
+- Bound MCP `plan` subprocess waits to 120 seconds by default, configurable with
+  `DBT_PLAN_MCP_PLAN_TIMEOUT_SECONDS` (1–3600). Timeouts discard partial output
+  and return an error; snapshot calls are not covered by this limit. (#299)
+- Version snapshot layouts independently of the package version. (#301)
+- Expose actual ignored models and unmatched ignore names in reports. Excluded
+  resources are not presented as checked or safe. (#302)
+- Add `--fail-on warning|destructive|never` to `check` and `run`, with CLI >
+  environment > config precedence. Absent settings preserve legacy warning
+  policy; execution errors remain exit 3 even with `never`. (#303)
+- Verify snapshot manifest and compiled SQL bytes with SHA256 inventories.
+  This detects drift, not malicious replacement or SQL safety. (#304)
+- Define canonical findings with stable rule codes, qualified resource identities,
+  raw severity and explicit evidence. Preserve them across CLI, JSON, GitHub,
+  MCP and CI report consumers. (#300, #305)
+- Build bounded causal evidence graphs without enumerating every possible path.
+  Distinguish proven direct reads from candidate dependencies and unknown
+  attribution; retain relevant graph details in JSON. (#306)
+- Render source changes, affected resources/columns and configuration evidence,
+  link trustworthy original files, disclose omitted detail, and publish three
+  reproducible report examples. External consumer coverage remains unknown. (#307)
+
+### Fixed
+
+- Reject malformed or contradictory canonical findings and causal references
+  rather than treating them as safe. Keep raw CI verdicts separate from exit
+  policy, including acknowledged risks. (#305, #307)
+
+### Maintenance
+
+- Update contributor CI feedback to `actions/github-script` 9. (#298)
+
+See the [v0.18.0 release notes](docs/releases/v0.18.0.md) for migration details.
+
 ## [0.17.0] - 2026-09-25
 
 ### Breaking
