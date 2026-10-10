@@ -94,6 +94,11 @@ def build_data_test_index(manifest: dict) -> dict[str, DataTestNode]:
     extra has to be kept at load time.
     """
     index: dict[str, DataTestNode] = {}
+    model_files = {
+        nid: Path(node["path"]).stem if node.get("path") else model_key(nid)
+        for nid, node in (manifest.get("nodes") or {}).items()
+        if nid.startswith("model.")
+    }
     for node_id, node in (manifest.get("nodes") or {}).items():
         if not node_id.startswith("test."):
             continue
@@ -105,7 +110,9 @@ def build_data_test_index(manifest: dict) -> dict[str, DataTestNode]:
         column_name = node.get("column_name")
         attached = node.get("attached_node")
         if column_name and attached:
-            columns.setdefault(model_key(attached), set()).add(str(column_name).lower())
+            columns.setdefault(model_files.get(attached, model_key(attached)), set()).add(
+                str(column_name).lower()
+            )
 
         metadata = node.get("test_metadata") or {}
         if metadata.get("name") == "relationships":
@@ -118,7 +125,7 @@ def build_data_test_index(manifest: dict) -> dict[str, DataTestNode]:
                 columns.setdefault(far_model, set()).add(str(far_column).lower())
 
         depends = tuple(
-            model_key(nid)
+            model_files.get(nid, model_key(nid))
             for nid in ((node.get("depends_on") or {}).get("nodes") or [])
             if nid.startswith("model.")
         )

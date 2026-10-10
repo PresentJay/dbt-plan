@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.18.1] - 2026-10-10
+
 ### Upgrade notes
 
 - An unresolved `SELECT *` in an added or modified model now appears in
@@ -39,6 +41,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   resolving model SQL. Logical model names and filenames no longer stand in for
   a table whose alias is different. CTE names, table aliases and qualified stars
   also preserve their identifier and schema/catalog identity.
+- Resolve cascade, downstream contracts and selected-input checks by node ID.
+  A version alias colliding with an ordinary model filename cannot substitute
+  the ordinary model's SQL or policy and hide a broken downstream reference.
+  Data tests use the attached model's compiled filename when known.
 
 ## [0.18.0] - 2026-10-06
 

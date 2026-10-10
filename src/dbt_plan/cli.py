@@ -1235,6 +1235,7 @@ def _do_check(args: argparse.Namespace) -> int:
         ModelNode,
         build_data_test_index,
         build_exposure_index,
+        build_model_id_index,
         build_node_index,
         build_unit_test_index,
         find_downstream,
@@ -1394,13 +1395,18 @@ def _do_check(args: argparse.Namespace) -> int:
     # Build O(1) lookup indexes instead of O(N) scan per model
     node_index = build_node_index(manifest)
     base_node_index = build_node_index(base_manifest) if base_manifest else {}
+    node_id_index = build_model_id_index(manifest)
+    base_node_id_index = build_model_id_index(base_manifest) if base_manifest else {}
     # Index keys include version aliases; only node.name identifies a compiled file.
     model_names = {node.name for node in node_index.values()}
     base_model_names = {node.name for node in base_node_index.values()}
 
     # Manifest-only resources and configuration can change without changing SQL.
     non_sql_names: set[str] = set()
-    for source, index in ((manifest, node_index), (base_manifest or {}, base_node_index)):
+    for source, index, id_index in (
+        (manifest, node_index, node_id_index),
+        (base_manifest or {}, base_node_index, base_node_id_index),
+    ):
         project_name = (source.get("metadata") or {}).get("project_name")
         for nid, raw in source.get("nodes", {}).items():
             if project_name and nid.split(".")[1] != project_name:
@@ -1410,9 +1416,12 @@ def _do_check(args: argparse.Namespace) -> int:
             if nid.startswith("snapshot."):
                 name = model_key(nid)
                 index[name] = ModelNode(nid, name, "snapshot", None)
+                id_index[nid] = index[name]
                 non_sql_names.add(name)
             elif nid.startswith("model.") and raw.get("language") == "python":
-                non_sql_names.add(model_key(nid))
+                node = id_index.get(nid)
+                if node is not None:
+                    non_sql_names.add(node.name)
     model_names = {node.name for node in node_index.values()}
     base_model_names = {node.name for node in base_node_index.values()}
     current_paths = {f.stem: f for f in iter_model_sql(current_compiled, model_dirs)}
@@ -1498,11 +1507,9 @@ def _do_check(args: argparse.Namespace) -> int:
             if selected_node:
                 for graph in (child_map, parent_map):
                     relevant_names.update(
-                        (
-                            node_index.get(model_key(nid)) or base_node_index.get(model_key(nid))
-                        ).name
+                        (node_id_index.get(nid) or base_node_id_index.get(nid)).name
                         for nid in find_downstream(selected_node.node_id, graph)
-                        if node_index.get(model_key(nid)) or base_node_index.get(model_key(nid))
+                        if node_id_index.get(nid) or base_node_id_index.get(nid)
                     )
         before_select = len(model_diffs)
         model_diffs = [d for d in model_diffs if d.model_name in select_set]
@@ -1587,17 +1594,14 @@ def _do_check(args: argparse.Namespace) -> int:
             raw.get("original_file_path")
             for nid, raw in manifest.get("nodes", {}).items()
             if nid.startswith("model.")
-            and (
-                node_index.get(model_key(nid)) is None
-                or node_index[model_key(nid)].name not in relevant_names
-            )
+            and (node_id_index.get(nid) is None or node_id_index[nid].name not in relevant_names)
         }
         related_paths = {
             raw.get("original_file_path")
             for nid, raw in manifest.get("nodes", {}).items()
             if nid.startswith("model.")
-            and node_index.get(model_key(nid)) is not None
-            and node_index[model_key(nid)].name in relevant_names
+            and node_id_index.get(nid) is not None
+            and node_id_index[nid].name in relevant_names
         }
         unrelated_paths -= related_paths
     stale_sources = _stale_sources(
@@ -2040,7 +2044,7 @@ def _do_check(args: argparse.Namespace) -> int:
     for pos, prediction in enumerate(predictions):
         impacts = list(prediction.downstream_impacts)
         for nid in all_downstream.get(model_node_ids.get(prediction.model_name), []):
-            dependent = node_index.get(model_key(nid))
+            dependent = node_id_index.get(nid)
             if dependent is None or not dependent.contract_enforced:
                 continue
             path = compiled_sql_index.get(dependent.name)

@@ -223,6 +223,82 @@ def test_stats_alias_collision_is_independent_of_real_manifest_order(tmp_path):
     assert models["orders_v1"]["columns_removed"] == ["doomed"]
 
 
+@pytest.mark.parametrize("reader_kind", ["named", "star_fail", "star_contract", "star_test"])
+def test_dag_alias_collision_keeps_actual_downstream(tmp_path, reader_kind):
+    (tmp_path / "models").mkdir()
+    (tmp_path / "dbt_project.yml").write_text('name: proj\nversion: "1.0"\nprofile: review\n')
+    (tmp_path / "profiles.yml").write_text(
+        'review:\n  target: dev\n  outputs:\n    dev:\n      type: duckdb\n      path: ":memory:"\n'
+    )
+    upstream = tmp_path / "models/stg.sql"
+    upstream.write_text("select 1 as id, 2 as doomed")
+    reader = "select doomed from {{ ref('stg') }}"
+    if reader_kind == "star_fail":
+        reader = "{{ config(materialized='incremental', on_schema_change='fail') }} select * from {{ ref('stg') }}"
+    elif reader_kind == "star_contract":
+        reader = "{{ config(contract={'enforced': true}) }} select * from {{ ref('stg') }}"
+    elif reader_kind == "star_test":
+        reader = "select * from {{ ref('stg') }}"
+    (tmp_path / "models/orders_def.sql").write_text(reader)
+    (tmp_path / "models/orders_v1.sql").write_text(
+        "{{ config(alias='regular_orders') }} select 3 as regular_id"
+    )
+    (tmp_path / "models/schema.yml").write_text(
+        "version: 2\nmodels:\n  - name: orders\n    latest_version: 1\n"
+        "    columns:\n      - name: id\n        data_type: integer\n"
+        "      - name: doomed\n        data_type: integer\n"
+        "    versions:\n      - v: 1\n        defined_in: orders_def\n"
+    )
+    if reader_kind == "star_test":
+        schema = tmp_path / "models/schema.yml"
+        schema.write_text(
+            schema.read_text().replace(
+                "      - name: doomed\n        data_type: integer\n",
+                "      - name: doomed\n        data_type: integer\n        data_tests: [not_null]\n",
+            )
+        )
+    _dbt_compile(tmp_path)
+    manifest = tmp_path / "target/manifest.json"
+    manifest.write_text(json.dumps(json.loads(manifest.read_text()), sort_keys=True))
+    snapshot = _dbt_plan(["snapshot", "--project-dir", str(tmp_path)])
+    assert snapshot.returncode == 0, snapshot.stdout + snapshot.stderr
+    upstream.write_text("select 1 as id")
+    _dbt_compile(tmp_path)
+    manifest.write_text(json.dumps(json.loads(manifest.read_text()), sort_keys=True))
+    expected_code, expected_risk = {
+        "named": (1, "broken_ref"),
+        "star_fail": (2, "build_failure"),
+        "star_contract": (2, "contract_violation"),
+        "star_test": (2, "data_test_failure"),
+    }[reader_kind]
+    for selection in ([], ["--select", "stg"]):
+        check = _dbt_plan(
+            ["check", "--format", "json", "--project-dir", str(tmp_path), *selection]
+        )
+        assert check.returncode == expected_code, check.stdout + check.stderr
+        changed = json.loads(check.stdout)["models"][0]
+        assert changed["downstream"] == ["orders_def"]
+        assert any(
+            (
+                impact["model_name"].startswith("not_null_orders")
+                if reader_kind == "star_test"
+                else impact["model_name"] == "orders_def"
+            )
+            and impact["risk"] == expected_risk
+            for impact in changed["downstream_impacts"]
+        )
+        assert all(impact["model_name"] != "orders_v1" for impact in changed["downstream_impacts"])
+    if reader_kind == "named":
+        edited = tmp_path / "models/orders_def.sql"
+        edited.write_text(edited.read_text() + "\n-- source edited after compile\n")
+        stamp = manifest.stat().st_mtime_ns + 2_000_000_000
+        os.utime(edited, ns=(stamp, stamp))
+        stale = _dbt_plan(
+            ["check", "--format", "json", "--project-dir", str(tmp_path), "--select", "stg"]
+        )
+        assert "models/orders_def.sql" in json.loads(stale.stdout)["stale_sources"]
+
+
 class TestDbtE2E:
     def test_compile_snapshot_check_no_changes(self, dbt_project):
         """compile → snapshot → compile again (no changes) → check → exit 0."""
