@@ -462,24 +462,13 @@ def _authored_on_schema_change(node: dict, config: dict) -> str | None:
     return None
 
 
-def build_node_index(manifest: dict, *, include_packages: bool = False) -> dict[str, ModelNode]:
-    """Build a compiled-SQL-name → ModelNode index for O(1) lookups.
+def build_model_id_index(
+    manifest: dict, *, include_packages: bool = False
+) -> dict[str, ModelNode]:
+    """Keep each enabled project model under its stable node ID.
 
-    Keyed by the name the model's compiled file is written under, because every
-    lookup against this index starts from a file in the diff. For an ordinary
-    model that is the dbt model name; for a versioned one it is `<name>_v<n>`,
-    or whatever `defined_in:` says. See `model_key`.
-
-    Args:
-        include_packages: If False (default), only include models from the
-            root project, skipping dbt package models. The root project is
-            detected as the most common package_name in the manifest.
-
-    Nothing in the CLI passes True. The `include_packages` config key was removed
-    in 0.11.0 because the compiled scan covers the root project alone, so models
-    this let through were indexed and then never examined. The parameter is kept
-    because that is the half that worked, and making the scan follow it is an open
-    question rather than a rejected one.
+    A filename alias can shadow another model's canonical version name. Model
+    population counts must therefore be built before registering lookup aliases.
     """
     # Detect root project name: prefer metadata.project_name (dbt v1.5+),
     # fall back to most common package heuristic for older manifests
@@ -532,8 +521,37 @@ def build_node_index(manifest: dict, *, include_packages: bool = False) -> dict[
                 if isinstance(spec, dict) and spec.get("data_type")
             },
         )
-        for alias in (key, model_key(node_id)):
-            index.setdefault(alias, entry)
+        index[node_id] = entry
+    return index
+
+
+def build_node_index(manifest: dict, *, include_packages: bool = False) -> dict[str, ModelNode]:
+    """Build a compiled-SQL-name → ModelNode index for O(1) lookups.
+
+    Keyed by the name the model's compiled file is written under, because every
+    lookup against this index starts from a file in the diff. For an ordinary
+    model that is the dbt model name; for a versioned one it is `<name>_v<n>`,
+    or whatever `defined_in:` says. See `model_key`.
+
+    Args:
+        include_packages: If False (default), only include models from the
+            root project, skipping dbt package models. Metadata names the root
+            project, falling back to the most common package in older manifests.
+
+    Nothing in the CLI passes True. The `include_packages` config key was removed
+    in 0.11.0 because the compiled scan covers the root project alone, so models
+    this let through were indexed and then never examined. The parameter is kept
+    because that is the half that worked, and making the scan follow it is an open
+    question rather than a rejected one.
+    """
+    index: dict[str, ModelNode] = {}
+    entries = build_model_id_index(manifest, include_packages=include_packages).values()
+    # Disk lookups must identify the model that owns that compiled filename.
+    # A version alias must not replace an ordinary model's name and DDL rules.
+    for entry in entries:
+        index.setdefault(entry.name, entry)
+    for entry in entries:
+        index.setdefault(model_key(entry.node_id), entry)
     return index
 
 

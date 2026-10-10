@@ -205,17 +205,21 @@ def test_manifest_only_replacement(tmp_path):
     assert (base / "provenance.json").is_file()
 
 
-def test_missing_manifest_keeps_warning_contract(tmp_path, capsys):
+def test_missing_manifest_rejected_before_replacing_baseline(tmp_path, capsys):
     args = setup_project(tmp_path)
     _do_snapshot(args)
+    base = tmp_path / ".dbt-plan/base"
+    before = contents(base)
     (tmp_path / "target/manifest.json").unlink()
     capsys.readouterr()
-    _do_snapshot(args)
+    with pytest.raises(SystemExit) as exc:
+        _do_snapshot(args)
+    assert exc.value.code == 3
     message = capsys.readouterr().err
-    assert "Warning: manifest.json not found" in message
-    assert "Without it, 'dbt-plan check' will fail." in message
-    assert "Snapshot saved" in message
-    assert not (tmp_path / ".dbt-plan/base/manifest.json").exists()
+    assert "manifest.json not found" in message
+    assert "dbt compile" in message
+    assert "Snapshot saved" not in message
+    assert contents(base) == before
 
 
 @pytest.mark.parametrize("invalid", ["missing", "ambiguous"])
@@ -269,20 +273,30 @@ def test_destination_symlink_escape_refused(tmp_path, monkeypatch, capsys, where
     assert not list(outside.glob(".snapshot-*"))
 
 
-def test_compiled_symlinks_are_preserved_not_followed(tmp_path):
+@pytest.mark.parametrize("existing", [False, True])
+def test_compiled_symlinks_are_rejected_before_publication_without_following(tmp_path, existing):
     project = tmp_path / "project"
     args = setup_project(project)
+    base = project / ".dbt-plan/base"
+    before = None
+    if existing:
+        _do_snapshot(args)
+        before = contents(base)
     outside = tmp_path / "outside"
     outside.mkdir()
     (outside / "secret.sql").write_text("outside bytes")
     models = project / "target/compiled/shop/models"
     symlink(models / "external", outside, directory=True)
     symlink(models / "missing.sql", tmp_path / "absent.sql")
-    _do_snapshot(args)
-    base = project / ".dbt-plan/base"
-    assert (base / "compiled/models/external").is_symlink()
-    assert (base / "compiled/models/missing.sql").is_symlink()
-    _do_snapshot(args)
+    with pytest.raises(SystemExit) as exc:
+        _do_snapshot(args)
+    assert exc.value.code == 3
+    if existing:
+        assert contents(base) == before
+        assert list(base.parent.iterdir()) == [base]
+    else:
+        assert not base.exists()
+        assert not list(base.parent.iterdir())
     assert (outside / "secret.sql").read_text() == "outside bytes"
 
 

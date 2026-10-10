@@ -54,6 +54,19 @@ Snapshot metadata is written inside the staged publication transaction, together
 with SQL and the manifest. A metadata write failure preserves the previous
 baseline; layout versioning does not weaken snapshot rollback or recovery.
 
+New snapshots run the same layout reader against the staged content before
+publication. A missing required model directory or misplaced SQL returns exit
+**3** without creating a first baseline or replacing any existing baseline bytes,
+including its inventory. Missing or unreadable new manifests are also rejected.
+The diagnostic names the input problem and asks you to run `dbt compile` for the
+intended revision before retrying `snapshot`; retrying the same incomplete
+artifacts cannot fix it. This differs from `check`'s recovery advice for an
+already damaged historical baseline.
+
+This is a reader-compatibility check, not a blanket full-compile requirement:
+a partial compile whose declared model directories exist remains supported.
+Missing model files remain subject to `check`'s existing input and warning policy.
+
 ## Integrity integration interface
 
 `read_snapshot_layout(base, current_model_dirs, baseline_model_dirs)` returns a

@@ -96,6 +96,18 @@ def _unreadable_change(project: Path, materialized: str) -> None:
 
 
 class TestUnreadableColumnsAreNotSafe:
+    @pytest.mark.parametrize("materialized", ["view", "table", "incremental"])
+    def test_unresolved_star_change_is_review_required(self, project, capsys, materialized):
+        manifest = _manifest({"reader": {"materialized": materialized}})
+        _write_target(project, {"reader": "SELECT * FROM db.raw.orders"}, manifest)
+        _snapshot(project)
+        _write_target(project, {"reader": "SELECT * FROM db.raw.orders WHERE 1 = 1"}, manifest)
+        args = _check_args(project)
+        args.format = "json"
+        assert _do_check(args) == 2
+        report = json.loads(capsys.readouterr().out)
+        assert "reader" in report["parse_failures"]
+
     @pytest.mark.parametrize("materialized", ["view", "table"])
     def test_a_model_whose_columns_could_not_be_read_does_not_exit_zero(
         self, project, capsys, materialized

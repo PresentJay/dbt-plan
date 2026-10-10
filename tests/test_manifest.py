@@ -11,6 +11,31 @@ from dbt_plan.manifest import (
 )
 
 
+def test_model_id_index_preserves_alias_collision_and_filters():
+    from dbt_plan.manifest import build_model_id_index
+
+    manifest = {
+        "metadata": {"project_name": "proj"},
+        "nodes": {
+            "model.proj.orders.v1": {"name": "orders", "path": "orders_def.sql", "version": 1},
+            "model.proj.orders_v1": {"name": "orders_v1", "path": "orders_v1.sql"},
+            "model.dep.package": {"name": "package"},
+            "model.proj.disabled": {"name": "disabled", "config": {"enabled": False}},
+        },
+    }
+    index = build_model_id_index(manifest)
+    assert set(index) == {"model.proj.orders.v1", "model.proj.orders_v1"}
+    assert index["model.proj.orders.v1"].name == "orders_def"
+    assert index["model.proj.orders_v1"].name == "orders_v1"
+    assert "model.dep.package" in build_model_id_index(manifest, include_packages=True)
+    for reverse in (False, True):
+        if reverse:
+            manifest["nodes"] = dict(reversed(list(manifest["nodes"].items())))
+        aliases = build_node_index(manifest)
+        assert aliases["orders_def"].node_id == "model.proj.orders.v1"
+        assert aliases["orders_v1"].node_id == "model.proj.orders_v1"
+
+
 class TestFindDownstream:
     def test_direct_children(self):
         """Node with direct children returns them."""

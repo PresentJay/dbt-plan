@@ -7,7 +7,7 @@ import hashlib
 import json
 import shutil
 import sys
-from collections.abc import Iterable, Sequence
+from collections.abc import Callable, Iterable, Sequence
 from pathlib import Path
 from typing import NamedTuple
 
@@ -16,6 +16,14 @@ from dbt_plan.formatter import CheckResult, format_github, format_json, format_t
 from dbt_plan.snapshot_layout import manifest_path_root
 
 ERROR_EXIT_CODE = 3
+
+
+class _TableResolver(NamedTuple):
+    by_relation: Callable[[str], list[str] | None]
+    by_model: Callable[[str], list[str] | None]
+
+    def __call__(self, relation: str) -> list[str] | None:
+        return self.by_relation(relation)
 
 
 class _ArgumentParser(argparse.ArgumentParser):
@@ -353,7 +361,7 @@ def _find_compiled_dir(target_dir: Path) -> CompiledLayout | None:
 
 def _do_snapshot(args: argparse.Namespace) -> None:
     """Save current compiled state as baseline (compiled SQL + manifest)."""
-    from dbt_plan.snapshot_layout import LAYOUT_VERSION
+    from dbt_plan.snapshot_layout import LAYOUT_VERSION, SnapshotLayoutError, read_snapshot_layout
     from dbt_plan.snapshot_store import staged_snapshot
 
     project_dir = Path(args.project_dir)
@@ -406,12 +414,13 @@ def _do_snapshot(args: argparse.Namespace) -> None:
             if manifest_src.exists():
                 shutil.copy2(manifest_src, stage / "manifest.json")
             else:
-                print(
-                    f"Warning: manifest.json not found in {target_dir}. "
-                    "Run 'dbt compile' to generate it. "
-                    "Without it, 'dbt-plan check' will fail.",
-                    file=sys.stderr,
-                )
+                raise ValueError(f"manifest.json not found in {target_dir}")
+            # New snapshots must be readable. Legacy missing/corrupt manifests
+            # remain reviewable by check, but must not replace a valid baseline.
+            try:
+                json.loads((stage / "manifest.json").read_text(encoding="utf-8"))
+            except (OSError, ValueError) as exc:
+                raise ValueError(f"Cannot read compiled input manifest.json: {exc}") from exc
             (stage / "provenance.json").write_text(
                 json.dumps(
                     {
@@ -423,8 +432,16 @@ def _do_snapshot(args: argparse.Namespace) -> None:
                 ),
                 encoding="utf-8",
             )
+            _, staged_model_dirs = _manifest_layout(stage)
+            read_snapshot_layout(stage, found.model_dirs, staged_model_dirs)
     except ValueError as e:
-        print(f"Error: {e}", file=sys.stderr)
+        problem = e.problem if isinstance(e, SnapshotLayoutError) else str(e)
+        print(
+            f"Error: Cannot create snapshot from compiled input: {problem}. "
+            "Run 'dbt compile' for the intended revision to regenerate the input, "
+            "then run 'dbt-plan snapshot'.",
+            file=sys.stderr,
+        )
         sys.exit(ERROR_EXIT_CODE)
     print(f"Snapshot saved to {base_dir}", file=sys.stderr)
 
@@ -518,6 +535,60 @@ def _do_init(args: argparse.Namespace) -> None:
     _gitignore_snapshots(project_dir)
 
 
+def _model_sql_inputs(manifest, model_nodes, project_dir, target_dir, compiled_dir, model_dirs):
+    """Identify unique SQL models and their files, separately from a file scan.
+
+    Artifact-relative nodes may be dbt show queries or authored models sharing
+    the artifact directory. Without authored configuration we cannot decide;
+    report them as unclassified instead of calling them regular models. Older
+    manifests without original_file_path retain unambiguous stem lookup.
+    """
+    from dbt_plan.diff import iter_model_sql
+    from dbt_plan.manifest import model_key
+
+    files = list(iter_model_sql(compiled_dir, model_dirs)) if compiled_dir else []
+    by_relative = {path.relative_to(compiled_dir).as_posix(): path for path in files}
+    by_stem: dict[str, list[Path]] = {}
+    for path in files:
+        by_stem.setdefault(path.stem, []).append(path)
+    sql_nodes = {}
+    paths = {}
+    manifest_only = []
+    unclassified = []
+    for node_id, node in model_nodes.items():
+        raw = manifest["nodes"][node_id]
+        language = raw.get("language")
+        declared = raw.get("original_file_path")
+        if language == "python" or node.materialization == "snapshot":
+            manifest_only.append(node_id)
+            continue
+        if language not in (None, "sql"):
+            unclassified.append(node_id)
+            continue
+        if isinstance(declared, str) and declared:
+            manifest_path_root(declared)  # Reject escaping paths before joining.
+            if Path(declared).suffix == ".py":
+                manifest_only.append(node_id)
+                continue
+            if Path(declared).suffix != ".sql" or (
+                project_dir / declared
+            ).resolve().is_relative_to(target_dir.resolve()):
+                unclassified.append(node_id)
+                continue
+            path = by_relative.get(Path(declared).as_posix())
+        else:
+            matches = {
+                path
+                for alias in {node.name, model_key(node_id)}
+                for path in by_stem.get(alias, [])
+            }
+            path = next(iter(matches)) if len(matches) == 1 else None
+        sql_nodes[node_id] = node
+        if path is not None:
+            paths[node_id] = path
+    return sql_nodes, paths, manifest_only, sorted(unclassified)
+
+
 def _do_stats(args: argparse.Namespace) -> None:
     """Show project analysis: materializations, schema change settings, SELECT * usage."""
     from collections import Counter
@@ -525,7 +596,7 @@ def _do_stats(args: argparse.Namespace) -> None:
     from dbt_plan.columns import extract_columns
     from dbt_plan.config import Config
     from dbt_plan.diff import iter_model_sql
-    from dbt_plan.manifest import build_node_index, load_manifest
+    from dbt_plan.manifest import build_model_id_index, build_node_index, load_manifest
     from dbt_plan.predictor import has_ddl_rule
 
     project_dir = Path(args.project_dir)
@@ -550,11 +621,12 @@ def _do_stats(args: argparse.Namespace) -> None:
     # ones are out of both. Counting models check never looks at is half of what
     # made the two commands disagree.
     node_index = build_node_index(manifest)
+    unique_nodes = build_model_id_index(manifest)
     mat_counts: Counter[str] = Counter()
     incremental_osc: Counter[str] = Counter()
     no_rule: Counter[str] = Counter()
 
-    for node in node_index.values():
+    for node in unique_nodes.values():
         mat_counts[node.materialization] += 1
         if node.materialization == "incremental":
             incremental_osc[node.on_schema_change or "ignore"] += 1
@@ -565,7 +637,7 @@ def _do_stats(args: argparse.Namespace) -> None:
             elif node.materialization != "snapshot":
                 label += " (no on_schema_change)"
             no_rule[label] += 1
-    total = len(node_index)
+    total = len(unique_nodes)
 
     # Read every model's columns the way `check` does, resolver included. Without
     # it, a `select * from {{ ref(x) }}` that check expands through the DAG was
@@ -576,6 +648,15 @@ def _do_stats(args: argparse.Namespace) -> None:
     except ValueError:
         found = None
     compiled_dir, model_dirs = found if found else (None, ())
+    try:
+        sql_nodes, model_paths, manifest_only, unclassified = _model_sql_inputs(
+            manifest, unique_nodes, project_dir, target_dir, compiled_dir, model_dirs
+        )
+    except ValueError as exc:
+        print(f"Error: Invalid stats model input: {exc}", file=sys.stderr)
+        sys.exit(ERROR_EXIT_CODE)
+    missing_model_sql = sorted(set(sql_nodes) - set(model_paths))
+    model_readable = 0
 
     star_written = 0  # the SQL asks for `*`
     unreadable = 0  # and dbt-plan still cannot say which columns that is
@@ -586,11 +667,26 @@ def _do_stats(args: argparse.Namespace) -> None:
             (manifest.get("metadata") or {}).get("adapter_type")
         )
         resolver = _make_table_resolver(
-            compiled_dir, _build_relation_index(manifest, node_index), dialect, model_dirs
+            compiled_dir,
+            _build_relation_index(manifest, node_index, dialect=dialect),
+            dialect,
+            model_dirs,
         )
+        model_resolver = _make_table_resolver(
+            compiled_dir,
+            _build_relation_index(manifest, sql_nodes, by_node_id=True, dialect=dialect),
+            dialect,
+            sql_by_model=model_paths,
+        )
+        for path in model_paths.values():
+            cols = extract_columns(
+                _read_diff_sql(None, path) or "", dialect=dialect, table_columns=model_resolver
+            )
+            if cols is not None and cols and not any(col.startswith("*") for col in cols):
+                model_readable += 1
         for sql_file in iter_model_sql(compiled_dir, model_dirs):
             sql_count += 1
-            sql = sql_file.read_text(encoding="utf-8")
+            sql = _read_diff_sql(None, sql_file) or ""
             if extract_columns(sql, dialect=dialect) == ["*"]:
                 star_written += 1
             cols = extract_columns(sql, dialect=dialect, table_columns=resolver)
@@ -624,11 +720,22 @@ def _do_stats(args: argparse.Namespace) -> None:
         }
 
     with_rule = total - sum(no_rule.values())
+    model_sql = {
+        "total": len(sql_nodes),
+        "compiled": len(model_paths),
+        "readable": model_readable,
+        "unreadable": len(model_paths) - model_readable,
+        "missing": len(missing_model_sql),
+        "manifest_only": len(manifest_only),
+        "unclassified": len(unclassified),
+    }
     if getattr(args, "format", None) == "json":
         details = {
             "unreadable_with_docs": unreadable_with_docs if sql_count else None,
             "unreadable_without_docs": (unreadable - unreadable_with_docs if sql_count else None),
             "no_rule": dict(sorted(no_rule.items())),
+            "missing_model_sql": missing_model_sql,
+            "unclassified_model_nodes": unclassified,
         }
         summary = {
             "total": total,
@@ -638,6 +745,7 @@ def _do_stats(args: argparse.Namespace) -> None:
             "columns_readable": (compiled_stats["columns_readable"] if compiled_stats else None),
             "cascade_risk": fail_chains,
             "ddl_rules": {"matched": with_rule, "total": total},
+            "model_sql": model_sql,
         }
         print(json.dumps({"summary": summary, "details": details}, indent=2))
         return
@@ -653,13 +761,25 @@ def _do_stats(args: argparse.Namespace) -> None:
         risk = "  ← dbt-plan monitors this" if osc in ("sync_all_columns", "fail") else ""
         print(f"  {osc:20s} {count:>4}{risk}")
 
+    print(f"\nModel SQL present: {model_sql['compiled']}/{model_sql['total']} SQL model(s)")
+    print(
+        f"Model columns readable: {model_sql['readable']}/{model_sql['compiled']} compiled model(s)"
+    )
+    if missing_model_sql:
+        print(f"  Missing model SQL: {', '.join(missing_model_sql)}")
+    if manifest_only:
+        print(f"  Manifest-only model nodes: {len(manifest_only)} (SQL counts do not apply)")
+    if unclassified:
+        print(f"  Unclassified model nodes: {len(unclassified)} ({', '.join(unclassified)})")
+        print("  Artifact-relative or unsupported nodes are outside the SQL model counts.")
+
     if sql_count:
         # Two lines, because they are two questions. One "Coverage" answering
         # neither is how this output used to print `SELECT * usage: 1/5` and
         # `Coverage: 5/5 fully analyzed` one after the other.
         pct = star_written * 100 // sql_count
-        print(f"\nSELECT * usage: {star_written}/{sql_count} models ({pct}%)")
-        print(f"Columns readable: {sql_count - unreadable}/{sql_count} compiled model(s)")
+        print(f"\nSELECT * usage: {star_written}/{sql_count} SQL files ({pct}%)")
+        print(f"Columns readable: {sql_count - unreadable}/{sql_count} compiled SQL file(s)")
         resolved_stars = star_written - min(star_written, unreadable)
         if resolved_stars:
             print(f"  SELECT * resolved through ref() or a CTE: {resolved_stars}")
@@ -844,33 +964,50 @@ def _star_macro_degraded(sql: str) -> bool:
     return all(marker in sql for marker in _STAR_MACRO_MARKERS)
 
 
-def _build_relation_index(manifest: dict, node_index: dict) -> dict[str, str]:
+def _build_relation_index(
+    manifest: dict, node_index: dict, *, by_node_id: bool = False, dialect: str = "snowflake"
+) -> dict[str, str]:
     """Map the relation a model writes -> the key its compiled SQL is indexed under.
 
     `select * from {{ ref(x) }}` compiles to the physical relation, not the model
-    name, so matching needs the manifest's `relation_name`. The bare name is
-    registered too: dbt model names are unique across a project, so it is an
-    unambiguous fallback when a manifest predates `relation_name`. For a versioned
-    model both spellings point at the same file -- `fct_orders` is the name two
-    versions share, `fct_orders_v2` is the one that was written.
+    name, so matching needs the manifest's `relation_name`. Register bare physical
+    names only when they identify a single node, including excluded models.
+    Qualified SQL uses its full relation key; logical names and compiled-file
+    aliases cannot stand in for a different physical relation.
     """
+    from dbt_plan.columns import relation_keys
     from dbt_plan.manifest import model_key
 
     index: dict[str, str] = {}
+    owners: dict[str, set[str]] = {}
     for node_id, node in (manifest.get("nodes") or {}).items():
         if not node_id.startswith("model."):
             continue
         name = node.get("name")
         path = node.get("path")
         key = Path(path).stem if path else model_key(node_id)
-        if not name or key not in node_index:
+        if not name:
             continue
         relation = node.get("relation_name")
         if relation:
-            index[relation.replace('"', "").replace("`", "").lower()] = key
-        index.setdefault(key.lower(), key)
-        index.setdefault(name.lower(), key)
-    return index
+            keys = relation_keys(relation, dialect)
+        else:
+            # Older manifests may still name the physical alias. A compiled
+            # filename or logical model name is not an overridden table alias.
+            physical = (
+                node.get("alias") or (node.get("config") or {}).get("alias") or model_key(node_id)
+            )
+            keys = relation_keys(physical, dialect)
+        aliases = set(keys or ())
+        for alias in aliases:
+            owners.setdefault(alias, set()).add(node_id)
+        lookup_key = node_id if by_node_id else key
+        entry = node_index.get(lookup_key)
+        if entry is None or entry.node_id != node_id:
+            continue
+        for alias in aliases:
+            index[alias] = lookup_key
+    return {alias: key for alias, key in index.items() if len(owners[alias]) == 1}
 
 
 def _make_reference_reader(
@@ -879,6 +1016,8 @@ def _make_reference_reader(
     table_columns,
     dialect: str,
     relation_index: dict[str, str] | None = None,
+    *,
+    model_columns=None,
 ):
     """(downstream model, changed model) → the columns the first reads from the second.
 
@@ -916,7 +1055,7 @@ def _make_reference_reader(
         if schema:
             return schema
         for name in node_index:
-            columns = table_columns(name.lower())
+            columns = model_columns(name) if model_columns else table_columns(name.lower())
             if columns:
                 # sqlglot only needs the names; the types are never compared here.
                 for known_as in names_for.get(name, {name}):
@@ -959,7 +1098,12 @@ def _make_reference_reader(
 
 
 def _make_table_resolver(
-    compiled_dir, relation_index: dict[str, str], dialect: str, model_dirs=None
+    compiled_dir,
+    relation_index: dict[str, str],
+    dialect: str,
+    model_dirs=None,
+    *,
+    sql_by_model=None,
 ):
     """Resolve a relation to the columns of the model that produces it.
 
@@ -971,18 +1115,20 @@ def _make_table_resolver(
     Memoized per model, and guarded against a chain that loops back on itself.
     A referenced model that is itself unreadable resolves to None, so the refusal
     propagates instead of turning into a shorter, wrong column list.
+    Model lookups for cascade are explicit; SQL relation lookups use physical
+    aliases rather than logical names or compiled filenames.
     """
     from dbt_plan.columns import extract_columns
     from dbt_plan.diff import iter_model_sql
 
-    sql_by_model = (
-        {f.stem: f for f in iter_model_sql(compiled_dir, model_dirs)} if compiled_dir else {}
-    )
+    if sql_by_model is None:
+        sql_by_model = (
+            {f.stem: f for f in iter_model_sql(compiled_dir, model_dirs)} if compiled_dir else {}
+        )
     cache: dict[str, list[str] | None] = {}
     in_progress: set[str] = set()
 
-    def resolve(key: str) -> list[str] | None:
-        model = relation_index.get(key)
+    def read_model(model: str | None) -> list[str] | None:
         if model is None or model in in_progress:
             return None
         if model in cache:
@@ -996,7 +1142,7 @@ def _make_table_resolver(
             columns = extract_columns(
                 path.read_text(encoding="utf-8"), dialect=dialect, table_columns=resolve
             )
-        except OSError:
+        except (OSError, UnicodeDecodeError):
             columns = None
         finally:
             in_progress.discard(model)
@@ -1005,7 +1151,10 @@ def _make_table_resolver(
         cache[model] = None if unresolved else columns
         return cache[model]
 
-    return resolve
+    def resolve(key: str) -> list[str] | None:
+        return read_model(relation_index.get(key))
+
+    return _TableResolver(resolve, read_model)
 
 
 def _expand_selection(
@@ -1374,11 +1523,16 @@ def _do_check(args: argparse.Namespace) -> int:
     # `select * from {{ ref(x) }}` names a relation, not a model. These let the
     # column resolver follow that reference into the other model's compiled SQL.
     current_table_columns = _make_table_resolver(
-        current_compiled, _build_relation_index(manifest, node_index), dialect, model_dirs
+        current_compiled,
+        _build_relation_index(manifest, node_index, dialect=dialect),
+        dialect,
+        model_dirs,
     )
     base_table_columns = _make_table_resolver(
         base_compiled,
-        _build_relation_index(base_manifest or manifest, base_node_index or node_index),
+        _build_relation_index(
+            base_manifest or manifest, base_node_index or node_index, dialect=dialect
+        ),
         dialect,
         base_model_dirs,
     )
@@ -1592,8 +1746,9 @@ def _do_check(args: argparse.Namespace) -> int:
         # everything reading it. Unknown columns mean cascade cannot see a dropped
         # one, so the run must not exit 0 while the report says SAFE. See #131.
         parse_failed = (
-            diff.status == "modified" and (base_cols is None or current_cols is None)
-        ) or (diff.status == "added" and current_cols is None)
+            diff.status == "modified"
+            and any(cols is None or "*" in cols for cols in (base_cols, current_cols))
+        ) or (diff.status == "added" and (current_cols is None or "*" in current_cols))
         parse_failed = (parse_failed or partial_unknown) and not non_sql
         if parse_failed:
             parse_failures.append(diff.model_name)
@@ -1867,14 +2022,17 @@ def _do_check(args: argparse.Namespace) -> int:
         unit_test_index=build_unit_test_index(manifest),
         data_test_index=build_data_test_index(manifest),
         test_sql_index=test_sql_index,
-        base_columns_of=base_table_columns,
-        current_columns_of=current_table_columns,
+        base_columns_of=base_table_columns.by_model,
+        current_columns_of=current_table_columns.by_model,
         columns_read_of=_make_reference_reader(
             compiled_sql_index,
             node_index,
             base_table_columns,
             dialect,
-            _build_relation_index(base_manifest or manifest, base_node_index or node_index),
+            _build_relation_index(
+                base_manifest or manifest, base_node_index or node_index, dialect=dialect
+            ),
+            model_columns=base_table_columns.by_model,
         ),
     )
     # A contract on an unchanged downstream SELECT * can break when upstream

@@ -36,13 +36,34 @@ class TestResolvesThroughTheDag:
         )
         assert got == ["order_id", "status"]
 
-    def test_falls_back_to_the_bare_model_name(self):
-        """dbt model names are unique across a project, so the bare name is safe."""
+    def test_qualified_relation_identity_does_not_fall_back_to_a_bare_name(self):
+        """A source in another schema may have exactly the same model name."""
         sql = 'SELECT * FROM "j"."main"."stg_orders"'
         got = extract_columns(
             sql, dialect="duckdb", table_columns=lookup({"stg_orders": ["order_id"]})
         )
-        assert got == ["order_id"]
+        assert got == ["*"]
+
+    def test_bare_model_name_still_resolves(self):
+        assert extract_columns(
+            "SELECT * FROM stg_orders", table_columns=lookup({"stg_orders": ["order_id"]})
+        ) == ["order_id"]
+
+    @pytest.mark.parametrize(
+        "dialect", ["duckdb", "snowflake", "bigquery", "postgres", "redshift"]
+    )
+    @pytest.mark.parametrize("relation", ["raw.orders", "other.raw.orders"])
+    @pytest.mark.parametrize("projection", ["*", "t.*"])
+    def test_qualified_relation_identity_requires_an_exact_match(
+        self, dialect, relation, projection
+    ):
+        sql = f"SELECT {projection} FROM {relation} AS t"
+        columns = {"orders": ["local_id"], "db.main.orders": ["local_id"]}
+        assert extract_columns(sql, dialect=dialect, table_columns=lookup(columns)) == ["*"]
+        columns[relation] = ["foreign_id"]
+        assert extract_columns(sql, dialect=dialect, table_columns=lookup(columns)) == [
+            "foreign_id"
+        ]
 
     def test_star_mixed_with_explicit_columns(self):
         sql = 'SELECT *, 1 AS extra FROM "j"."main"."stg_orders"'
@@ -65,6 +86,39 @@ class TestResolvesThroughTheDag:
             sql, dialect="duckdb", table_columns=lookup({"j.main.stg_orders": ["a"]})
         )
         assert got == ["a"]
+
+    @pytest.mark.parametrize(
+        "qualifier,expected", [("db.main.orders", ["local_id"]), ("other.main.orders", ["*"])]
+    )
+    def test_qualified_star_relation_identity(self, qualifier, expected):
+        assert (
+            extract_columns(
+                f"SELECT {qualifier}.* FROM db.main.orders",
+                dialect="duckdb",
+                table_columns=lookup({"db.main.orders": ["local_id"]}),
+            )
+            == expected
+        )
+
+    @pytest.mark.parametrize(
+        "dialect,projection,alias,expected",
+        [
+            ("snowflake", "t.*", '"t"', ["*"]),
+            ("snowflake", '"t".*', '"t"', ["local_id"]),
+            ("postgres", "T.*", '"T"', ["*"]),
+            ("postgres", '"T".*', '"T"', ["local_id"]),
+            ("duckdb", "T.*", '"t"', ["local_id"]),
+        ],
+    )
+    def test_table_alias_relation_identity(self, dialect, projection, alias, expected):
+        assert (
+            extract_columns(
+                f"SELECT {projection} FROM db.main.orders AS {alias}",
+                dialect=dialect,
+                table_columns=lookup({"db.main.orders": ["local_id"]}),
+            )
+            == expected
+        )
 
 
 class TestRefusals:

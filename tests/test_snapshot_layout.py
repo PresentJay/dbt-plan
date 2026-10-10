@@ -42,6 +42,115 @@ def baseline_bytes(project):
     return {p.relative_to(base): p.read_bytes() for p in base.rglob("*") if p.is_file()}
 
 
+@pytest.mark.parametrize("existing", [False, True])
+@pytest.mark.parametrize("missing", ["models", "extras"])
+def test_snapshot_rejects_incomplete_layout_before_publication(tmp_path, existing, missing):
+    """Exercise the real CLI, including a valid baseline as the positive control."""
+    manifest = _minimal_manifest({"orders": {}, "customers": {}})
+    manifest["nodes"]["model.my_project.orders"].update(
+        original_file_path="models/orders.sql", path="orders.sql"
+    )
+    manifest["nodes"]["model.my_project.customers"].update(
+        original_file_path="extras/customers.sql", path="customers.sql"
+    )
+    _setup_target(tmp_path, {"orders": "select 1 as id"}, manifest)
+    root = tmp_path / "target/compiled/my_project"
+    (root / "extras").mkdir()
+    (root / "extras/customers.sql").write_text("select 2 as id")
+    before = None
+    if existing:
+        result = _dbt_plan(["snapshot", "--project-dir", str(tmp_path)])
+        assert result.returncode == 0, result.stderr
+        result = _dbt_plan(["check", "--project-dir", str(tmp_path), "--format", "json"])
+        assert result.returncode == 0, result.stderr
+        before = baseline_bytes(tmp_path)
+    shutil.rmtree(root / missing)
+    # dbt show can leave only artifact SQL. The producer must not publish this
+    # merely because _find_compiled_dir finds another declared root.
+    manifest["nodes"]["model.my_project.inline"] = {
+        "name": "inline",
+        "original_file_path": "target/inline.sql",
+        "config": {"materialized": "table"},
+    }
+    (tmp_path / "target/manifest.json").write_text(json.dumps(manifest))
+    (root / "target").mkdir()
+    (root / "target/inline.sql").write_text("select 3 as id")
+    (root / "target/orphan.sql").write_text("select 4 as id")
+    result = _dbt_plan(["snapshot", "--project-dir", str(tmp_path)])
+    assert result.returncode == 3, result.stderr
+    assert f"missing model directory: {missing}" in result.stderr
+    assert "dbt compile" in result.stderr
+    assert "recreate the baseline" not in result.stderr
+    assert "Snapshot saved" not in result.stderr
+    base = tmp_path / ".dbt-plan/base"
+    if existing:
+        assert baseline_bytes(tmp_path) == before
+        assert list(base.parent.iterdir()) == [base]
+    else:
+        assert not base.exists()
+        assert not list(base.parent.iterdir())
+
+
+def test_snapshot_allows_partial_sql_with_reader_compatible_directories(project, capsys):
+    """Missing files in a declared root remain reviewable; do not ban partial compile."""
+    manifest_path = project / "target/manifest.json"
+    manifest = json.loads(manifest_path.read_text())
+    manifest["nodes"]["model.my_project.customers"] = {
+        "name": "customers",
+        "original_file_path": "models/customers.sql",
+        "config": {"materialized": "table"},
+    }
+    manifest_path.write_text(json.dumps(manifest))
+    _do_snapshot(_snapshot_args(project))
+    capsys.readouterr()
+    assert _do_check(_check_args(project)) == 2
+    output = capsys.readouterr()
+    assert "layout_version 1 is missing" not in output.err
+
+
+@pytest.mark.parametrize("raw", ["{", "[]", "null", '{"nodes": []}'])
+def test_snapshot_invalid_manifest_preserves_previous_baseline(project, raw):
+    before = baseline_bytes(project)
+    (project / "target/manifest.json").write_text(raw)
+    result = _dbt_plan(["snapshot", "--project-dir", str(project)])
+    assert result.returncode == 3, result.stderr
+    assert "dbt compile" in result.stderr
+    assert "Traceback" not in result.stderr
+    assert baseline_bytes(project) == before
+
+
+@pytest.mark.parametrize("flat", [False, True])
+def test_snapshot_reader_compatibility_for_custom_paths_and_versions(tmp_path, flat):
+    root = tmp_path / "target/compiled"
+    if not flat:
+        root /= "my_project"
+    nodes = {}
+    for version, directory, filename in [(1, "transforms", "orders_v1"), (2, "extra", "latest")]:
+        folder = root / directory
+        folder.mkdir(parents=True)
+        (folder / f"{filename}.sql").write_text("select 1 as id")
+        nodes[f"model.my_project.orders.v{version}"] = {
+            "name": "orders",
+            "version": version,
+            "path": f"{filename}.sql",
+            "original_file_path": f"{directory}/{filename}.sql",
+            "config": {"materialized": "table"},
+        }
+    (tmp_path / "target/manifest.json").write_text(
+        json.dumps(
+            {
+                "nodes": nodes,
+                "metadata": {"project_name": "my_project"},
+                "child_map": {},
+            }
+        )
+    )
+    result = _dbt_plan(["snapshot", "--project-dir", str(tmp_path)])
+    assert result.returncode == 0, result.stderr
+    result = _dbt_plan(["check", "--project-dir", str(tmp_path), "--format", "json"])
+    assert result.returncode == 0, result.stderr
+
+
 def test_new_snapshot_has_layout_version(project, capsys):
     stored = json.loads((project / ".dbt-plan/base/provenance.json").read_text())
     assert type(stored["layout_version"]) is int

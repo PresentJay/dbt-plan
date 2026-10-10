@@ -316,10 +316,13 @@ def test_inventory_failure_preserves_old_bytes_and_retry(project, monkeypatch, f
 
 
 def test_missing_manifest_at_capture_never_verified(project, capsys):
+    before = bytes_in(base(project))
     (project / "target/manifest.json").unlink()
-    _do_snapshot(_snapshot_args(project))
-    capsys.readouterr()
-    refused(project, capsys)
+    with pytest.raises(SystemExit) as exc:
+        _do_snapshot(_snapshot_args(project))
+    assert exc.value.code == 3
+    assert bytes_in(base(project)) == before
+    assert "dbt compile" in capsys.readouterr().err
 
 
 def test_uppercase_sql_is_inventoried_on_every_platform(project, capsys):
