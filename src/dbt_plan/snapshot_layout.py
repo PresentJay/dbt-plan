@@ -15,8 +15,16 @@ class SnapshotLayout(NamedTuple):
     provenance: dict
 
 
-def _error(message: str) -> ValueError:
-    return ValueError(f"{message}. Run 'dbt-plan snapshot' again to recreate the baseline.")
+class SnapshotLayoutError(ValueError):
+    """Keep the layout problem separate from advice for an existing baseline."""
+
+    def __init__(self, problem: str):
+        self.problem = problem
+        super().__init__(f"{problem}. Run 'dbt-plan snapshot' again to recreate the baseline.")
+
+
+def _error(message: str) -> SnapshotLayoutError:
+    return SnapshotLayoutError(message)
 
 
 def manifest_path_root(declared: str) -> str:

@@ -80,6 +80,225 @@ def dbt_project(tmp_path):
     return project
 
 
+@pytest.mark.parametrize("model_path", ["./models", "models//"])
+def test_stats_normalized_model_paths_on_real_compilation(dbt_project, model_path):
+    config = dbt_project / "dbt_project.yml"
+    config.write_text(
+        config.read_text().replace('model-paths: ["models"]', f'model-paths: ["{model_path}"]')
+    )
+    _dbt_compile(dbt_project)
+    result = _dbt_plan(["stats", "--format", "json", "--project-dir", str(dbt_project)])
+    assert result.returncode == 0, result.stdout + result.stderr
+    report = json.loads(result.stdout)
+    assert report["summary"]["model_sql"]["total"] == 3
+    assert report["summary"]["model_sql"]["compiled"] == 3
+    assert report["summary"]["model_sql"]["readable"] == 3
+    assert report["details"]["missing_model_sql"] == []
+
+
+@pytest.mark.parametrize("foreign_name", ["invoices", "orders"])
+def test_stats_excluded_model_relations_on_real_compilation(tmp_path, foreign_name):
+    project, package = tmp_path / "proj", tmp_path / "dep"
+    for path in (project, package):
+        (path / "models").mkdir(parents=True)
+    (project / "dbt_project.yml").write_text('name: proj\nversion: "1.0"\nprofile: review\n')
+    (package / "dbt_project.yml").write_text(
+        'name: dep\nversion: "1.0"\nmodels:\n  dep:\n    +schema: dep\n'
+    )
+    (project / "profiles.yml").write_text(
+        'review:\n  target: dev\n  outputs:\n    dev:\n      type: duckdb\n      path: ":memory:"\n'
+    )
+    (project / "packages.yml").write_text(f"packages:\n  - local: {package.as_posix()}\n")
+    for path, name, column in [
+        (project, "orders", "local_id"),
+        (package, foreign_name, "foreign_id"),
+    ]:
+        (path / "models/shared.sql").write_text(f"select 1 as {column}")
+        (path / "models/schema.yml").write_text(
+            f"version: 2\nmodels:\n  - name: {name}\n    latest_version: 1\n    versions:\n      - v: 1\n        defined_in: shared\n"
+        )
+    (project / "models/known_reader.sql").write_text(
+        "select * from {{ ref('proj', 'orders', v=1) }}"
+    )
+    (project / "models/foreign_reader.sql").write_text(
+        f"select * from {{{{ ref('dep', '{foreign_name}', v=1) }}}}"
+    )
+    deps = subprocess.run([_DBT, "deps"], cwd=project, capture_output=True, text=True, timeout=60)
+    assert deps.returncode == 0, deps.stdout + deps.stderr
+    _dbt_compile(project)
+    result = _dbt_plan(["stats", "--format", "json", "--project-dir", str(project)])
+    assert result.returncode == 0, result.stdout + result.stderr
+    report = json.loads(result.stdout)
+    assert report["summary"]["model_sql"]["total"] == 3
+    assert report["summary"]["model_sql"]["compiled"] == 3
+    assert report["summary"]["model_sql"]["readable"] == 2
+    assert report["summary"]["model_sql"]["unreadable"] == 1
+
+
+@pytest.mark.parametrize("resource", ["source", "seed"])
+def test_source_model_collision_stays_unreadable_on_real_compilation(tmp_path, resource):
+    (tmp_path / "models").mkdir()
+    (tmp_path / "dbt_project.yml").write_text(
+        'name: proj\nversion: "1.0"\nprofile: review\nseeds:\n  proj:\n    +schema: raw\n'
+    )
+    (tmp_path / "profiles.yml").write_text(
+        'review:\n  target: dev\n  outputs:\n    dev:\n      type: duckdb\n      path: ":memory:"\n'
+    )
+    if resource == "source":
+        (tmp_path / "models/schema.yml").write_text(
+            "version: 2\nsources:\n  - name: raw\n    schema: raw\n    tables:\n      - name: orders\n"
+        )
+        reference = "source('raw', 'orders')"
+    else:
+        (tmp_path / "seeds").mkdir()
+        (tmp_path / "seeds/orders.csv").write_text("foreign_id\n1\n")
+        reference = "ref('orders')"
+    # Avoid ref ambiguity with a same-named seed while keeping the physical alias.
+    local_name = "orders" if resource == "source" else "local_orders"
+    (tmp_path / f"models/{local_name}.sql").write_text(
+        "{{ config(alias='orders') }} select 1 as local_id"
+    )
+    (tmp_path / "models/known_reader.sql").write_text(
+        f"select * from {{{{ ref('{local_name}') }}}}"
+    )
+    reader = tmp_path / "models/foreign_reader.sql"
+    reader.write_text(f"select * from {{{{ {reference} }}}}")
+    _dbt_compile(tmp_path)
+    result = _dbt_plan(["stats", "--format", "json", "--project-dir", str(tmp_path)])
+    assert result.returncode == 0, result.stdout + result.stderr
+    report = json.loads(result.stdout)
+    assert report["summary"]["model_sql"]["compiled"] == 3
+    assert report["summary"]["model_sql"]["readable"] == 2
+    assert report["summary"]["model_sql"]["unreadable"] == 1
+    snapshot = _dbt_plan(["snapshot", "--project-dir", str(tmp_path)])
+    assert snapshot.returncode == 0, snapshot.stdout + snapshot.stderr
+    reader.write_text(reader.read_text() + " where 1 = 1")
+    _dbt_compile(tmp_path)
+    check = _dbt_plan(["check", "--format", "json", "--project-dir", str(tmp_path)])
+    # The replacement DDL is safe for a view; unresolved output is a separate
+    # review finding and must still prevent an overall all-clear.
+    assert check.returncode == 2, check.stdout + check.stderr
+    payload = json.loads(check.stdout)
+    assert "foreign_reader" in payload["parse_failures"]
+
+
+def test_stats_alias_collision_is_independent_of_real_manifest_order(tmp_path):
+    (tmp_path / "models").mkdir()
+    (tmp_path / "dbt_project.yml").write_text('name: proj\nversion: "1.0"\nprofile: review\n')
+    (tmp_path / "profiles.yml").write_text(
+        'review:\n  target: dev\n  outputs:\n    dev:\n      type: duckdb\n      path: ":memory:"\n'
+    )
+    (tmp_path / "models/orders_def.sql").write_text("select 1 as version_id")
+    (tmp_path / "models/orders_v1.sql").write_text(
+        "{{ config(alias='regular_orders', materialized='incremental', on_schema_change='sync_all_columns') }} select 2 as regular_id, 3 as doomed"
+    )
+    (tmp_path / "models/schema.yml").write_text(
+        "version: 2\nmodels:\n  - name: orders\n    latest_version: 1\n    versions:\n      - v: 1\n        defined_in: orders_def\n"
+    )
+    (tmp_path / "models/version_reader.sql").write_text("select * from {{ ref('orders', v=1) }}")
+    (tmp_path / "models/regular_reader.sql").write_text("select * from {{ ref('orders_v1') }}")
+    _dbt_compile(tmp_path)
+    manifest_path = tmp_path / "target/manifest.json"
+    manifest = json.loads(manifest_path.read_text())
+    for sorted_keys in (False, True):
+        manifest_path.write_text(json.dumps(manifest, sort_keys=sorted_keys))
+        result = _dbt_plan(["stats", "--format", "json", "--project-dir", str(tmp_path)])
+        assert result.returncode == 0, result.stdout + result.stderr
+        report = json.loads(result.stdout)
+        assert report["summary"]["total"] == 4
+        assert report["summary"]["model_sql"]["total"] == 4
+        assert report["summary"]["model_sql"]["compiled"] == 4
+        assert report["summary"]["model_sql"]["readable"] == 4
+    snapshot = _dbt_plan(["snapshot", "--project-dir", str(tmp_path)])
+    assert snapshot.returncode == 0, snapshot.stdout + snapshot.stderr
+    (tmp_path / "models/orders_v1.sql").write_text(
+        "{{ config(alias='regular_orders', materialized='incremental', on_schema_change='sync_all_columns') }} select 2 as regular_id"
+    )
+    _dbt_compile(tmp_path)
+    manifest_path.write_text(json.dumps(json.loads(manifest_path.read_text()), sort_keys=True))
+    check = _dbt_plan(["check", "--format", "json", "--project-dir", str(tmp_path)])
+    assert check.returncode == 1, check.stdout + check.stderr
+    models = {node["model_name"]: node for node in json.loads(check.stdout)["models"]}
+    assert models["orders_v1"]["materialization"] == "incremental"
+    assert models["orders_v1"]["columns_removed"] == ["doomed"]
+
+
+@pytest.mark.parametrize("reader_kind", ["named", "star_fail", "star_contract", "star_test"])
+def test_dag_alias_collision_keeps_actual_downstream(tmp_path, reader_kind):
+    (tmp_path / "models").mkdir()
+    (tmp_path / "dbt_project.yml").write_text('name: proj\nversion: "1.0"\nprofile: review\n')
+    (tmp_path / "profiles.yml").write_text(
+        'review:\n  target: dev\n  outputs:\n    dev:\n      type: duckdb\n      path: ":memory:"\n'
+    )
+    upstream = tmp_path / "models/stg.sql"
+    upstream.write_text("select 1 as id, 2 as doomed")
+    reader = "select doomed from {{ ref('stg') }}"
+    if reader_kind == "star_fail":
+        reader = "{{ config(materialized='incremental', on_schema_change='fail') }} select * from {{ ref('stg') }}"
+    elif reader_kind == "star_contract":
+        reader = "{{ config(contract={'enforced': true}) }} select * from {{ ref('stg') }}"
+    elif reader_kind == "star_test":
+        reader = "select * from {{ ref('stg') }}"
+    (tmp_path / "models/orders_def.sql").write_text(reader)
+    (tmp_path / "models/orders_v1.sql").write_text(
+        "{{ config(alias='regular_orders') }} select 3 as regular_id"
+    )
+    (tmp_path / "models/schema.yml").write_text(
+        "version: 2\nmodels:\n  - name: orders\n    latest_version: 1\n"
+        "    columns:\n      - name: id\n        data_type: integer\n"
+        "      - name: doomed\n        data_type: integer\n"
+        "    versions:\n      - v: 1\n        defined_in: orders_def\n"
+    )
+    if reader_kind == "star_test":
+        schema = tmp_path / "models/schema.yml"
+        schema.write_text(
+            schema.read_text().replace(
+                "      - name: doomed\n        data_type: integer\n",
+                "      - name: doomed\n        data_type: integer\n        data_tests: [not_null]\n",
+            )
+        )
+    _dbt_compile(tmp_path)
+    manifest = tmp_path / "target/manifest.json"
+    manifest.write_text(json.dumps(json.loads(manifest.read_text()), sort_keys=True))
+    snapshot = _dbt_plan(["snapshot", "--project-dir", str(tmp_path)])
+    assert snapshot.returncode == 0, snapshot.stdout + snapshot.stderr
+    upstream.write_text("select 1 as id")
+    _dbt_compile(tmp_path)
+    manifest.write_text(json.dumps(json.loads(manifest.read_text()), sort_keys=True))
+    expected_code, expected_risk = {
+        "named": (1, "broken_ref"),
+        "star_fail": (2, "build_failure"),
+        "star_contract": (2, "contract_violation"),
+        "star_test": (2, "data_test_failure"),
+    }[reader_kind]
+    for selection in ([], ["--select", "stg"]):
+        check = _dbt_plan(
+            ["check", "--format", "json", "--project-dir", str(tmp_path), *selection]
+        )
+        assert check.returncode == expected_code, check.stdout + check.stderr
+        changed = json.loads(check.stdout)["models"][0]
+        assert changed["downstream"] == ["orders_def"]
+        assert any(
+            (
+                impact["model_name"].startswith("not_null_orders")
+                if reader_kind == "star_test"
+                else impact["model_name"] == "orders_def"
+            )
+            and impact["risk"] == expected_risk
+            for impact in changed["downstream_impacts"]
+        )
+        assert all(impact["model_name"] != "orders_v1" for impact in changed["downstream_impacts"])
+    if reader_kind == "named":
+        edited = tmp_path / "models/orders_def.sql"
+        edited.write_text(edited.read_text() + "\n-- source edited after compile\n")
+        stamp = manifest.stat().st_mtime_ns + 2_000_000_000
+        os.utime(edited, ns=(stamp, stamp))
+        stale = _dbt_plan(
+            ["check", "--format", "json", "--project-dir", str(tmp_path), "--select", "stg"]
+        )
+        assert "models/orders_def.sql" in json.loads(stale.stdout)["stale_sources"]
+
+
 class TestDbtE2E:
     def test_compile_snapshot_check_no_changes(self, dbt_project):
         """compile → snapshot → compile again (no changes) → check → exit 0."""
@@ -665,8 +884,8 @@ class TestStatsAgreesWithCheck:
         _dbt_compile(unruled_project)
 
         stats = _dbt_plan(["stats", "--project-dir", str(unruled_project), "--dialect", "duckdb"])
-        assert "SELECT * usage: 1/3 models (33%)" in stats.stdout
-        assert "Columns readable: 3/3 compiled model(s)" in stats.stdout
+        assert "SELECT * usage: 1/3 SQL files (33%)" in stats.stdout
+        assert "Columns readable: 3/3 compiled SQL file(s)" in stats.stdout
         assert "SELECT * resolved through ref() or a CTE: 1" in stats.stdout
         assert "add column docs to resolve" not in stats.stdout
 

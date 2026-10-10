@@ -12,7 +12,7 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
 
-from dbt_plan.snapshot_integrity import write_snapshot_inventory
+from dbt_plan.snapshot_integrity import validate_snapshot_inventory, write_snapshot_inventory
 
 
 def _present(path: Path) -> bool:
@@ -57,6 +57,10 @@ def staged_snapshot(project: Path, base: Path) -> Iterator[Path]:
     try:
         yield stage
         write_snapshot_inventory(stage)
+        # A successfully written inventory can still be unreadable (for example,
+        # links are preserved during capture but refused by the reader). Reject
+        # it while the old baseline is still untouched.
+        validate_snapshot_inventory(stage)
         if _present(base):
             backup = Path(tempfile.mkdtemp(prefix=".snapshot-backup-", dir=base.parent)).absolute()
             previous = backup / "base"

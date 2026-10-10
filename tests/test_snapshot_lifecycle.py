@@ -6,6 +6,8 @@ import argparse
 import json
 from pathlib import Path
 
+import pytest
+
 from dbt_plan.cli import _do_check, _do_snapshot
 
 # ---------------------------------------------------------------------------
@@ -314,9 +316,9 @@ class TestSubdirectoryModels:
 
 
 class TestManifestMissingDuringSnapshot:
-    """Snapshot warns on stderr but still saves compiled SQL when manifest.json is absent."""
+    """Incomplete new input must not create an unreadable baseline."""
 
-    def test_warning_on_stderr_and_sql_saved(self, tmp_path, capsys):
+    def test_error_on_stderr_without_publication(self, tmp_path, capsys):
         project_dir = tmp_path / "project"
         project_dir.mkdir()
 
@@ -326,23 +328,16 @@ class TestManifestMissingDuringSnapshot:
         (models_dir / "my_model.sql").write_text("SELECT 1")
         # Deliberately do NOT create manifest.json
 
-        _do_snapshot(_snapshot_args(project_dir))
+        with pytest.raises(SystemExit) as exc:
+            _do_snapshot(_snapshot_args(project_dir))
+        assert exc.value.code == 3
 
         captured = capsys.readouterr()
-        # Warning should appear on stderr
-        assert "Warning" in captured.err
+        assert "Error" in captured.err
         assert "manifest.json" in captured.err
-
-        # But the compiled SQL should still be saved
-        assert "Snapshot saved" in captured.err
-        base_compiled = project_dir / ".dbt-plan" / "base" / "compiled"
-        assert (base_compiled / "models" / "my_model.sql").exists()
-        assert (base_compiled / "models" / "my_model.sql").read_text(
-            encoding="utf-8"
-        ) == "SELECT 1"
-
-        # And manifest.json should NOT exist in base
-        assert not (project_dir / ".dbt-plan" / "base" / "manifest.json").exists()
+        assert "dbt compile" in captured.err
+        assert "Snapshot saved" not in captured.err
+        assert not (project_dir / ".dbt-plan/base").exists()
 
 
 # ---------------------------------------------------------------------------

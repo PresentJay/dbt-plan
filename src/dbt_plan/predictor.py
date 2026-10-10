@@ -775,6 +775,10 @@ def analyze_cascade_impacts(
     test_sql_index = test_sql_index or {}
     updated = list(predictions)
     downstream_map: dict[str, list[str]] = {}
+    # Graph edges contain node IDs. Filename/version aliases can belong to a
+    # different model, so never round-trip an ID through model_key for lookup.
+    nodes_by_id = {node.node_id: node for node in base_node_index.values()}
+    nodes_by_id.update((node.node_id, node) for node in node_index.values())
 
     for i, pred in enumerate(updated):
         node_id = model_node_ids.get(pred.model_name)
@@ -784,7 +788,10 @@ def analyze_cascade_impacts(
         # A model with nothing downstream still carries its own unit tests, so
         # this does not return early -- only the report line is skipped.
         if downstream_nids:
-            downstream_map[pred.model_name] = [model_key(nid) for nid in downstream_nids]
+            downstream_map[pred.model_name] = [
+                nodes_by_id[nid].name if nid in nodes_by_id else model_key(nid)
+                for nid in downstream_nids
+            ]
 
         # incremental+ignore alters nothing physical, so nothing downstream of
         # it moves. Its own unit tests still do: they run the model's SELECT
@@ -835,8 +842,7 @@ def analyze_cascade_impacts(
         # the passthrough, not from the model that changed.
         ds_nodes = []
         for ds_nid in downstream_to_check:
-            ds_key = model_key(ds_nid)
-            ds_node = node_index.get(ds_key) or base_node_index.get(ds_key)
+            ds_node = nodes_by_id.get(ds_nid)
             if not ds_node:
                 continue
             # Ephemeral has no DDL, but its output still feeds tests and models.

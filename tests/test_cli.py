@@ -113,7 +113,7 @@ class TestSnapshotPathValidation:
         assert exc_info.value.code == 3
         assert project_dir.exists()
 
-    def test_snapshot_missing_manifest_warns(self, tmp_path, capsys):
+    def test_snapshot_missing_manifest_refuses(self, tmp_path, capsys):
         """Snapshot names the configured directory when manifest.json is missing."""
         project_dir = tmp_path / "project"
         project_dir.mkdir()
@@ -125,12 +125,16 @@ class TestSnapshotPathValidation:
         # No manifest.json created
 
         args = _make_snapshot_args(project_dir, target_dir="build")
-        _do_snapshot(args)
+        with pytest.raises(SystemExit) as exc:
+            _do_snapshot(args)
+        assert exc.value.code == 3
 
         captured = capsys.readouterr()
-        assert f"Warning: manifest.json not found in {target}" in captured.err
-        assert "Snapshot saved to" in captured.err
+        assert f"manifest.json not found in {target}" in captured.err
+        assert "dbt compile" in captured.err
+        assert "Snapshot saved to" not in captured.err
         assert "Snapshot saved to" not in captured.out
+        assert not (project_dir / ".dbt-plan/base").exists()
 
     def test_snapshot_happy_path(self, tmp_path, capsys):
         """Snapshot copies compiled SQL + manifest to .dbt-plan/base/."""
@@ -1067,11 +1071,22 @@ class TestStats:
             "columns_readable": {"readable": 1, "compiled": 2, "unreadable": 1},
             "cascade_risk": 1,
             "ddl_rules": {"matched": 3, "total": 3},
+            "model_sql": {
+                "total": 3,
+                "compiled": 2,
+                "readable": 1,
+                "unreadable": 1,
+                "missing": 1,
+                "manifest_only": 0,
+                "unclassified": 0,
+            },
         }
         assert data["details"] == {
             "unreadable_with_docs": 0,
             "unreadable_without_docs": 1,
             "no_rule": {},
+            "missing_model_sql": ["model.p.m3"],
+            "unclassified_model_nodes": [],
         }
 
     def test_stats_json_marks_compiled_counts_unavailable(self, tmp_path, capsys):

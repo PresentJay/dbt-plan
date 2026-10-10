@@ -8,6 +8,438 @@ import json
 import pytest
 
 from dbt_plan.cli import _do_stats
+from dbt_plan.manifest import build_node_index
+
+
+def _stats_report(project, capsys, *, target_dir="target", dialect=None):
+    args = _make_args(str(project), target_dir=target_dir, dialect=dialect)
+    args.format = "json"
+    _do_stats(args)
+    report = json.loads(capsys.readouterr().out)
+    args.format = "text"
+    _do_stats(args)
+    return report, capsys.readouterr().out
+
+
+def _write_stats_project(project, nodes, sql_files, *, target_dir="target"):
+    target = project / target_dir
+    target.mkdir(parents=True, exist_ok=True)
+    (target / "manifest.json").write_text(
+        json.dumps(_make_manifest(nodes, {"project_name": "proj", "adapter_type": "snowflake"}))
+    )
+    root = target / "compiled/proj"
+    for name, sql in sql_files.items():
+        path = root / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(sql)
+    return root
+
+
+@pytest.mark.parametrize(
+    "materialization,osc",
+    [
+        ("table", None),
+        ("incremental", "fail"),
+        ("custom", None),
+    ],
+)
+def test_stats_counts_alias_once_in_every_manifest_counter(tmp_path, capsys, materialization, osc):
+    nid, node = _model_node("orders", materialization=materialization, on_schema_change=osc)
+    node.update(path="renamed.sql", original_file_path="models/renamed.sql")
+    manifest = _make_manifest({nid: node}, {"project_name": "proj"})
+    index = build_node_index(manifest)
+    assert index["orders"].node_id == index["renamed"].node_id == nid
+    _write_stats_project(tmp_path, {nid: node}, {"models/renamed.sql": "select 1 as id"})
+    report, text = _stats_report(tmp_path, capsys)
+    summary = report["summary"]
+    assert summary["total"] == 1
+    assert summary["materializations"] == {materialization: 1}
+    assert summary["on_schema_change"] == ({"fail": 1} if osc else {})
+    assert summary["cascade_risk"] == (1 if osc else 0)
+    assert summary["ddl_rules"] == {"matched": 0 if materialization == "custom" else 1, "total": 1}
+    assert sum(report["details"]["no_rule"].values()) == (1 if materialization == "custom" else 0)
+    assert "1 model(s) in manifest" in text
+
+
+def test_stats_separates_models_from_artifact_and_orphan_sql(tmp_path, capsys):
+    nid, orders = _model_node("orders")
+    orders.update(path="orders.sql", original_file_path="models/orders.sql")
+    inline_id, inline = _model_node("inline")
+    inline.update(path="inline.sql", original_file_path="target/inline.sql")
+    _write_stats_project(
+        tmp_path,
+        {nid: orders, inline_id: inline},
+        {
+            "target/inline.sql": "select 1 as id",
+            "target/orphan.sql": "select 2 as id",
+        },
+    )
+    report, text = _stats_report(tmp_path, capsys)
+    assert report["summary"]["model_sql"] == {
+        "total": 1,
+        "compiled": 0,
+        "readable": 0,
+        "unreadable": 0,
+        "missing": 1,
+        "manifest_only": 0,
+        "unclassified": 1,
+    }
+    assert report["details"]["missing_model_sql"] == [nid]
+    assert report["details"]["unclassified_model_nodes"] == [inline_id]
+    # Keep existing JSON fields as file measurements instead of changing their
+    # public meaning without a version. Text makes the different denominator clear.
+    assert report["summary"]["columns_readable"] == {"compiled": 2, "readable": 2, "unreadable": 0}
+    assert "Model SQL present: 0/1" in text
+    assert nid in text
+    assert "Unclassified model nodes: 1" in text
+    assert "2/2 compiled SQL file(s)" in text
+    assert "2/2 compiled model(s)" not in text
+
+
+def test_stats_model_sql_tracks_versions_paths_filters_and_missing_inputs(tmp_path, capsys):
+    nodes = {}
+    for version, filename, directory in [(1, "orders_v1", "transforms"), (2, "latest", "extras")]:
+        nid, node = _model_node("orders")
+        node.update(
+            version=version,
+            path=f"{filename}.sql",
+            original_file_path=f"{directory}/{filename}.sql",
+        )
+        nodes[f"{nid}.v{version}"] = node
+    # An inline_ prefix can be a perfectly ordinary user model.
+    nid, node = _model_node("inline_user")
+    node.update(path="inline_user.sql", original_file_path="transforms/inline_user.sql")
+    nodes[nid] = node
+    for name, language, materialization in [
+        ("python", "python", "table"),
+        ("temporary", "sql", "ephemeral"),
+    ]:
+        nid, node = _model_node(name, materialization=materialization)
+        node.update(
+            language=language,
+            path=f"{name}.{'py' if language == 'python' else 'sql'}",
+            original_file_path=f"transforms/{name}.{'py' if language == 'python' else 'sql'}",
+        )
+        nodes[nid] = node
+    nid, node = _model_node("disabled")
+    node.update(path="disabled.sql", original_file_path="transforms/disabled.sql")
+    node["config"]["enabled"] = False
+    nodes[nid] = node
+    nid, node = _model_node("package", project="dep")
+    node.update(path="package.sql", original_file_path="transforms/package.sql")
+    nodes[nid] = node
+    _write_stats_project(
+        tmp_path,
+        nodes,
+        {
+            "transforms/orders_v1.sql": "select 1 as id",
+            "extras/latest.sql": "select * from unknown",
+            "transforms/inline_user.sql": "select 2 as id",
+            "transforms/temporary.sql": "select 3 as id",
+            "transforms/disabled.sql": "select 4 as id",
+            "transforms/package.sql": "select 5 as id",
+            "extras/orphan.sql": "select 6 as id",
+        },
+    )
+    report, text = _stats_report(tmp_path, capsys)
+    assert report["summary"]["total"] == 5
+    assert report["summary"]["model_sql"] == {
+        "total": 4,
+        "compiled": 4,
+        "readable": 3,
+        "unreadable": 1,
+        "missing": 0,
+        "manifest_only": 1,
+        "unclassified": 0,
+    }
+    assert report["details"]["missing_model_sql"] == []
+    assert "Model SQL present: 4/4" in text
+    assert "Model columns readable: 3/4" in text
+
+
+def test_stats_does_not_match_a_model_to_an_orphan_with_the_same_stem(tmp_path, capsys):
+    nid, node = _model_node("orders")
+    node.update(path="orders.sql", original_file_path="models/actual/orders.sql")
+    _write_stats_project(tmp_path, {nid: node}, {"models/orphan/orders.sql": "select 1 as id"})
+    report, _ = _stats_report(tmp_path, capsys)
+    assert report["summary"]["model_sql"]["compiled"] == 0
+    assert report["details"]["missing_model_sql"] == [nid]
+
+
+@pytest.mark.parametrize(
+    "declared", ["./models/orders.sql", "models//orders.sql", "models/./orders.sql"]
+)
+def test_stats_normalized_model_paths(tmp_path, capsys, declared):
+    nid, node = _model_node("orders")
+    node.update(path="orders.sql", original_file_path=declared)
+    _write_stats_project(tmp_path, {nid: node}, {"models/orders.sql": "select 1 as id"})
+    report, text = _stats_report(tmp_path, capsys)
+    assert report["summary"]["model_sql"]["compiled"] == 1
+    assert report["summary"]["model_sql"]["readable"] == 1
+    assert report["details"]["missing_model_sql"] == []
+    assert "Model SQL present: 1/1" in text
+
+
+@pytest.mark.parametrize("version_first", [False, True])
+def test_stats_alias_collision_keeps_each_model_identity(tmp_path, capsys, version_first):
+    nid, versioned = _model_node("orders", materialization="view")
+    versioned.update(
+        version=1,
+        path="orders_def.sql",
+        original_file_path="models/orders_def.sql",
+        relation_name="db.main.orders_v1",
+    )
+    regular_id, regular = _model_node(
+        "orders_v1", materialization="incremental", on_schema_change="fail"
+    )
+    regular.update(
+        path="orders_v1.sql",
+        original_file_path="models/orders_v1.sql",
+        relation_name="db.main.regular_orders",
+    )
+    regular["unrendered_config"] = {"on_schema_change": "fail"}
+    pairs = [(f"{nid}.v1", versioned), (regular_id, regular)]
+    nodes = dict(pairs if version_first else reversed(pairs))
+    for name in ("version_reader", "regular_reader"):
+        reader_id, reader = _model_node(name, materialization="view")
+        reader.update(path=f"{name}.sql", original_file_path=f"models/{name}.sql")
+        nodes[reader_id] = reader
+    _write_stats_project(
+        tmp_path,
+        nodes,
+        {
+            "models/orders_def.sql": "select 1 as version_id",
+            "models/orders_v1.sql": "select 2 as regular_id",
+            "models/version_reader.sql": "select * from db.main.orders_v1",
+            "models/regular_reader.sql": "select * from db.main.regular_orders",
+        },
+    )
+    report, _ = _stats_report(tmp_path, capsys)
+    summary = report["summary"]
+    assert summary["total"] == 4
+    assert summary["materializations"] == {"view": 3, "incremental": 1}
+    assert summary["on_schema_change"] == {"fail": 1}
+    assert summary["cascade_risk"] == 1
+    assert summary["ddl_rules"] == {"matched": 4, "total": 4}
+    assert summary["model_sql"]["compiled"] == 4
+    assert summary["model_sql"]["readable"] == 4
+
+
+@pytest.mark.parametrize("excluded", ["package", "disabled", "artifact", "python"])
+@pytest.mark.parametrize(
+    "foreign_name,relation_alias",
+    [("invoices", "invoices_v1"), ("orders", "orders"), ("invoices", "orders")],
+)
+def test_stats_excluded_model_relations(tmp_path, capsys, excluded, foreign_name, relation_alias):
+    nid, root = _model_node("orders")
+    root.update(
+        version=1,
+        path="shared.sql",
+        original_file_path="models/shared.sql",
+        relation_name="db.public.orders_v1",
+    )
+    foreign_id, foreign = _model_node(
+        foreign_name, project="dep" if excluded == "package" else "proj"
+    )
+    foreign.update(
+        version=2,
+        path="shared.sql",
+        original_file_path="models/shared.sql",
+        relation_name=f"db.dep.{relation_alias}",
+    )
+    if excluded == "disabled":
+        foreign["config"]["enabled"] = False
+    elif excluded == "artifact":
+        foreign["original_file_path"] = "target/shared.sql"
+    elif excluded == "python":
+        foreign.update(language="python", path="shared.py", original_file_path="models/shared.py")
+    nodes = {f"{nid}.v1": root, f"{foreign_id}.v2": foreign}
+    for name in ("known_reader", "foreign_reader"):
+        reader_id, reader = _model_node(name)
+        reader.update(path=f"{name}.sql", original_file_path=f"models/{name}.sql")
+        nodes[reader_id] = reader
+    _write_stats_project(
+        tmp_path,
+        nodes,
+        {
+            "models/shared.sql": "select 1 as local_id",
+            "models/known_reader.sql": "select * from db.public.orders_v1",
+            "models/foreign_reader.sql": f"select * from db.dep.{relation_alias}",
+        },
+    )
+    report, text = _stats_report(tmp_path, capsys)
+    assert report["summary"]["model_sql"]["total"] == 3
+    assert report["summary"]["model_sql"]["readable"] == 2
+    assert report["summary"]["model_sql"]["unreadable"] == 1
+    assert "Model columns readable: 2/3" in text
+
+
+def test_stats_custom_artifact_directory_does_not_exclude_target_named_model_path(
+    tmp_path, capsys
+):
+    nid, node = _model_node("orders")
+    node.update(path="orders.sql", original_file_path="target/orders.sql")
+    _write_stats_project(
+        tmp_path, {nid: node}, {"target/orders.sql": "select 1 as id"}, target_dir="build"
+    )
+    report, _ = _stats_report(tmp_path, capsys, target_dir="build")
+    assert report["summary"]["model_sql"]["compiled"] == 1
+    assert report["summary"]["model_sql"]["unclassified"] == 0
+
+
+def test_stats_absent_compiled_input_exposes_missing_sql_without_counting_python(tmp_path, capsys):
+    nid, node = _model_node("orders")
+    node.update(original_file_path="models/orders.sql", path="orders.sql")
+    python_id, python = _model_node("python")
+    python.update(language="python", original_file_path="models/python.py", path="python.py")
+    _write_stats_project(tmp_path, {nid: node, python_id: python}, {})
+    report, text = _stats_report(tmp_path, capsys)
+    assert report["summary"]["model_sql"] == {
+        "total": 1,
+        "compiled": 0,
+        "readable": 0,
+        "unreadable": 0,
+        "missing": 1,
+        "manifest_only": 1,
+        "unclassified": 0,
+    }
+    assert report["summary"]["columns_readable"] is None
+    assert report["details"]["missing_model_sql"] == [nid]
+    assert "Model SQL present: 0/1" in text
+
+
+def test_stats_model_resolver_uses_only_identified_model_paths(tmp_path, capsys):
+    base_id, base = _model_node("orders")
+    base.update(
+        path="orders.sql",
+        original_file_path="models/actual/orders.sql",
+        alias="orders",
+        relation_name='"db"."public"."orders"',
+    )
+    reader_id, reader = _model_node("reader")
+    reader.update(path="reader.sql", original_file_path="models/reader.sql")
+    _write_stats_project(
+        tmp_path,
+        {base_id: base, reader_id: reader},
+        {
+            "models/orphan/orders.sql": "select 1 as id",
+            "models/reader.sql": "select * from db.public.orders",
+        },
+    )
+    report, _ = _stats_report(tmp_path, capsys)
+    assert report["summary"]["model_sql"]["compiled"] == 1
+    assert report["summary"]["model_sql"]["readable"] == 0
+    assert report["summary"]["model_sql"]["unreadable"] == 1
+    assert report["details"]["missing_model_sql"] == [base_id]
+
+
+def test_stats_invalid_sql_encoding_is_unreadable(tmp_path, capsys):
+    nid, node = _model_node("orders")
+    node.update(path="orders.sql", original_file_path="models/orders.sql")
+    root = _write_stats_project(tmp_path, {nid: node}, {"models/orders.sql": "select 1 as id"})
+    (root / "models/orders.sql").write_bytes(b"select \xff as id")
+    report, _ = _stats_report(tmp_path, capsys)
+    assert report["summary"]["model_sql"]["readable"] == 0
+    assert report["summary"]["model_sql"]["unreadable"] == 1
+    assert report["summary"]["columns_readable"]["unreadable"] == 1
+
+
+@pytest.mark.parametrize("foreign_relation", ["db.raw.orders", "other.main.orders"])
+def test_stats_relation_identity_cannot_borrow_model_columns(tmp_path, capsys, foreign_relation):
+    nodes = {}
+    for name in ("orders", "known_reader", "foreign_reader"):
+        nid, node = _model_node(name)
+        node.update(
+            path=f"{name}.sql",
+            original_file_path=f"models/{name}.sql",
+            relation_name=f"db.main.{name}",
+        )
+        nodes[nid] = node
+    _write_stats_project(
+        tmp_path,
+        nodes,
+        {
+            "models/orders.sql": "select 1 as local_id",
+            "models/known_reader.sql": "select * from db.main.orders",
+            "models/foreign_reader.sql": f"select * from {foreign_relation}",
+        },
+    )
+    report, text = _stats_report(tmp_path, capsys)
+    assert report["summary"]["model_sql"]["readable"] == 2
+    assert report["summary"]["model_sql"]["unreadable"] == 1
+    assert report["summary"]["columns_readable"] == {"readable": 2, "unreadable": 1, "compiled": 3}
+    assert "Model columns readable: 2/3" in text
+
+
+@pytest.mark.parametrize(
+    "dialect,known,foreign",
+    [
+        ("snowflake", '"DB"."MAIN"."orders"', '"DB"."MAIN"."Orders"'),
+        ("postgres", '"db"."main"."orders"', '"db"."main"."Orders"'),
+        ("bigquery", "project.dataset.orders", "project.dataset.Orders"),
+    ],
+)
+def test_stats_relation_identity_preserves_table_case(tmp_path, capsys, dialect, known, foreign):
+    nodes = {}
+    for name in ("orders", "known_reader", "foreign_reader"):
+        nid, node = _model_node(name)
+        node.update(path=f"{name}.sql", original_file_path=f"models/{name}.sql")
+        if name == "orders":
+            node["relation_name"] = known
+        nodes[nid] = node
+    _write_stats_project(
+        tmp_path,
+        nodes,
+        {
+            "models/orders.sql": "select 1 as local_id",
+            "models/known_reader.sql": f"select * from {known}",
+            "models/foreign_reader.sql": f"select * from {foreign}",
+        },
+    )
+    report, _ = _stats_report(tmp_path, capsys, dialect=dialect)
+    assert report["summary"]["model_sql"]["readable"] == 2
+    assert report["summary"]["model_sql"]["unreadable"] == 1
+
+
+@pytest.mark.parametrize("has_relation", [False, True])
+@pytest.mark.parametrize("reference,readable", [("customers", 2), ("orders", 1)])
+def test_stats_relation_identity_uses_physical_alias(
+    tmp_path, capsys, has_relation, reference, readable
+):
+    nid, node = _model_node("orders")
+    node.update(path="orders.sql", original_file_path="models/orders.sql", alias="customers")
+    if has_relation:
+        node["relation_name"] = "db.main.customers"
+    reader_id, reader = _model_node("reader")
+    reader.update(path="reader.sql", original_file_path="models/reader.sql")
+    _write_stats_project(
+        tmp_path,
+        {nid: node, reader_id: reader},
+        {
+            "models/orders.sql": "select 1 as local_id",
+            "models/reader.sql": f"select * from {reference}",
+        },
+    )
+    report, _ = _stats_report(tmp_path, capsys)
+    assert report["summary"]["model_sql"]["readable"] == readable
+    assert report["summary"]["model_sql"]["unreadable"] == 2 - readable
+
+
+@pytest.mark.parametrize(
+    "declared", ["../models/orders.sql", "/models/orders.sql", r"C:\models\orders.sql"]
+)
+def test_stats_model_paths_cannot_escape_the_project(tmp_path, capsys, declared):
+    nid, node = _model_node("orders")
+    node.update(path="orders.sql", original_file_path=declared)
+    _write_stats_project(tmp_path, {nid: node}, {"models/orders.sql": "select 1 as id"})
+    args = _make_args(str(tmp_path))
+    args.format = "json"
+    with pytest.raises(SystemExit) as exc:
+        _do_stats(args)
+    assert exc.value.code == 3
+    output = capsys.readouterr()
+    assert not output.out
+    assert "original_file_path" in output.err
 
 
 def _make_manifest(nodes: dict, metadata: dict | None = None) -> dict:
@@ -241,7 +673,7 @@ class TestSelectStarCounting:
         _do_stats(args)
 
         out = capsys.readouterr().out
-        assert "SELECT * usage: 3/5 models (60%)" in out
+        assert "SELECT * usage: 3/5 SQL files (60%)" in out
 
 
 class TestManifestColumnFallback:
@@ -282,10 +714,10 @@ class TestManifestColumnFallback:
         _do_stats(args)
 
         out = capsys.readouterr().out
-        assert "SELECT * usage: 3/5 models (60%)" in out
+        assert "SELECT * usage: 3/5 SQL files (60%)" in out
         # None of the three stars can be resolved: they select from raw relations,
         # which are not models and have no compiled SQL to expand from.
-        assert "Columns readable: 2/5 compiled model(s)" in out
+        assert "Columns readable: 2/5 compiled SQL file(s)" in out
         assert "unresolved: 3 -- these report review required" in out
         assert "manifest columns documented for 2 of them" in out
         assert "no fallback for 1 (add column docs to resolve)" in out
@@ -479,7 +911,7 @@ class TestStatsWithDialect:
         _do_stats(args)
 
         out = capsys.readouterr().out
-        assert "SELECT * usage: 1/2 models (50%)" in out
+        assert "SELECT * usage: 1/2 SQL files (50%)" in out
 
     def test_snowflake_dialect_select_star_detection(self, tmp_path, capsys):
         """SELECT * detection works with default snowflake dialect."""
@@ -502,7 +934,7 @@ class TestStatsWithDialect:
         _do_stats(args)
 
         out = capsys.readouterr().out
-        assert "SELECT * usage: 1/2 models (50%)" in out
+        assert "SELECT * usage: 1/2 SQL files (50%)" in out
 
     def test_dialect_none_defaults_to_snowflake(self, tmp_path, capsys):
         """dialect=None should default to snowflake."""
@@ -522,7 +954,7 @@ class TestStatsWithDialect:
         _do_stats(args)
 
         out = capsys.readouterr().out
-        assert "SELECT * usage: 1/1 models (100%)" in out
+        assert "SELECT * usage: 1/1 SQL files (100%)" in out
 
 
 class TestStatsWithCorruptManifest:
@@ -636,8 +1068,8 @@ class TestStatsSelectStarZero:
         _do_stats(args)
 
         out = capsys.readouterr().out
-        assert "SELECT * usage: 0/2 models (0%)" in out
-        assert "Columns readable: 2/2 compiled model(s)" in out
+        assert "SELECT * usage: 0/2 SQL files (0%)" in out
+        assert "Columns readable: 2/2 compiled SQL file(s)" in out
         # Nothing unresolved, so no advice about how to resolve it.
         assert "unresolved" not in out
         assert "add column docs" not in out

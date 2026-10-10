@@ -37,16 +37,16 @@ and report `"unrecorded"`, never `"verified"`. Checking does not create an
 inventory or rewrite an old snapshot. A malformed or symlinked inventory is an
 error, not a legacy snapshot. The status is derived, never trusted from provenance.
 
-Capture preserves compiled symlinks without traversing them, as before; only
-regular files enter the inventory. Checking an inventoried snapshot containing
-symlinks or Windows junctions refuses it without reading their targets. Replace
-links with regular compiled files before capturing a baseline for verification.
-Capture without a manifest retains its existing warning, but that incomplete
-inventory cannot pass verification.
+Capture copies compiled symlinks into staging without traversing them, then
+rejects the staged inventory before publication, just as the reader rejects
+symlinks or Windows junctions without reading their targets. Replace links with
+regular compiled files before capturing a baseline. A missing or unreadable
+manifest also fails capture with exit 3 and preserves the old baseline.
 
-The inventory is written in the staging directory before publication. A hashing
-or writing failure leaves all previous baseline bytes, including its inventory,
-intact; retrying capture is supported. Existing recoverable rename and rollback
+The inventory is written and validated in the staging directory before
+publication. A hashing, writing, layout, or inventory validation failure leaves
+all previous baseline bytes, including its inventory, intact; retrying capture
+is supported. Existing recoverable rename and rollback
 guarantees still apply. Readers and writers must be externally serialized; this
 is not a concurrent-reader atomic swap or protection against concurrent edits.
 

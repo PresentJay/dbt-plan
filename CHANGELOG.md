@@ -7,6 +7,45 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.18.1] - 2026-10-10
+
+### Upgrade notes
+
+- An unresolved `SELECT *` in an added or modified model now appears in
+  `parse_failures`, even when its replacement DDL is safe. The default `check`
+  warning policy can therefore exit 2 on previously passing changes. Use explicit
+  output columns or artifacts with enough relation metadata to resolve them.
+
+### Fixed
+
+- Reject new snapshots with unreadable manifests, incompatible compiled layouts,
+  or unverifiable inventories before publication. Failed capture preserves all
+  previous baseline bytes; regenerate the compiled input before retrying.
+- Count each model node ID once in `stats`, preserving filename aliases and
+  distinct model versions. Add `summary.model_sql` plus missing/unclassified
+  node lists to separate model SQL presence and readability from legacy SQL-file
+  measurements. The existing JSON file-count fields remain available; their
+  text labels now explicitly refer to SQL files. See [stats](docs/stats.md).
+- Normalize equivalent manifest-relative model paths when matching compiled
+  SQL. Match relation indexes by node ID and refuse ambiguous bare names or
+  aliases, so excluded package models cannot borrow project-model columns.
+- Keep schema/catalog identity when resolving `SELECT *`. A qualified source,
+  seed or unknown relation no longer borrows columns from a same-named model;
+  unresolved changed SQL remains reviewable in `check` and unreadable in `stats`.
+- Preserve every enabled model in an ID index before registering filename
+  aliases. `stats` counts and model SQL resolution no longer depend on manifest
+  key order when an ordinary model name overlaps a versioned model alias.
+  Compiled filenames take precedence over generated aliases, so `check` applies
+  the owning model's DDL rules rather than another version's materialization.
+- Preserve dialect-specific quoted relation identity and physical aliases when
+  resolving model SQL. Logical model names and filenames no longer stand in for
+  a table whose alias is different. CTE names, table aliases and qualified stars
+  also preserve their identifier and schema/catalog identity.
+- Resolve cascade, downstream contracts and selected-input checks by node ID.
+  A version alias colliding with an ordinary model filename cannot substitute
+  the ordinary model's SQL or policy and hide a broken downstream reference.
+  Data tests use the attached model's compiled filename when known.
+
 ## [0.18.0] - 2026-10-06
 
 ### Upgrade notes

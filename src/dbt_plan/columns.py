@@ -5,6 +5,7 @@ from dataclasses import dataclass
 
 import sqlglot
 from sqlglot import exp
+from sqlglot.optimizer.normalize_identifiers import normalize_identifiers
 
 # Resolution walks CTE references; the cap is a backstop against pathological
 # nesting, not a real limit -- the `seen` set already stops cycles.
@@ -95,22 +96,55 @@ def _output_select(tree: exp.Expression) -> exp.Select | None:
     return tree if isinstance(tree, exp.Select) else None
 
 
-def _relation_key(table: exp.Table) -> str:
-    """`"j"."main"."stg_orders"` -> `j.main.stg_orders`, to match manifest relations."""
-    parts = [
-        part.name
-        for part in (table.args.get("catalog"), table.args.get("db"), table.this)
-        if part is not None
-    ]
-    return ".".join(parts).lower()
+def _relation_parts(table: exp.Table, dialect: str) -> list[str]:
+    normalized = normalize_identifiers(table.copy(), dialect=dialect)
+    unquoted = table.copy()
+    for part in unquoted.parts:
+        part.set("quoted", False)
+    lowercase = unquoted.copy()
+    for part in lowercase.parts:
+        part.set("this", part.name.lower())
+    lowercase = normalize_identifiers(lowercase, dialect=dialect)
+    unquoted = normalize_identifiers(unquoted, dialect=dialect)
+    parts = []
+    for part, default, lower in zip(
+        normalized.parts, unquoted.parts, lowercase.parts, strict=True
+    ):
+        if (part.args.get("quoted") and part.name != default.name) or "." in part.name:
+            parts.append(part.sql(dialect=dialect))
+        else:
+            # Keep historical lowercase callback keys only when the dialect
+            # folds unquoted names; case-sensitive table names stay distinct.
+            parts.append(part.name if default.name != lower.name else part.name.lower())
+    return parts
 
 
-def _cte_bodies(tree: exp.Expression) -> dict[str, exp.Expression]:
+def _relation_key(table: exp.Table, dialect: str) -> str:
+    """A relation key that preserves quoted identity under this SQL dialect."""
+    return ".".join(_relation_parts(table, dialect))
+
+
+def relation_keys(relation: str, dialect: str) -> tuple[str, str] | None:
+    """Canonical full and bare physical relation keys from manifest metadata."""
+    try:
+        parts = _relation_parts(sqlglot.to_table(relation, dialect=dialect), dialect)
+    except (sqlglot.errors.ParseError, sqlglot.errors.TokenError, ValueError, RecursionError):
+        return None
+    return (".".join(parts), parts[-1]) if parts else None
+
+
+def _identifier_key(identifier: exp.Identifier, dialect: str) -> str:
+    return _relation_key(exp.Table(this=identifier.copy()), dialect)
+
+
+def _cte_bodies(tree: exp.Expression, dialect: str) -> dict[str, exp.Expression]:
     """Top-level CTEs only. Nested ones are out of scope and must not shadow."""
     with_ = tree.args.get("with_") or tree.args.get("with")
     if with_ is None:
         return {}
-    return {cte.alias_or_name: cte.this for cte in with_.expressions}
+    return {
+        _identifier_key(cte.args["alias"].this, dialect): cte.this for cte in with_.expressions
+    }
 
 
 def _projection_cast(expr: exp.Expression, dialect: str) -> str | None:
@@ -166,9 +200,34 @@ def _resolve_star_columns(
             sources = ([frm.this] if frm else []) + [
                 join.this for join in select.args.get("joins") or []
             ]
-            matches = [
-                t for t in sources if isinstance(t, exp.Table) and t.alias_or_name == expr.table
-            ]
+            matches = []
+            for candidate in sources:
+                if not isinstance(candidate, exp.Table) or not isinstance(
+                    candidate.this, exp.Identifier
+                ):
+                    continue
+                alias = candidate.args.get("alias")
+                if expr.db or expr.catalog:
+                    if alias:
+                        continue
+                    requested = exp.Table(
+                        this=expr.args["table"].copy(),
+                        **{
+                            key: expr.args[key].copy()
+                            for key in ("db", "catalog")
+                            if expr.args.get(key) is not None
+                        },
+                    )
+                    matches_source = _relation_key(requested, dialect) == _relation_key(
+                        candidate, dialect
+                    )
+                else:
+                    identifier = alias.this if alias else candidate.this
+                    matches_source = _identifier_key(
+                        expr.args["table"], dialect
+                    ) == _identifier_key(identifier, dialect)
+                if matches_source:
+                    matches.append(candidate)
             if len(matches) != 1:
                 return None
             table = matches[0]
@@ -178,7 +237,9 @@ def _resolve_star_columns(
                 return None
         # An alias identifies this source in the SELECT, not a different CTE.
         # Both star forms must resolve CTE identity from the relation name.
-        source = table.name
+        if not isinstance(table.this, exp.Identifier):
+            return None
+        source = _relation_key(table, dialect)
         if table.alias_column_names:
             # FROM source AS alias(new_names) changes the output schema.
             return None
@@ -211,7 +272,9 @@ def _resolve_star_columns(
         # another model whose compiled SQL the caller already has on disk.
         if table is None or table_columns is None:
             return None
-        found = table_columns(_relation_key(table)) or table_columns(source.lower())
+        # Keep schema/catalog identity: a source or seed can share a model name.
+        # An unqualified relation already produces its bare name as this key.
+        found = table_columns(_relation_key(table, dialect))
         if not found:
             return None
         # Casts are not carried across a model boundary; that model is checked
@@ -251,7 +314,7 @@ def extract_column_details(
     select = _output_select(tree)
     if select is None or _has_sensitive_quoted_columns(tree, dialect):
         return ColumnExtraction([], True)
-    ctes = _cte_bodies(tree)
+    ctes = _cte_bodies(tree, dialect)
     if (ctes or table_columns) and any(_is_star(e) for e in select.expressions):
         resolved = _resolve_star_columns(select, ctes, frozenset(), dialect, table_columns)
         if resolved:
@@ -331,7 +394,7 @@ def extract_cast_types(
         return None
 
     resolved = _resolve_star_columns(
-        select, _cte_bodies(tree), frozenset(), dialect, table_columns
+        select, _cte_bodies(tree, dialect), frozenset(), dialect, table_columns
     )
     if resolved is None:
         return None

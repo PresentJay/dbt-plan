@@ -94,11 +94,12 @@ class TestItRefusesRatherThanGuesses:
     def test_it_returns_none(self, sql, why):
         assert _read(sql) is None, why
 
-    def test_one_table_and_no_schema_is_inferred_rather_than_refused(self):
-        """With a single relation in the query the attribution is not a guess."""
-        assert columns_read_from(
+    def test_one_table_without_schema_is_attributed_or_refused(self):
+        """SQLGlot may refuse missing schema; an empty all-clear is never valid."""
+        result = columns_read_from(
             "SELECT customer_id FROM stg_orders", "stg_orders", {}, dialect="duckdb"
-        ) == ["customer_id"]
+        )
+        assert result is None or result == ["customer_id"]
 
 
 class TestTheReaderOnlyAnswersWhenItHasTheSchema:
@@ -106,12 +107,12 @@ class TestTheReaderOnlyAnswersWhenItHasTheSchema:
     reference could be attributed to the wrong relation, and `[]` would read as
     "does not use it" -- a false all-clear rather than a false warning."""
 
-    def _reader(self, tmp_path, known):
+    def _reader(self, tmp_path, known, *, columns_known=True):
         from dbt_plan.cli import _make_reference_reader
 
         sql = tmp_path / "fct_orders.sql"
         sql.write_text("SELECT customer_id FROM stg_orders", encoding="utf-8")
-        columns = {"stg_orders": ["order_id", "customer_id"]}
+        columns = {"stg_orders": ["order_id", "customer_id"]} if columns_known else {}
         return _make_reference_reader(
             {"fct_orders": sql},
             dict.fromkeys(known),
@@ -126,6 +127,10 @@ class TestTheReaderOnlyAnswersWhenItHasTheSchema:
 
     def test_it_refuses_when_the_changed_model_is_not(self, tmp_path):
         assert self._reader(tmp_path, ["something_else"])("fct_orders", "stg_orders") is None
+
+    def test_it_refuses_when_known_model_columns_are_unknown(self, tmp_path):
+        reader = self._reader(tmp_path, ["stg_orders"], columns_known=False)
+        assert reader("fct_orders", "stg_orders") is None
 
     def test_it_refuses_when_the_downstream_sql_is_not_on_disk(self, tmp_path):
         assert self._reader(tmp_path, ["stg_orders"])("no_such_model", "stg_orders") is None

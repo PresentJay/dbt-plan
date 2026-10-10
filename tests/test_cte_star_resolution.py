@@ -21,6 +21,26 @@ import pytest
 
 from dbt_plan.columns import extract_columns
 
+
+@pytest.mark.parametrize(
+    "dialect,sql,expected",
+    [
+        ("snowflake", 'WITH orders AS (SELECT 1 AS local_id) SELECT * FROM "orders"', ["*"]),
+        ("snowflake", 'WITH "orders" AS (SELECT 1 AS local_id) SELECT * FROM orders', ["*"]),
+        ("postgres", 'WITH Orders AS (SELECT 1 AS local_id) SELECT * FROM "Orders"', ["*"]),
+        ("snowflake", "WITH orders AS (SELECT 1 AS local_id) SELECT * FROM ORDERS", ["local_id"]),
+        (
+            "postgres",
+            'WITH "Orders" AS (SELECT 1 AS local_id) SELECT * FROM "Orders"',
+            ["local_id"],
+        ),
+        ("duckdb", 'WITH orders AS (SELECT 1 AS local_id) SELECT * FROM "ORDERS"', ["local_id"]),
+    ],
+)
+def test_cte_identifier_identity(dialect, sql, expected):
+    assert extract_columns(sql, dialect=dialect) == expected
+
+
 DIALECT = "duckdb"
 
 

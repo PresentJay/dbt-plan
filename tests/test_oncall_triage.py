@@ -641,8 +641,8 @@ class TestScenario4StatsCommand:
         output = buf.getvalue()
 
         assert "SELECT * usage:" in output
-        # We have 2 SELECT * models out of 8 total
-        assert re.search(r"2/8 models", output)
+        # The legacy measurement scans 8 SQL files, 2 of which ask for a star.
+        assert re.search(r"SELECT \* usage: 2/8 SQL files", output)
 
     def test_stats_shows_model_count(self, tmp_path):
         """Stats header shows total model count."""

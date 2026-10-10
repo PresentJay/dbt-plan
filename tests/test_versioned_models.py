@@ -96,6 +96,38 @@ class TestBuildNodeIndex:
 
 
 class TestCascadeReachesAVersionedDownstream:
+    @pytest.mark.parametrize("version_first", [False, True])
+    @pytest.mark.parametrize("version_current", [False, True])
+    def test_dag_alias_collision_uses_node_identity(self, version_first, version_current):
+        from dbt_plan.predictor import Safety, analyze_cascade_impacts, predict_ddl
+
+        versioned = _model("fct_orders", version=2, path="orders_def.sql", osc="fail")
+        ordinary = _model("fct_orders_v2", materialized="view")
+        pairs = [versioned, ordinary] if version_first else [ordinary, versioned]
+        base_index = build_node_index(_manifest(*pairs))
+        current_index = build_node_index(_manifest(*(pairs if version_current else [ordinary])))
+        prediction = predict_ddl(
+            model_name="stg_orders",
+            materialization="view",
+            on_schema_change=None,
+            base_columns=["id", "doomed"],
+            current_columns=["id"],
+        )
+        updated, downstream = analyze_cascade_impacts(
+            predictions=[prediction],
+            model_node_ids={"stg_orders": "model.p.stg_orders"},
+            model_cols={"stg_orders": (["id", "doomed"], ["id"])},
+            all_downstream={"model.p.stg_orders": [versioned[0]]},
+            node_index=current_index,
+            base_node_index=base_index,
+            compiled_sql_index={},
+        )
+        assert downstream["stg_orders"] == ["orders_def"]
+        assert updated[0].safety == Safety.WARNING
+        assert [(impact.model_name, impact.risk) for impact in updated[0].downstream_impacts] == [
+            ("orders_def", "build_failure")
+        ]
+
     def test_a_downstream_version_is_looked_up_by_its_file(self):
         """`ds_nid.split(".")[-1]` used to hand the cascade the string `v2`."""
         from dbt_plan.predictor import Safety, analyze_cascade_impacts, predict_ddl
@@ -125,6 +157,22 @@ class TestCascadeReachesAVersionedDownstream:
 
 
 class TestDataTestsOnAVersionedModel:
+    def test_dag_alias_collision_data_test_keeps_attached_identity(self):
+        from dbt_plan.manifest import build_data_test_index
+
+        versioned = _model("fct_orders", version=2, path="orders_def.sql")
+        ordinary = _model("fct_orders_v2", materialized="view")
+        manifest = _manifest(versioned, ordinary)
+        manifest["nodes"]["test.p.not_null_version.abc"] = {
+            "name": "not_null_version",
+            "column_name": "doomed",
+            "attached_node": versioned[0],
+            "depends_on": {"nodes": [versioned[0]]},
+        }
+        node = build_data_test_index(manifest)["test.p.not_null_version.abc"]
+        assert node.columns_by_model == {"orders_def": frozenset({"doomed"})}
+        assert node.depends_on_models == ("orders_def",)
+
     def test_the_attached_node_is_read_the_same_way(self):
         from dbt_plan.manifest import build_data_test_index
 
