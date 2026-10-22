@@ -9,6 +9,7 @@ from dataclasses import dataclass, field
 
 from dbt_plan.findings import Finding
 from dbt_plan.predictor import RISK_SAFETY, DDLPrediction, Safety
+from dbt_plan_mcp.report_validation import report_severity
 
 _SAFETY_ORDER = {Safety.DESTRUCTIVE: 0, Safety.WARNING: 1, Safety.SAFE: 2}
 _SAFETY_ICON = {
@@ -209,6 +210,52 @@ def _ignore_sections(result: CheckResult, *, github: bool = False) -> list[str]:
             lines.extend(f"- {name}" for name in sorted(set(names)))
             lines.append("")
     return lines
+
+
+_REVIEW_NEXT_STEPS = {
+    "read_unresolved": "Resolve the unreadable downstream SQL and recompile before rerunning check.",
+    "parse_failed": (
+        "Use explicit output columns or provide the missing relation evidence, then recompile."
+    ),
+    "missing_manifest_resource": "Use matching compiled SQL and manifest artifacts, then rerun check.",
+    "missing_compiled_sql": "Complete compilation for the requested models, then rerun check.",
+    "stale_source": "Recompile the current model and macro sources, then rerun check.",
+    "baseline_missing": "Capture a baseline from the intended base revision, then rerun check.",
+    "baseline_corrupt": "Capture a baseline from the intended base revision, then rerun check.",
+}
+
+
+def _review_sections(result: CheckResult, severity: str, *, github: bool = False) -> list[str]:
+    """Surface the existing consumer verdict without changing counts or exit policy."""
+    prefix = "> " if github else ""
+    if severity == "safe":
+        status = "Review: NO REPORTED RISKS (before policy; supplied artifacts only)"
+    else:
+        status = f"Review required: {severity.upper()} (before policy; exit policy is separate)"
+    lines = [prefix + status]
+    if result.ignored_models:
+        lines.append(
+            prefix
+            + f"Excluded: {len(set(result.ignored_models))} model(s) by ignore policy; not checked"
+        )
+    reasons = {fact.evidence.reason_code for fact in result.findings or ()}
+    for values, code in (
+        (result.parse_failures, "parse_failed"),
+        (result.skipped_models, "missing_manifest_resource"),
+        (result.uncompiled_models, "missing_compiled_sql"),
+        (result.stale_sources, "stale_source"),
+    ):
+        if values:
+            reasons.add(code)
+    if result.baseline_problem:
+        reasons.add("baseline_" + result.baseline_problem)
+    advice = sorted({_REVIEW_NEXT_STEPS[code] for code in reasons if code in _REVIEW_NEXT_STEPS})
+    if severity != "safe" and (not advice or severity == "destructive"):
+        advice.insert(
+            0, "Review the finding evidence and affected source files before running dbt."
+        )
+    lines.extend(prefix + "Next: " + step for step in advice)
+    return [*lines, ""]
 
 
 def _finding_sections(result: CheckResult, *, github: bool = False) -> list[str]:
@@ -481,10 +528,13 @@ def format_text(result: CheckResult, *, color: bool | None = None) -> str:
         c = _SAFETY_COLOR.get(safety, "")
         return f"{c}{_BOLD}{text}{_RESET}"
 
+    review = report_severity(_report_data(result))
     if _has_nothing_to_report(result):
         return (
             "dbt-plan -- no model changes detected"
             + ("\n" + _analysis_header(result).rstrip() if result.analysis else "")
+            + "\n\n"
+            + "\n".join(_review_sections(result, review)).rstrip()
             + (
                 "\n" + "\n".join(_causal_sections(result))
                 if result.causal_graph is not None
@@ -498,6 +548,7 @@ def format_text(result: CheckResult, *, color: bool | None = None) -> str:
     if result.analysis:
         lines.insert(1, _analysis_header(result))
 
+    lines.extend(_review_sections(result, review))
     for pred in sorted_preds:
         mat_info = pred.materialization
         if pred.on_schema_change:
@@ -569,12 +620,12 @@ def format_text(result: CheckResult, *, color: bool | None = None) -> str:
     # Summary line (grepable for CI: grep "^dbt-plan:" output)
     lines.extend(_finding_sections(result))
     lines.extend(_ignore_sections(result))
-    lines.append(_summary_line(result))
+    lines.append(_summary_line(result, review))
 
     return "\n".join(lines)
 
 
-def _summary_line(result: CheckResult) -> str:
+def _summary_line(result: CheckResult, review: str) -> str:
     """One-line summary for CI pipeline grep."""
     n = len(result.predictions)
     safe = sum(1 for p in result.predictions if p.safety == Safety.SAFE)
@@ -587,15 +638,19 @@ def _summary_line(result: CheckResult) -> str:
         line += f" ({ack} acknowledged)"
     if cascade:
         line += f", {cascade} cascade risk(s)"
-    return line
+    label = review.upper() if review != "safe" else "NO REPORTED RISKS"
+    return line + f"; overall review: {label} (before policy)"
 
 
 def format_github(result: CheckResult) -> str:
     """Format result as GitHub-flavored markdown."""
+    review = report_severity(_report_data(result))
     if _has_nothing_to_report(result):
         return (
             "### dbt-plan -- no model changes detected"
             + ("\n\n" + _analysis_header(result).rstrip() if result.analysis else "")
+            + "\n\n"
+            + "\n".join(_review_sections(result, review, github=True)).rstrip()
             + (
                 "\n\n" + "\n".join(_causal_sections(result, github=True))
                 if result.causal_graph is not None
@@ -609,6 +664,7 @@ def format_github(result: CheckResult) -> str:
     if result.analysis:
         lines.insert(1, _analysis_header(result))
 
+    lines.extend(_review_sections(result, review, github=True))
     for pred in sorted_preds:
         icon = _SAFETY_ICON.get(pred.safety, "")
         mat_info = pred.materialization
@@ -683,13 +739,13 @@ def format_github(result: CheckResult) -> str:
 
     lines.extend(_finding_sections(result, github=True))
     lines.extend(_ignore_sections(result, github=True))
-    lines.append(f"\n`{_summary_line(result)}`")
+    lines.append(f"\n`{_summary_line(result, review)}`")
 
     return "\n".join(lines)
 
 
-def format_json(result: CheckResult) -> str:
-    """Format result as JSON for programmatic consumption."""
+def _report_data(result: CheckResult) -> dict:
+    """Keep human review and machine consumers on the same report facts."""
     from typing import Any
 
     models: list[dict[str, Any]] = []
@@ -771,4 +827,9 @@ def format_json(result: CheckResult) -> str:
         output["findings"] = [fact.to_dict() for fact in result.findings]
     if result.causal_graph is not None:
         output["causal_graph"] = result.causal_graph
-    return json.dumps(output, indent=2)
+    return output
+
+
+def format_json(result: CheckResult) -> str:
+    """Format result as JSON for programmatic consumption."""
+    return json.dumps(_report_data(result), indent=2)

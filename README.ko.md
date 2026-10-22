@@ -14,6 +14,10 @@ dbt-plan -- 4 model(s) changed
   baseline: unknown revision, unknown snapshot time
 
 
+Review required: DESTRUCTIVE (before policy; exit policy is separate)
+Next: Review the finding evidence and affected source files before running dbt.
+Next: Resolve the unreadable downstream SQL and recompile before rerunning check.
+
 DESTRUCTIVE  int_order_enriched (incremental, sync_all_columns)
   ADD COLUMN  billing_method
   ADD COLUMN  shipping_city
@@ -111,7 +115,7 @@ Causal explanations (before policy)
 Explanation detail omitted: 0 associations; 0 graph edges not displayed. Full relevant graph and findings: JSON.
 External consumer coverage: unknown. Exposures are declared consumers only.
 
-dbt-plan: 4 checked, 3 safe, 0 warning, 1 destructive, 1 cascade risk(s)
+dbt-plan: 4 checked, 3 safe, 0 warning, 1 destructive, 1 cascade risk(s); overall review: DESTRUCTIVE (before policy)
 ```
 
 ## 무엇을 하는가
