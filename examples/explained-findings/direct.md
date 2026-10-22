@@ -3,6 +3,9 @@
   baseline: file-only-example, 2000-01-01T00:00:00+00:00
 
 
+> Review required: DESTRUCTIVE (before policy; exit policy is separate)
+> Next: Review the finding evidence and affected source files before running dbt.
+
 🔴 **DESTRUCTIVE** `root` (view)
 - CREATE OR REPLACE VIEW
 - Downstream: reader (1 model(s))
@@ -32,4 +35,4 @@ Explanation detail omitted: 0 associations; 1 graph edges not displayed. Full re
 External consumer coverage: unknown. Exposures are declared consumers only.
 
 
-`dbt-plan: 1 checked, 0 safe, 0 warning, 1 destructive, 1 cascade risk(s)`
+`dbt-plan: 1 checked, 0 safe, 0 warning, 1 destructive, 1 cascade risk(s); overall review: DESTRUCTIVE (before policy)`

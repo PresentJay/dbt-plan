@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.18.2] - 2026-10-22
+
+### Fixed
+
+- Show report-wide review status before text/GitHub model rows and in the final
+  summary. Separate input or downstream warnings remain visible when model DDL
+  counts say `0 warning`, including when exit policy permits the check.
+- Add deduplicated next actions for unresolved downstream SQL, unreadable
+  columns, incomplete/mismatched artifacts, stale sources and legacy baseline
+  problems. Ignored models are explicitly not checked; no-risk wording is
+  limited to the supplied artifacts.
+- Reuse the existing MCP/CI severity interpretation without changing JSON
+  summary counts, findings, acknowledgement behavior or CLI exit codes.
+
 ## [0.18.1] - 2026-10-10
 
 ### Upgrade notes

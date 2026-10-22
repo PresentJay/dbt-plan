@@ -97,3 +97,37 @@ reports by setting `--output-dir examples/explained-findings`.
 The tests execute these commands and compare every published report byte for
 byte. These are reproducible interpretation examples, not a usability study;
 reviewer observation belongs to #250.
+
+## Review status and next steps
+
+Starting with 0.18.2, text and GitHub reports show the report-wide review status
+before the model rows and append it to the final summary. This uses the same
+conservative severity interpretation as the MCP and CI report consumers. It
+includes canonical findings, downstream impacts, input refusals and unknown graph
+semantics. Acknowledgements and `--fail-on` settings affect exit policy, not this
+raw review status.
+
+For example, the Unknown report has a safe view replacement and a separate
+unreadable downstream SQL finding:
+
+```text
+Review required: WARNING (before policy; exit policy is separate)
+Next: Resolve the unreadable downstream SQL and recompile before rerunning check.
+```
+
+Its final line retains `1 checked, 1 safe, 0 warning, 0 destructive` and adds
+`overall review: WARNING (before policy)`. The original counts describe model
+DDL predictions; they do not count every canonical finding or unchanged
+downstream resource. JSON `summary` counts and fields are unchanged. Machine
+consumers should retain the full findings and refusal fields, not infer an
+all-clear from `summary.warning == 0`.
+
+Next steps also cover unreadable columns, incomplete compilation, mismatched
+manifest/SQL inputs, stale sources and missing/corrupt historical baselines.
+Advice is deduplicated by action; unknown reasons retain a generic request to
+review the evidence. Snapshot layout/inventory errors still stop execution with
+exit 3 and their existing diagnostics, rather than producing a review report.
+
+`NO REPORTED RISKS` is explicitly limited to supplied artifacts. Ignored models
+are counted separately as not checked. This display does not measure project
+coverage or establish that external consumers are safe.

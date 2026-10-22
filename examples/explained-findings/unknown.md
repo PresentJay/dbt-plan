@@ -3,6 +3,9 @@
   baseline: file-only-example, 2000-01-01T00:00:00+00:00
 
 
+> Review required: WARNING (before policy; exit policy is separate)
+> Next: Resolve the unreadable downstream SQL and recompile before rerunning check.
+
 ✅ **SAFE** `root` (view)
 - CREATE OR REPLACE VIEW
 - Downstream: reader (1 model(s))
@@ -30,4 +33,4 @@ Explanation detail omitted: 0 associations; 1 graph edges not displayed. Full re
 External consumer coverage: unknown. Exposures are declared consumers only.
 
 
-`dbt-plan: 1 checked, 1 safe, 0 warning, 0 destructive`
+`dbt-plan: 1 checked, 1 safe, 0 warning, 0 destructive; overall review: WARNING (before policy)`
