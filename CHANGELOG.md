@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.18.3] - 2026-10-26
+
+### Fixed
+
+- Resolve bare stars over a single derived SELECT with explicitly named
+  projections. Empty-table macros can now expose known column removals instead
+  of falling back to manifest declarations. Preserve explicit CAST evidence
+  within the same SQL statement. (#311, #312)
+- Keep unknown projections, nested stars, joins, source-column alias lists,
+  value-table SELECTs, pivots, column-expanding expressions and unsupported
+  star modifiers reviewable. No warehouse fallback or runtime dependency is added.
+
+### Upgrade notes
+
+- A known column removal in an incremental `sync_all_columns` model can now
+  produce a named destructive finding (exit 1) where manifest fallback previously
+  required review (exit 2). Existing exit policies and report fields are unchanged.
+- The package release does not move the Marketplace `v1` Action tag. Pin the
+  Python package separately with the Action's `version` input.
+
 ## [0.18.2] - 2026-10-22
 
 ### Fixed
