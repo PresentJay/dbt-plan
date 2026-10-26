@@ -25,6 +25,19 @@ therefore says nothing about consumers in other projects, dashboards not declare
 as exposures, or external SQL jobs. Review those consumers separately when a
 public model changes.
 
+## Stars over derived tables
+
+A bare `SELECT *` over a single derived table can resolve when its inner
+`SELECT` names every output explicitly, as in
+`SELECT * FROM (SELECT CAST(1 AS BIGINT) AS book_id) AS empty_table WHERE 1 = 0`.
+Empty-table macros use this pattern to declare an incremental model's schema.
+Column names and explicit casts come from the SQL rather than manifest fallback.
+
+This bounded expansion does not resolve qualified stars over derived tables,
+joins, source-column alias lists, inner CTE scopes, set operations or nested
+stars. Value-table SELECTs, column-expanding expressions such as DuckDB
+`COLUMNS`, pivots and unsupported star modifiers also require review.
+
 ## Stars over sources and seeds
 
 The relation resolver indexes compiled model relations. Sources and seeds do not

@@ -773,6 +773,37 @@ class TestParseFailures:
 
 
 class TestManifestColumnFallback:
+    def test_explicit_derived_columns_override_declared_schema(self, tmp_path, capsys):
+        manifest = {
+            "metadata": {"project_name": "my_project", "adapter_type": "duckdb"},
+            "nodes": {
+                "model.my_project.books": {
+                    "name": "books",
+                    "config": {"materialized": "incremental"},
+                    "unrendered_config": {"on_schema_change": "sync_all_columns"},
+                    "columns": {"book_id": {}, "description": {}},
+                }
+            },
+        }
+        project = _make_project(
+            tmp_path,
+            models_sql={"books": "SELECT * FROM (SELECT 1 AS book_id) b WHERE 1 = 0"},
+            manifest=manifest,
+            base_sql={
+                "books": "SELECT * FROM (SELECT 1 AS book_id, 'sample' AS description) b "
+                "WHERE 1 = 0"
+            },
+            base_manifest=manifest,
+        )
+
+        assert _do_check(_make_check_args(project, fmt="json")) == 1
+        report = json.loads(capsys.readouterr().out)
+        assert report["models"][0]["columns_removed"] == ["description"]
+        assert any(
+            finding["rule_code"] == "ddl.drop_column" and finding["column"] == "description"
+            for finding in report["findings"]
+        )
+
     def test_current_cols_fallback_from_manifest(self, tmp_path, capsys):
         """When extract_columns returns ['*'], use node.columns from manifest."""
         manifest = {
