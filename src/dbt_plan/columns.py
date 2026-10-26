@@ -71,7 +71,7 @@ def _exclude_star_columns(
     return [(name, cast) for name, cast in columns if name not in excluded]
 
 
-def _sole_source(select: exp.Select) -> exp.Table | None:
+def _sole_source(select: exp.Select) -> exp.Table | exp.Subquery | None:
     """The only FROM source, or None when there is not exactly one.
 
     An unqualified `*` over a join means every joined source's columns. Resolving
@@ -84,8 +84,8 @@ def _sole_source(select: exp.Select) -> exp.Table | None:
     if frm is None:
         return None
     source = frm.this
-    if not isinstance(source, exp.Table):
-        return None  # subquery, table function, UNNEST -- not a resolvable name
+    if not isinstance(source, exp.Table | exp.Subquery):
+        return None  # table function, UNNEST -- not a resolvable source
     return source
 
 
@@ -179,9 +179,10 @@ def _resolve_star_columns(
     if len(seen) > _MAX_CTE_DEPTH:
         return None
 
-    # PIVOT/UNPIVOT transform a source schema. Never resolve its input star as
-    # the transformed output, including qualified stars referencing a CTE.
-    if any(table.args.get("pivots") for table in select.find_all(exp.Table)):
+    # Value-table SELECTs and pivots do not expose their input projection schema.
+    if select.args.get("kind") or any(
+        table.args.get("pivots") for table in select.find_all(exp.Table)
+    ):
         return None
 
     columns: list[tuple[str, str | None]] = []
@@ -235,6 +236,32 @@ def _resolve_star_columns(
             table = _sole_source(select)
             if table is None:
                 return None
+        if isinstance(table, exp.Subquery):
+            body = table.this
+            if (
+                table.alias_column_names
+                or table.args.get("pivots")
+                or not isinstance(body, exp.Select)
+                or body.args.get("with_")
+                or body.args.get("with")
+                or body.args.get("kind")
+                or any(
+                    _is_star(projection)
+                    or not isinstance(projection, exp.Column | exp.Alias)
+                    or projection.find(exp.Star, exp.Columns, exp.UDTF) is not None
+                    for projection in body.expressions
+                )
+            ):
+                return None
+            # Only explicit projections cross this boundary; nested scopes stay unresolved.
+            inner = _resolve_star_columns(body, {}, seen, dialect, table_columns)
+            if not inner:
+                return None
+            expanded = _exclude_star_columns(expr, inner)
+            if expanded is None:
+                return None
+            columns.extend(expanded)
+            continue
         # An alias identifies this source in the SELECT, not a different CTE.
         # Both star forms must resolve CTE identity from the relation name.
         if not isinstance(table.this, exp.Identifier):
@@ -315,7 +342,7 @@ def extract_column_details(
     if select is None or _has_sensitive_quoted_columns(tree, dialect):
         return ColumnExtraction([], True)
     ctes = _cte_bodies(tree, dialect)
-    if (ctes or table_columns) and any(_is_star(e) for e in select.expressions):
+    if any(_is_star(e) for e in select.expressions):
         resolved = _resolve_star_columns(select, ctes, frozenset(), dialect, table_columns)
         if resolved:
             return ColumnExtraction([name for name, _ in resolved])

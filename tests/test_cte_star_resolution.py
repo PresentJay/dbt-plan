@@ -124,9 +124,8 @@ class TestRefusals:
         """No CTE to resolve against, and dbt-plan does not query the warehouse."""
         assert cols("select * from some_physical_table") == ["*"]
 
-    def test_star_over_a_subquery_refuses(self):
-        """Resolvable in principle; deliberately out of scope until it has its own tests."""
-        assert cols("select * from (select a, b from t) s") == ["*"]
+    def test_star_over_a_subquery_with_unknown_columns_refuses(self):
+        assert cols("select * from (select * from t) s") == ["*"]
 
     def test_star_over_a_cte_that_itself_selects_star_from_a_table_refuses(self):
         """The chain has to bottom out in explicit columns, not in another unknown."""
