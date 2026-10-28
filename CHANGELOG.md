@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.18.4] - 2026-10-28
+
+### Fixed
+
+- Accept the nested SQL directories produced by dbt 1.12 for snapshots, including
+  multiple snapshot blocks in one source file. Capture inventories every SQL
+  leaf instead of rejecting the source-file directory. (#313)
+- Keep empty SQL-named directories, links, special files, changed membership and
+  modified baseline bytes as integrity errors. Compiled SQL iterators skip
+  directories while still visiting their descendants.
+
+### Upgrade notes
+
+- A project with ordinary models and dbt 1.12 snapshots can now create and check
+  its baseline. Snapshot definition changes still require review; this does not
+  add snapshot DDL prediction. Inventory format and exit policies are unchanged.
+- dbt 1.12 normalized snapshot checksums may still cause false stale-source
+  warnings. They remain conservative pending a sound source-verification fix. (#314)
+
 ## [0.18.3] - 2026-10-26
 
 ### Fixed

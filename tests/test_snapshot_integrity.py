@@ -432,6 +432,124 @@ def test_directory_named_sql_is_rejected_before_analysis(project, capsys):
     refused(project, capsys)
 
 
+@pytest.fixture
+def snapshot_containers(project, capsys):
+    """dbt 1.12 writes every snapshot block beneath its source filename."""
+    manifest_path = project / "target/manifest.json"
+    manifest = json.loads(manifest_path.read_text())
+    source = "snapshots/history/orders_history.sql"
+    for name in ("orders_history", "customers_history"):
+        node_id = f"snapshot.my_project.{name}"
+        compiled = project / f"target/compiled/my_project/{source}/{name}.sql"
+        compiled.parent.mkdir(parents=True, exist_ok=True)
+        compiled.write_text("select 1 as id")
+        manifest["nodes"][node_id] = {
+            "name": name,
+            "resource_type": "snapshot",
+            "original_file_path": source,
+            "compiled_path": str(compiled),
+            "compiled_code": "select 1 as id",
+            "raw_code": "select 1 as id",
+            "config": {
+                "enabled": True,
+                "materialized": "snapshot",
+                "strategy": "check",
+                "check_cols": ["id"],
+            },
+        }
+        manifest["child_map"][node_id] = []
+    manifest_path.write_text(json.dumps(manifest))
+    _do_snapshot(_snapshot_args(project))
+    capsys.readouterr()
+    return project
+
+
+def test_snapshot_containers_capture_all_sql_and_check(snapshot_containers, capsys):
+    project = snapshot_containers
+    entries = inventory(project)["files"]
+    assert [entry["path"] for entry in entries] == [
+        "compiled/models/orders.sql",
+        "compiled/snapshots/history/orders_history.sql/customers_history.sql",
+        "compiled/snapshots/history/orders_history.sql/orders_history.sql",
+        "manifest.json",
+    ]
+    for entry in entries:
+        assert (
+            entry["sha256"]
+            == hashlib.sha256((base(project) / entry["path"]).read_bytes()).hexdigest()
+        )
+    assert _do_check(_check_args(project)) == 0
+    report = json.loads(capsys.readouterr().out)
+    assert report["analysis"]["baseline"]["integrity"] == "verified"
+    assert report["summary"]["total"] == 0
+
+
+@pytest.mark.parametrize("damage", ["byte", "missing", "extra", "directory"])
+def test_snapshot_container_child_damage_refused(snapshot_containers, capsys, damage):
+    project = snapshot_containers
+    path = base(project) / "compiled/snapshots/history/orders_history.sql/orders_history.sql"
+    if damage == "byte":
+        path.write_text("select 2 as id")
+    elif damage == "extra":
+        path.with_name("extra.sql").write_text("select 1")
+    else:
+        path.unlink()
+        if damage == "directory":
+            path.mkdir()
+            (path / "orders_history.sql").write_text("select 1 as id")
+    refused(project, capsys)
+
+
+@pytest.mark.parametrize("kind", ["symlink", "junction", "fifo"])
+@pytest.mark.parametrize("location", ["container", "child"])
+def test_snapshot_container_unsafe_types_refused_before_open(
+    snapshot_containers, capsys, monkeypatch, kind, location
+):
+    import stat
+    from types import SimpleNamespace
+
+    project = snapshot_containers
+    path = base(project) / "compiled/snapshots/history/orders_history.sql"
+    if location == "child":
+        path /= "orders_history.sql"
+    original_lstat = Path.lstat
+    original_open = Path.open
+
+    def lstat(candidate, *args, **kwargs):
+        info = original_lstat(candidate, *args, **kwargs)
+        if candidate != path:
+            return info
+        if kind == "junction":
+            return SimpleNamespace(
+                st_mode=info.st_mode, st_file_attributes=stat.FILE_ATTRIBUTE_REPARSE_POINT
+            )
+        return SimpleNamespace(st_mode=stat.S_IFLNK if kind == "symlink" else stat.S_IFIFO)
+
+    def guarded(candidate, *args, **kwargs):
+        assert not candidate.is_relative_to(base(project)), "types must be checked before opening"
+        return original_open(candidate, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "lstat", lstat)
+    monkeypatch.setattr(Path, "open", guarded)
+    refused(project, capsys)
+
+
+def test_snapshot_container_config_change_requires_review(snapshot_containers, capsys):
+    project = snapshot_containers
+    path = project / "target/manifest.json"
+    manifest = json.loads(path.read_text())
+    manifest["nodes"]["snapshot.my_project.orders_history"]["config"]["check_cols"] = "all"
+    path.write_text(json.dumps(manifest))
+    args = _check_args(project)
+    args.fail_on = "warning"
+    assert _do_check(args) == 2
+    report = json.loads(capsys.readouterr().out)
+    assert [(model["model_name"], model["safety"]) for model in report["models"]] == [
+        ("orders_history", "warning")
+    ]
+    assert "REVIEW REQUIRED" in json.dumps(report["models"][0]["operations"])
+
+
 def test_special_metadata_file_refused_before_open(project, capsys, monkeypatch):
     import stat
     from types import SimpleNamespace

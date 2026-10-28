@@ -85,6 +85,8 @@ def _inputs(base: Path, *, validating: bool) -> list[str]:
     Scan the entire snapshot to detect SQL moved outside compiled/ as well.
     """
     found = []
+    sql_directories: set[Path] = set()
+    sql_parents: set[Path] = set()
     pending = [base]
     while pending:
         directory = pending.pop()
@@ -97,7 +99,7 @@ def _inputs(base: Path, *, validating: bool) -> list[str]:
                 continue
             if stat.S_ISDIR(mode):
                 if path.suffix.lower() == ".sql":
-                    raise _error(f"SQL input is a directory: {path.relative_to(base)}")
+                    sql_directories.add(path)
                 pending.append(path)
                 continue
             name = path.relative_to(base).as_posix()
@@ -105,6 +107,13 @@ def _inputs(base: Path, *, validating: bool) -> list[str]:
                 raise _error(f"Input is not a regular file: {name}")
             if name == "manifest.json" or path.suffix.lower() == ".sql":
                 found.append(_canonical_path(name))
+                if name != "manifest.json":
+                    sql_parents.update(path.parents)
+    # dbt snapshots can contain several blocks in one source .sql file, so
+    # compiled/<source>.sql/ holds their individual SQL files. Traverse and hash
+    # every child; a .sql directory without any regular SQL still signals damage.
+    for directory in sorted(sql_directories - sql_parents):
+        raise _error(f"SQL input is a directory: {directory.relative_to(base)}")
     return sorted(found)
 
 
