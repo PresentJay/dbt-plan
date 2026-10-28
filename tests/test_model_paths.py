@@ -154,6 +154,22 @@ class TestIterModelSql:
         root = self._tree(tmp_path, "models/tests/helper.sql", "tests/singular.sql")
         assert [p.name for p in iter_model_sql(root, ("models",))] == ["helper.sql"]
 
+    def test_sql_containers_yield_files_without_losing_children(self, tmp_path):
+        root = self._tree(
+            tmp_path,
+            "models/archive.sql/orders.sql",
+            "snapshots/orders_history.sql/orders_history.sql",
+            "snapshots/orders_history.sql/customers_history.sql",
+        )
+        model = root / "models/archive.sql/orders.sql"
+        snapshots = {
+            root / "snapshots/orders_history.sql/orders_history.sql",
+            root / "snapshots/orders_history.sql/customers_history.sql",
+        }
+        assert list(iter_model_sql(root, ("models",))) == [model]
+        assert set(iter_non_model_sql(root, ("models",))) == snapshots
+        assert set(iter_model_sql(root)) == {model, *snapshots}
+
 
 class TestEndToEnd:
     """The reported failure, through the CLI."""

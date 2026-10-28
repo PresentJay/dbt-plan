@@ -29,7 +29,7 @@ def iter_model_sql(root: Path, model_dirs: Sequence[str] | None = None) -> Itera
     Symlinks are skipped so a link cannot pull in a file outside the project.
     """
     for f in root.rglob("*.sql"):
-        if f.is_symlink():
+        if f.is_symlink() or f.is_dir():
             continue
         parts = f.relative_to(root).parts
         if model_dirs is not None and parts[0] not in model_dirs:
@@ -63,7 +63,7 @@ def iter_non_model_sql(root: Path, model_dirs: Sequence[str]) -> Iterator[Path]:
     rule read the other way round.
     """
     for f in root.rglob("*.sql"):
-        if f.is_symlink():
+        if f.is_symlink() or f.is_dir():
             continue
         parts = f.relative_to(root).parts
         under_yaml = any(part.endswith((".yml", ".yaml")) for part in parts[:-1])
