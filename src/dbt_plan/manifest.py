@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import ast
 import csv
+import hashlib
 import io
 import json
 import re
@@ -12,6 +13,9 @@ from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath
 
 _VERSION_TAIL = re.compile(r"^v[0-9]+$")
+_SNAPSHOT_GAP = re.compile(r"(?:\s+|\{#.*?#\})*", re.S)
+_SNAPSHOT_OPEN = re.compile(r"\{%\s*snapshot\s+([A-Za-z_]\w*)\s*%\}")
+_SNAPSHOT_CLOSE = re.compile(r"\{%\s*endsnapshot\s*%\}")
 
 
 def model_key(node_id: str) -> str:
@@ -245,7 +249,7 @@ def _source_provenance(manifest: dict) -> dict:
             if project and len(parts) > 1 and parts[1] != project:
                 continue
             path, content = node.get("original_file_path"), node.get(text_key)
-            if not isinstance(path, str) or not path or not isinstance(content, str):
+            if not isinstance(path, str) or not path:
                 continue
             if section == "nodes":
                 # Generic tests point at YAML but raw_code is generated SQL, not
@@ -253,16 +257,16 @@ def _source_provenance(manifest: dict) -> dict:
                 if PurePosixPath(path).suffix.lower() in {".sql", ".py"}:
                     if nid.startswith("snapshot."):
                         # SQL snapshot raw_code is only the block body. dbt's
-                        # checksum covers the complete stripped source file,
-                        # including block names and other snapshots in that file.
+                        # checksum covers the whole file (whitespace-normalized
+                        # in dbt 1.12), including names and other snapshot blocks.
                         checksum = node.get("checksum") or {}
                         digest = (
                             checksum.get("checksum") if checksum.get("name") == "sha256" else None
                         )
                         snapshots.setdefault(path, []).append(digest)
-                    else:
+                    elif isinstance(content, str):
                         files[path] = content
-            else:
+            elif isinstance(content, str):
                 macros.setdefault(path, []).append(content)
     result: dict = {}
     if files:
@@ -272,6 +276,43 @@ def _source_provenance(manifest: dict) -> dict:
     if snapshots:
         result["source_snapshots"] = snapshots
     return result
+
+
+def snapshot_source_is_current(content: str, checksums: list, nodes: list[dict]) -> bool:
+    """Verify legacy file hashes or bind dbt 1.12 block bodies to their names."""
+    if not checksums:
+        return False
+    digest = hashlib.sha256(content.strip().encode("utf-8")).hexdigest()
+    if all(value == digest for value in checksums):
+        return True
+    normalized = hashlib.sha256(" ".join(content.split()).encode("utf-8")).hexdigest()
+    if any(value != normalized for value in checksums) or len(nodes) != len(checksums):
+        return False
+    bodies = {}
+    for node in nodes:
+        name, body = node.get("name"), node.get("raw_code")
+        if not isinstance(name, str) or not isinstance(body, str) or name in bodies:
+            return False
+        bodies[name] = body
+    position = 0
+    while position < len(content):
+        position = _SNAPSHOT_GAP.match(content, position).end()
+        if position == len(content):
+            break
+        opening = _SNAPSHOT_OPEN.match(content, position)
+        if opening is None or opening[1] not in bodies:
+            return False
+        body = bodies.pop(opening[1])
+        position = opening.end()
+        # Normalized hashes hide meaningful whitespace; bodies must match exactly.
+        if not content.startswith(body, position):
+            return False
+        position += len(body)
+        closing = _SNAPSHOT_CLOSE.match(content, position)
+        if closing is None:
+            return False
+        position = closing.end()
+    return not bodies
 
 
 def _source_dirs(manifest: dict) -> tuple[str, ...]:
