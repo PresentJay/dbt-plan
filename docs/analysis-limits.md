@@ -52,6 +52,20 @@ from star resolution: supporting manifest-based resolution in future would not
 make seed data or external source schema changes visible. dbt-plan does not query
 `information_schema`, load `catalog.json`, or contact a warehouse to fill gaps.
 
+## Comment-only dependencies
+
+A `ref()` inside a SQL comment can create a manifest dependency even though the
+compiled query never reads that relation. Cascade traversal excludes such an edge
+only when current compiled SQL proves the physical relation occurs in a comment
+and is absent from a single readable query. Graph selection still uses the
+original manifest, including these edges.
+
+Explicit `depends_on` or executable comments (`/*! ... */`, `/*M! ... */`),
+user-defined or dynamic functions, unknown
+relations, Python/ephemeral/custom models, hooks and unverified compilation retain
+the dependency. Alternate real dependency paths still propagate findings. This
+bounded check can leave false warnings when it cannot prove an edge is inactive.
+
 ## Compilation and runtime
 
 `check` and MCP `plan` analyze existing files. `run` invokes the user's compile
@@ -63,6 +77,14 @@ checkout cannot validate source edits or deletions it was not given. Matching
 compilation invocation results provide stronger evidence than timestamps, which
 remain a fallback when that evidence is absent. Chain manual commands with
 `dbt compile && dbt-plan check`.
+
+SQL snapshot provenance accepts legacy full-file checksums. For dbt 1.12's
+whitespace-normalized checksums it additionally matches every named snapshot
+block body byte for byte, with only whitespace or Jinja comments outside standard
+snapshot tags. This prevents changes to spaces in SQL literals or line-comment
+newlines from passing on the normalized hash alone. Missing block evidence or
+unsupported outer templating still requires review. Snapshot definition changes
+remain warnings; this does not predict snapshot DDL.
 
 The tool does not simulate `dbt run`, `--full-refresh`, hooks, materialized-view
 refresh policy, Python DataFrame operations, or data-value changes. Explicit cast

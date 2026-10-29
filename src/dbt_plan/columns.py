@@ -510,6 +510,49 @@ def columns_read_from(
     return sorted({col for name in names for col in by_relation.get(name, [])})
 
 
+def comment_only_relations(
+    sql: str, candidates: dict[str, str], declared_relations: set[str], *, dialect: str
+) -> set[str]:
+    """Prove a physical relation is mentioned in comments but absent from static SQL."""
+    if not candidates or ("/*" not in sql and "--" not in sql):
+        return set()
+    try:
+        statements = [tree for tree in sqlglot.parse(sql, dialect=dialect) if tree is not None]
+        if len(statements) != 1 or not isinstance(statements[0], exp.Query):
+            return set()
+        tree = statements[0]
+        if tree.find(exp.Anonymous) or any(
+            not isinstance(table.this, exp.Identifier) for table in tree.find_all(exp.Table)
+        ):
+            return set()
+        if any(dot.find(exp.Func) for dot in tree.find_all(exp.Dot)):
+            return set()
+        comments = [comment for node in tree.walk() for comment in node.comments or []]
+        if not comments or any("depends_on" in comment.lower() for comment in comments):
+            return set()  # An authored hidden dependency is not disabled SQL.
+        if any(comment.lstrip().upper().startswith(("!", "M!")) for comment in comments):
+            return set()  # MySQL/MariaDB executable comments can contain real reads.
+        reads = columns_read_by_relation(sql, {}, dialect=dialect)
+        if reads is None:
+            return set()
+        known = {
+            keys[0]
+            for relation in declared_relations
+            if (keys := relation_keys(relation, dialect)) is not None
+        }
+        if any(_relation_key(table, dialect) not in known for table in tree.find_all(exp.Table)):
+            return set()  # An opaque external view may hide the declared dependency.
+        return {
+            node_id
+            for node_id, relation in candidates.items()
+            if relation_keys(relation, dialect) is not None
+            and sqlglot.to_table(relation, dialect=dialect).name.lower() not in reads
+            and any(relation in comment for comment in comments)
+        }
+    except (sqlglot.errors.SqlglotError, ValueError, KeyError, RecursionError):
+        return set()
+
+
 # Coarse on purpose. sqlglot parses `varchar` and `text` to different types, and on
 # Snowflake or duckdb they are the same one -- comparing more finely than this means
 # a per-adapter table, and a wrong answer about a type is worse than no answer.

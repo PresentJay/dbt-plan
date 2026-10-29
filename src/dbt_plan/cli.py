@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
 import shutil
 import sys
@@ -222,6 +221,8 @@ def _provenance_problems(
     project_dir, manifest_path, manifest, base_manifest, node_index, compiled_paths, relevant_names
 ):
     """Refuse incomplete/currently invalid inputs using local manifest evidence."""
+    from dbt_plan.manifest import snapshot_source_is_current
+
     problems = []
     root = project_dir.resolve()
     invocation = (manifest.get("metadata") or {}).get("invocation_id")
@@ -256,8 +257,15 @@ def _provenance_problems(
                         problems.append(filename)
                     continue
                 if field == "source_snapshots":
-                    digest = hashlib.sha256(content.strip().encode("utf-8")).hexdigest()
-                    matches = bool(expected) and all(value == digest for value in expected)
+                    prefix = "snapshot."
+                    if project := (manifest.get("metadata") or {}).get("project_name"):
+                        prefix += f"{project}."
+                    nodes = [
+                        node
+                        for nid, node in manifest.get("nodes", {}).items()
+                        if nid.startswith(prefix) and node.get("original_file_path") == filename
+                    ]
+                    matches = snapshot_source_is_current(content, expected, nodes)
                 elif field == "source_files":
                     matches = content.strip() == expected.strip()
                 else:
@@ -1095,6 +1103,77 @@ def _make_reference_reader(
         )
 
     return read
+
+
+def _cascade_child_map(
+    child_map, manifest, base_manifest, nodes_by_id, paths, manifest_path, dialect
+):
+    """Keep manifest selection intact; exclude proven disabled SQL from cascade only."""
+    from dbt_plan.columns import comment_only_relations
+
+    nodes = manifest.get("nodes", {})
+    old_nodes = (base_manifest or {}).get("nodes", {})
+    results = _compilation_results(manifest_path, manifest)
+    invocation = (manifest.get("metadata") or {}).get("invocation_id")
+    filtered = {nid: list(children) for nid, children in child_map.items()}
+    verified = {}
+
+    def is_current(nid):
+        if nid not in verified:
+            raw = nodes.get(nid, {})
+            path = paths.get(nodes_by_id[nid].name)
+            verified[nid] = (
+                raw.get("compiled") is True
+                and isinstance(raw.get("compiled_code"), str)
+                and path is not None
+                and _compiled_input_is_current(nid, raw, path, manifest_path, invocation, results)
+            )
+        return verified[nid]
+
+    for child_id, node in nodes_by_id.items():
+        raw = nodes.get(child_id, {})
+        config = raw.get("config") or {}
+        if (
+            raw.get("language", "sql") != "sql"
+            or node.materialization not in {"table", "view", "incremental"}
+            or config.get("pre-hook")
+            or config.get("post-hook")
+            or not is_current(child_id)
+        ):
+            continue
+        candidates = {}
+        declared_relations = set()
+        for parent in (raw.get("depends_on") or {}).get("nodes", []):
+            parent_raw = nodes.get(parent, {})
+            parent_config = parent_raw.get("config") or {}
+            relation = parent_raw.get("relation_name")
+            if parent in nodes_by_id and isinstance(relation, str) and relation:
+                declared_relations.add(relation)
+            if (
+                parent in nodes_by_id
+                and child_id in child_map.get(parent, [])
+                and isinstance(relation, str)
+                and relation
+                and old_nodes.get(parent, {}).get("relation_name") == relation
+                and parent_raw.get("language", "sql") == "sql"
+                and parent_config.get("materialized") in {"table", "view", "incremental"}
+                and not parent_config.get("pre-hook")
+                and not parent_config.get("post-hook")
+                and is_current(parent)
+            ):
+                candidates[parent] = relation
+        path = paths.get(node.name)
+        if not candidates or path is None:
+            continue
+        try:
+            absent = comment_only_relations(
+                path.read_text(encoding="utf-8"), candidates, declared_relations, dialect=dialect
+            )
+        except (OSError, UnicodeError):
+            continue
+        for parent in absent:
+            filtered[parent].remove(child_id)
+    return filtered
 
 
 def _make_table_resolver(
@@ -1987,7 +2066,20 @@ def _do_check(args: argparse.Namespace) -> int:
         model_cols[diff.model_name] = (base_cols, current_cols)
 
     # 3b. Batch downstream computation (memoized, avoids redundant BFS)
-    all_downstream = find_downstream_batch(list(model_node_ids.values()), child_map)
+    cascade_child_map = (
+        _cascade_child_map(
+            child_map,
+            manifest,
+            base_manifest,
+            node_id_index,
+            current_paths,
+            manifest_path,
+            dialect,
+        )
+        if predictions
+        else child_map
+    )
+    all_downstream = find_downstream_batch(list(model_node_ids.values()), cascade_child_map)
 
     # 3c. Build compiled SQL index once (O(1) lookup instead of rglob per downstream)
     compiled_sql_index: dict[str, Path] = {}
@@ -2022,7 +2114,7 @@ def _do_check(args: argparse.Namespace) -> int:
         node_index=node_index,
         base_node_index=base_node_index,
         compiled_sql_index=compiled_sql_index,
-        child_map=child_map,
+        child_map=cascade_child_map,
         unit_test_index=build_unit_test_index(manifest),
         data_test_index=build_data_test_index(manifest),
         test_sql_index=test_sql_index,
@@ -2091,7 +2183,7 @@ def _do_check(args: argparse.Namespace) -> int:
         predictions=predictions,
         model_node_ids=model_node_ids,
         all_downstream=all_downstream,
-        child_map=child_map,
+        child_map=cascade_child_map,
         exposure_index=build_exposure_index(manifest),
         model_cols=model_cols,
     )

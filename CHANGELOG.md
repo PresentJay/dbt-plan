@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.18.5] - 2026-10-29
+
+### Fixed
+
+- Verify dbt 1.12 normalized SQL-snapshot checksums against exact, named block
+  bodies. Unchanged snapshots no longer trigger stale-source warnings; meaningful
+  whitespace edits, missing evidence and unsupported wrappers still require review. (#314)
+- Exclude proven comment-only model dependencies from SQL cascade traversal. Keep
+  actual reads and uncertain dependencies, and preserve dbt graph selection. (#316)
+- Preserve dependencies inside MySQL/MariaDB executable comments. SQL inside
+  `/*! ... */` and `/*M! ... */` is not evidence of an inactive dependency.
+
 ## [0.18.4] - 2026-10-28
 
 ### Fixed
