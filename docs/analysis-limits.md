@@ -60,7 +60,8 @@ only when current compiled SQL proves the physical relation occurs in a comment
 and is absent from a single readable query. Graph selection still uses the
 original manifest, including these edges.
 
-Explicit `depends_on` comments, user-defined or dynamic functions, unknown
+Explicit `depends_on` or executable comments (`/*! ... */`, `/*M! ... */`),
+user-defined or dynamic functions, unknown
 relations, Python/ephemeral/custom models, hooks and unverified compilation retain
 the dependency. Alternate real dependency paths still propagate findings. This
 bounded check can leave false warnings when it cannot prove an edge is inactive.

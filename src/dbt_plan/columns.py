@@ -530,6 +530,8 @@ def comment_only_relations(
         comments = [comment for node in tree.walk() for comment in node.comments or []]
         if not comments or any("depends_on" in comment.lower() for comment in comments):
             return set()  # An authored hidden dependency is not disabled SQL.
+        if any(comment.lstrip().upper().startswith(("!", "M!")) for comment in comments):
+            return set()  # MySQL/MariaDB executable comments can contain real reads.
         reads = columns_read_by_relation(sql, {}, dialect=dialect)
         if reads is None:
             return set()

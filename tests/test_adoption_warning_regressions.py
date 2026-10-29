@@ -303,3 +303,16 @@ def test_comment_filter_preserves_alternative_real_dependency_path(tmp_path, cap
         f["rule_code"] == "cascade.broken_ref" and f["affected"]["name"] == "books"
         for f in report["findings"]
     )
+
+
+@pytest.mark.parametrize("marker", ["! ", "!80000 ", "M! ", "M!100100 "])
+def test_executable_comment_cannot_prove_dependency_is_inactive(marker):
+    from dbt_plan.columns import comment_only_relations
+
+    parent, books = "`main`.`orders`", "`main`.`books`"
+    sql = (
+        f"select b.book_id as id from {books} b /*{marker} JOIN {parent} o ON o.tax = b.book_id */"
+    )
+    assert (
+        comment_only_relations(sql, {"orders": parent}, {parent, books}, dialect="mysql") == set()
+    )
