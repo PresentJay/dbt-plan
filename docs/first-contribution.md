@@ -41,11 +41,12 @@ assertion. Passing a dialect fixture is not certification of that adapter.
 also has an earlier recursive CTE request. That request remains separate from
 this batch; coordinate there before proposing a recursive CTE patch.
 
-## Claim, reproduce, then open a draft
+## Reproduce, then open a draft
 
-1. Comment on one issue with the task and files you intend to change. A maintainer
-   will confirm ownership after checking earlier requests. Questions in Korean
-   or English are welcome; do not open competing PRs while ownership is unclear.
+1. Check the issue's current status and earlier work to avoid duplicating a patch.
+   You can open a draft PR directly; prior assignment or maintainer confirmation
+   is not required. An issue comment with your intended changes is optional.
+   Questions in Korean or English are welcome.
 2. Fork the repository, clone your fork and branch from current `main`.
 3. Install the test dependencies and run the issue's reproduction. For these
    tasks, `uv sync --extra test` is enough; local DuckDB integration tests need
@@ -54,14 +55,12 @@ this batch; coordinate there before proposing a recursive CTE patch.
    regression assertion first, then its fixture. Documentation work should be
    checked by running its examples and previewing links.
 5. Open a draft PR early with `Fixes #<number>`, what changed, the command results
-   and any questions. Keep to the issue's agreed files. Run its focused checks,
+   and any questions. Keep the change focused on the problem described. Run its focused checks,
    then `make test` and `make lint` before requesting review; report local skips.
 
-A maintainer aims to acknowledge a claim or question within **two business days**;
-this is a capacity goal, not a guaranteed response time. If ownership is still
-unclear, one follow-up on the issue is enough. You can ask to pause or release a
-claim. Maintainers should check with an earlier claimant before reopening the
-task to others.
+A maintainer aims to acknowledge a question within **two business days**; this is
+a capacity goal, not a guaranteed response time. You can continue preparing your
+pull request while waiting for a reply.
 
 Earlier valid work takes priority when PRs overlap. Correctness still decides
 what can merge: if a later patch is selected, the review should explain the

@@ -6,8 +6,23 @@
 #   pip install dbt-plan  # or: pip install git+https://github.com/PresentJay/dbt-plan
 #   cd examples/sample-project
 #   bash run-example.sh
+#
+# Requires dbt-plan >= 0.16.0: codes 0/1/2 are completed findings; 3 is an error.
+# Legacy 0.15.x also uses 1/2 for errors; see ../../docs/exit-codes.md.
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+
+run_check() {
+  EXIT_CODE=0
+  dbt-plan check \
+    --base-dir "$SCRIPT_DIR/base" \
+    --project-dir "$SCRIPT_DIR/current" \
+    "$@" || EXIT_CODE=$?
+  case "$EXIT_CODE" in
+    0|1|2) ;;
+    *) echo "dbt-plan execution failed (exit code: $EXIT_CODE)." >&2; exit 3 ;;
+  esac
+}
 
 echo "=== dbt-plan example ==="
 echo ""
@@ -20,36 +35,21 @@ echo ""
 
 echo "--- Text output ---"
 echo ""
-dbt-plan check \
-  --base-dir "$SCRIPT_DIR/base" \
-  --project-dir "$SCRIPT_DIR/current" \
-  --format text || true
+run_check --format text
 
 echo ""
 echo "--- GitHub markdown output ---"
 echo ""
-dbt-plan check \
-  --base-dir "$SCRIPT_DIR/base" \
-  --project-dir "$SCRIPT_DIR/current" \
-  --format github || true
+run_check --format github
 
 echo ""
 echo "--- JSON output (cascade risks in summary) ---"
 echo ""
-dbt-plan check \
-  --base-dir "$SCRIPT_DIR/base" \
-  --project-dir "$SCRIPT_DIR/current" \
-  --format json || true
+run_check --format json
 
 echo ""
 echo "--- Exit code check ---"
-set +e
-dbt-plan check \
-  --base-dir "$SCRIPT_DIR/base" \
-  --project-dir "$SCRIPT_DIR/current" \
-  > /dev/null 2>&1
-EXIT_CODE=$?
-set -e
+run_check > /dev/null
 echo "exit code: $EXIT_CODE (0=safe, 1=destructive, 2=warning, 3=execution error)"
 echo ""
 echo "이 예제에서는 int_order_enriched에 DROP COLUMN + fct_daily_sales cascade broken ref이 있으므로 exit 1 (destructive) 입니다."

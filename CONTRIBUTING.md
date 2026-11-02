@@ -111,17 +111,15 @@ Allowed, with two conditions.
 without the assistant, it is not ready. Review time is the scarce resource here,
 and a patch that has to be verified from scratch costs more than it saves.
 
-**Anything non-trivial should target an open issue first.** Typos, a fixture, a
-doc fix — open the pull request. A behaviour change, a new flag, a refactor —
-comment on an issue, or open one, before writing code. Issues labelled
-[good first issue](https://github.com/PresentJay/dbt-plan/labels/good%20first%20issue)
-are already scoped and count as agreed.
+**Open a focused pull request directly.** Prior issue discussion, assignment or
+team agreement is not required, including for behaviour changes, new flags and
+refactors. Explain the problem, the chosen approach and the checks you ran in the
+pull request. An issue is optional when it helps discuss a larger change.
 
-Unsolicited large pull requests are closed without review. Not out of hostility
-to the tooling — the same rule applies to hand-written ones. It is that this
-project's rules are unusual (never return SAFE when unsure; no warehouse
-connection; sqlglot is the only dependency), and generated code tends to be
-plausible in a way that quietly violates exactly those.
+Every pull request must still follow the project's scope and safety rules: never
+return SAFE when unsure, never connect to a warehouse, and keep sqlglot as the
+only runtime dependency. Include tests for behaviour changes and keep the patch
+small enough to review.
 
 Some of that is enforced mechanically in `tests/test_invariants.py` — a
 warehouse driver import, a network import, or `shell=True` fails CI rather than
