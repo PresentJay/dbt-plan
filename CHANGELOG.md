@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.18.6] - 2026-11-03
+
+### Fixed
+
+- Resolve downstream physical aliases within their SQL query scope. CTE and
+  derived-table named reads that cannot be attributed to a physical source now
+  retain conservative review instead of an empty all-clear. Reused aliases in
+  nested queries no longer hide an outer read. (#321)
+- Stop the repository sample runner on execution errors while continuing through
+  completed verdict codes 0/1/2. (#208)
+
+### Upgrade notes
+
+- Derived reads may now require review where an older version reported safe.
+  Report fields, snapshot format, dependencies and exit policies are unchanged.
+- The package release does not move the Marketplace Action tag. Pin its Python
+  package separately with the Action's version input.
+
+
 ## [0.18.5] - 2026-10-29
 
 ### Fixed
