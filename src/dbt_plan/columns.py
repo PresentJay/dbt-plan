@@ -466,6 +466,7 @@ def columns_read_by_relation(
     """
     from sqlglot.errors import OptimizeError, SqlglotError
     from sqlglot.optimizer.qualify import qualify
+    from sqlglot.optimizer.scope import traverse_scope
 
     sql = sql.lstrip("\ufeff")
     try:
@@ -475,17 +476,21 @@ def columns_read_by_relation(
             dialect=dialect,
             expand_stars=False,
         )
+        read: dict[str, set[str]] = {}
+        for scope in traverse_scope(tree):
+            for _, source in scope.selected_sources.values():
+                if isinstance(source, exp.Table):
+                    read.setdefault(source.name.lower(), set())
+            for column in scope.columns:
+                if isinstance(column.this, exp.Star):
+                    continue
+                source = scope.sources.get(column.table)
+                if not isinstance(source, exp.Table):
+                    return None  # A CTE/derived read is not proof of no physical read.
+                read.setdefault(source.name.lower(), set()).add(column.name.lower())
     except (SqlglotError, OptimizeError, ValueError, KeyError, RecursionError):
         return None
 
-    alias_to_relation = {
-        table.alias_or_name: table.name.lower() for table in tree.find_all(exp.Table)
-    }
-    read: dict[str, set[str]] = {name: set() for name in alias_to_relation.values()}
-    for column in tree.find_all(exp.Column):
-        relation = alias_to_relation.get(column.table)
-        if relation is not None and not isinstance(column.this, exp.Star):
-            read[relation].add(column.name.lower())
     return {relation: sorted(columns) for relation, columns in read.items()}
 
 

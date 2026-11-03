@@ -14,7 +14,7 @@
 - [ ] No new runtime dependency (sqlglot is the only one)
 - [ ] Nothing here can return SAFE when columns could not be extracted
 - [ ] I have run this and can explain why it is correct
-- [ ] Non-trivial change: an issue was agreed first (see CONTRIBUTING)
+- [ ] The problem, approach and validation are explained above (an issue is optional)
 
 <!--
 The SAFE box is the rule the project is built around: a false warning is fine,
